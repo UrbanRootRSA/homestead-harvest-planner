@@ -1589,7 +1589,7 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
           <button type="button" onClick={onRemove}
             aria-label={`Remove bed ${index + 1}`}
             style={{
-              padding: "6px 12px", minHeight: 40, border: "none",
+              padding: "8px 14px", minHeight: 44, border: "none",
               background: "transparent", color: T.error, cursor: "pointer",
               fontFamily: T.fontBody, fontSize: 13, fontWeight: 600,
               borderRadius: T.radiusPill,
@@ -1789,7 +1789,7 @@ function CompanionChecker({ selectedIds, setSelectedIds, focusCropId, setFocusCr
                           onClick={() => toggleCrop(cropId)}
                           aria-pressed={active}
                           style={{
-                            padding: "8px 14px", minHeight: 40,
+                            padding: "10px 14px", minHeight: 44,
                             fontSize: 13, fontWeight: active ? 700 : 500,
                             background: active ? T.primary : T.bg,
                             color: active ? "#FEFCF8" : T.tx,
@@ -2163,7 +2163,7 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
                       onClick={() => toggleCrop(cropId)}
                       aria-pressed={active}
                       style={{
-                        padding: "8px 14px", minHeight: 40,
+                        padding: "10px 14px", minHeight: 44,
                         fontSize: 13, fontWeight: active ? 700 : 500,
                         background: active ? T.primary : T.bg,
                         color: active ? "#FEFCF8" : T.tx,
@@ -3126,7 +3126,7 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
 
   const features = [
     "Personalised month-by-month growing plan tuned to your family and zone",
-    "Complete crop database — 63 crops, searchable + sortable",
+    "Complete crop database — 82 crops, searchable + sortable",
     "Cost savings calculator with grocery-vs-garden ROI",
     "Preservation planner for canning, freezing, dehydrating",
   ];
@@ -3573,6 +3573,16 @@ function GrowingPlanTab({
     if (manualMissing) {
       setError("Manual frost mode is selected but the dates are blank. Open Planting Dates and set both.");
       return;
+    }
+    // Confirm before regenerating when the current plan still matches the
+    // selected crops. Each call consumes one of the user's 20/hr quota and
+    // spends ~$0.06 on the Anthropic side. Stale-fingerprint case skips the
+    // prompt because the user has visibly changed inputs and expects a fresh plan.
+    if (plan && !fingerprintStale) {
+      const ok = window.confirm(
+        "You already have a fresh plan for this crop selection. Regenerate anyway? This will use one of your 20 hourly generations."
+      );
+      if (!ok) return;
     }
     setError("");
     setGenerating(true);
@@ -4567,7 +4577,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                 aria-pressed={active}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 8,
-                  padding: "8px 14px", minHeight: 40,
+                  padding: "10px 14px", minHeight: 44,
                   borderRadius: T.radiusPill,
                   background: active ? cat.color : T.bg2,
                   color: active ? "#FEFCF8" : T.tx2,
@@ -4586,7 +4596,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
           {(categoryFilter.length > 0 || search) && (
             <button type="button" onClick={clearFilters}
               style={{
-                padding: "8px 14px", minHeight: 40, borderRadius: T.radiusPill,
+                padding: "10px 14px", minHeight: 44, borderRadius: T.radiusPill,
                 background: "transparent", color: T.tx2,
                 border: `1.5px dashed ${T.border}`,
                 fontFamily: T.fontBody, fontSize: 13, fontWeight: 600, cursor: "pointer",
@@ -4911,12 +4921,63 @@ const DEFAULT_SETUP_COSTS = {
   beds: 120, soil: 80, seeds: 35, tools: 40, irrigation: 25,
 };
 
+// Shared empty-state banner for paid tabs that depend on the
+// Self-Sufficiency crop selection. Rendered when baseResults.perCrop is
+// empty so the user gets a clear "do this first" instead of a page of
+// zeros and em-dashes. Uses href="#home" so the existing hashchange
+// listener does the routing — no setTab prop needed.
+function NoCropsBanner({ cta = "Go to Self-Sufficiency" }) {
+  return (
+    <section aria-label="Pick crops first" style={{
+      background: T.card, border: `1.5px solid ${T.border}`,
+      borderRadius: T.radiusLg, padding: "40px 28px", boxShadow: T.shadow.lg,
+      textAlign: "center",
+    }}>
+      <div style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 60, height: 60, borderRadius: "50%",
+        background: T.primaryBg, marginBottom: 16,
+      }}>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+          stroke={T.primary} strokeWidth="2.2" strokeLinecap="round"
+          strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 2v9" /><path d="M8 6l4-4 4 4" />
+          <path d="M4 13h16v8H4z" />
+        </svg>
+      </div>
+      <h3 style={{
+        margin: 0, fontFamily: T.fontDisplay,
+        fontSize: "clamp(20px, 3vw, 26px)", fontWeight: 400, color: T.tx, lineHeight: 1.2,
+      }}>
+        Pick your crops first
+      </h3>
+      <p style={{
+        margin: "12px auto 20px", maxWidth: 440,
+        fontSize: 15, color: T.tx2, lineHeight: 1.55,
+      }}>
+        This tab builds on your Self-Sufficiency selection. Head over there, pick the crops your family actually eats, and this calculator will fill with real numbers.
+      </p>
+      <a href="#home" style={{
+        display: "inline-block", padding: "12px 24px", minHeight: 44,
+        background: T.primary, color: "#FEFCF8",
+        borderRadius: T.radiusPill, textDecoration: "none",
+        fontFamily: T.fontBody, fontSize: 15, fontWeight: 700,
+      }}>
+        {cta}
+      </a>
+    </section>
+  );
+}
+
 function CostSavingsCalculator({
   baseResults,
   beds, soilState, costSavings, setCostSavings,
   metric, currency,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
+  // Guard: the whole tab is a Self-Sufficiency passthrough. Without crops
+  // selected every number collapses to zero and the hero reads broken.
+  if (!baseResults.perCrop.length) return <NoCropsBanner />;
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";
@@ -5082,7 +5143,7 @@ function CostSavingsCalculator({
                 style={{
                   background: "transparent", border: `1.5px dashed ${T.primary}`,
                   color: T.primary, borderRadius: T.radiusPill,
-                  padding: "6px 12px", minHeight: 36, cursor: "pointer",
+                  padding: "10px 14px", minHeight: 44, cursor: "pointer",
                   fontFamily: T.fontBody, fontSize: 12, fontWeight: 600,
                 }}>
                 Use Soil Calculator total ({currency}{soilCostEstimate.toFixed(0)})
@@ -5295,6 +5356,8 @@ function PreservationPlanner({
   metric,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
+  // Same guard as Cost Savings: no crops → no totals worth showing.
+  if (!baseResults.perCrop.length) return <NoCropsBanner />;
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";

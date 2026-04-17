@@ -320,6 +320,72 @@ export const CROPS = {
     harvestStartWeeks: 6, harvestDurationWeeks: 10,
     varieties: "Red Leaf, Green Leaf, Callaloo (Caribbean), Garnet Red, Hopi Red Dye, Love Lies Bleeding",
   },
+  mustard_greens: {
+    name: "Mustard Greens", category: "leafy", season: "cool", sowMethod: "either",
+    // Fast cool-season green; bolts in heat. Clemson HGIC + UMD.
+    daysToMaturity: [40, 60], spacingSqFt: 0.25, yieldPerPlantLbs: [0.4, 0.8],
+    sunHours: 5, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 3.00, caloriesPer100g: 27,
+    preservation: ["freeze", "dehydrate", "ferment"],
+    startIndoorsWeeks: -6, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 6, harvestDurationWeeks: 6,
+    varieties: "Florida Broadleaf, Southern Giant Curled, Red Giant, Green Wave, Mibuna",
+  },
+  mizuna: {
+    name: "Mizuna", category: "leafy", season: "cool", sowMethod: "either",
+    // Japanese mustard — feather-cut leaves, cut-and-come-again. Penn State.
+    daysToMaturity: [35, 50], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.6],
+    sunHours: 4, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 8.00, caloriesPer100g: 21,
+    preservation: ["fresh", "freeze"],
+    startIndoorsWeeks: -6, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 5, harvestDurationWeeks: 8,
+    varieties: "Kyoto Mizuna, Red Kingdom, Early Mizuna, Komatsuna, Ruby Streaks",
+  },
+  tatsoi: {
+    name: "Tatsoi", category: "leafy", season: "cool", sowMethod: "either",
+    // Rosette-form Brassica rapa. Cold-hardy to -9°C / 15°F. Johnny's + UMN.
+    daysToMaturity: [21, 45], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.6],
+    sunHours: 4, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 6.00, caloriesPer100g: 15,
+    preservation: ["fresh", "freeze"],
+    startIndoorsWeeks: -6, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 5, harvestDurationWeeks: 8,
+    varieties: "Standard Tatsoi, Rosie (purple), Savoy, Black Summer",
+  },
+  endive: {
+    name: "Endive / Escarole", category: "leafy", season: "cool", sowMethod: "either",
+    // Cichorium endivia. Curly endive (frisée) + broad escarole. UMN + OSU.
+    daysToMaturity: [50, 95], spacingSqFt: 1, yieldPerPlantLbs: [0.6, 1.2],
+    sunHours: 5, waterNeeds: "moderate", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 3.20, caloriesPer100g: 17,
+    preservation: ["fresh"],
+    startIndoorsWeeks: -6, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 8, harvestDurationWeeks: 5,
+    varieties: "Green Curled Ruffec (endive), Broad-Leaved Batavian (escarole), Tres Fine, Salad King, Natacha",
+  },
+  sorrel: {
+    name: "Sorrel", category: "leafy", season: "perennial", sowMethod: "either",
+    // Rumex acetosa — lemony perennial green, 5-year stand. UMN Extension.
+    daysToMaturity: [55, 70], spacingSqFt: 1, yieldPerPlantLbs: [0.5, 1],
+    sunHours: 4, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 0.5, groceryPricePerLb: 10.00, caloriesPer100g: 22,
+    preservation: ["freeze", "fresh"],
+    startIndoorsWeeks: -8, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 8, harvestDurationWeeks: 20,
+    varieties: "Common Garden (Rumex acetosa), French (Rumex scutatus), Red-Veined (Bloody Dock), Profusion",
+  },
+  malabar_spinach: {
+    name: "Malabar Spinach", category: "leafy", season: "warm", sowMethod: "transplant",
+    // Basella alba — tropical vining heat-lover, 27°C+ for growth. UF IFAS + Wisconsin Hort.
+    daysToMaturity: [65, 85], spacingSqFt: 1, yieldPerPlantLbs: [1, 2],
+    sunHours: 6, waterNeeds: "high", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 5.00, caloriesPer100g: 19,
+    preservation: ["fresh", "freeze"],
+    startIndoorsWeeks: -6, transplantWeeks: 2, directSowWeeks: 2,
+    harvestStartWeeks: 10, harvestDurationWeeks: 14,
+    varieties: "Green-stemmed (Basella alba), Red-stemmed (Basella rubra), Mary's Heirloom, Climbing Spinach",
+  },
 
   // ─── Root ──────────────────────────────────────────────────────────────
   carrot: {
@@ -427,6 +493,42 @@ export const CROPS = {
     startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: 6,
     harvestStartWeeks: 12, harvestDurationWeeks: 6,
     varieties: "American Purple Top, Laurentian, Joan, Marian, Helenor",
+  },
+  horseradish: {
+    name: "Horseradish", category: "root", season: "perennial", sowMethod: "transplant",
+    // Armoracia rusticana — dig roots year 1+, spreads aggressively. USU + UMN + Penn State.
+    // Use a buried-bucket bed or expect it to naturalise.
+    daysToMaturity: [140, 180], spacingSqFt: 1, yieldPerPlantLbs: [1, 3],
+    sunHours: 6, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 0.3, groceryPricePerLb: 6.00, caloriesPer100g: 48,
+    preservation: ["root_cellar", "ferment", "freeze"],
+    startIndoorsWeeks: null, transplantWeeks: -4, directSowWeeks: null,
+    harvestStartWeeks: 24, harvestDurationWeeks: 8,
+    varieties: "Common (Maliner Kren), Bohemian, Big Top Western, Sass (vigorous)",
+  },
+  jerusalem_artichoke: {
+    name: "Jerusalem Artichoke (Sunchoke)", category: "root", season: "perennial", sowMethod: "direct",
+    // Helianthus tuberosus — plant tubers spring, harvest after frost. NCSU + OSU.
+    // Allelopathic and invasive — isolate to its own bed.
+    daysToMaturity: [110, 150], spacingSqFt: 1, yieldPerPlantLbs: [1, 2.5],
+    sunHours: 6, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 4.50, caloriesPer100g: 73,
+    preservation: ["root_cellar", "ferment", "freeze"],
+    startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: -2,
+    harvestStartWeeks: 20, harvestDurationWeeks: 12,
+    varieties: "Stampede (early), Red Fuseau, White Fuseau, Brazilian, Dwarf Sunray, Jack's Copperclad",
+  },
+  ginger: {
+    name: "Ginger", category: "root", season: "warm", sowMethod: "direct",
+    // Zingiber officinale — tropical rhizome, 8-10 month cycle. Container crop below zone 9.
+    // Use 5-gal+ pots. Texas A&M + VCE + CTAHR Hawaii.
+    daysToMaturity: [240, 300], spacingSqFt: 1, yieldPerPlantLbs: [1, 2],
+    sunHours: 5, waterNeeds: "high", difficulty: 3,
+    avgConsumptionLbsPerPersonYear: 0.5, groceryPricePerLb: 4.50, caloriesPer100g: 80,
+    preservation: ["freeze", "dehydrate", "ferment", "root_cellar"],
+    startIndoorsWeeks: -8, transplantWeeks: 2, directSowWeeks: 2,
+    harvestStartWeeks: 32, harvestDurationWeeks: 4,
+    varieties: "Baby Ginger (young), Hawaiian Yellow, Indian Blue Ring, Chinese White, Madagascar",
   },
 
   // ─── Legume ────────────────────────────────────────────────────────────
@@ -666,6 +768,29 @@ export const CROPS = {
     harvestStartWeeks: 14, harvestDurationWeeks: 20,
     varieties: "Common (Garden), Purple, Golden, Pineapple (tender), Tricolor, Berggarten (broad-leaf)",
   },
+  tarragon: {
+    name: "French Tarragon", category: "herb", season: "perennial", sowMethod: "transplant",
+    // True French (Artemisia dracunculus 'Sativa') propagates only by division/cuttings —
+    // no seed. Russian tarragon is seed-grown but tasteless. USU + Illinois Extension.
+    daysToMaturity: [75, 95], spacingSqFt: 2.25, yieldPerPlantLbs: [0.3, 0.6],
+    sunHours: 6, waterNeeds: "low", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 0.1, groceryPricePerLb: 24.00, caloriesPer100g: 295,
+    preservation: ["dehydrate", "freeze"],
+    startIndoorsWeeks: null, transplantWeeks: 2, directSowWeeks: null,
+    harvestStartWeeks: 14, harvestDurationWeeks: 18,
+    varieties: "French (Sativa — true flavour, division only), Russian (seed-grown, mild)",
+  },
+  marjoram: {
+    name: "Sweet Marjoram", category: "herb", season: "perennial", sowMethod: "transplant",
+    // Origanum majorana — tender perennial zone 9+; annual elsewhere. Illinois Extension.
+    daysToMaturity: [60, 90], spacingSqFt: 1, yieldPerPlantLbs: [0.3, 0.6],
+    sunHours: 6, waterNeeds: "low", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 0.15, groceryPricePerLb: 20.00, caloriesPer100g: 271,
+    preservation: ["dehydrate", "freeze"],
+    startIndoorsWeeks: -8, transplantWeeks: 2, directSowWeeks: null,
+    harvestStartWeeks: 10, harvestDurationWeeks: 18,
+    varieties: "Sweet (Origanum majorana), Zaatar, Pot Marjoram (O. onites), Compact",
+  },
 
   // ─── Other ─────────────────────────────────────────────────────────────
   corn: {
@@ -718,6 +843,88 @@ export const CROPS = {
     startIndoorsWeeks: null, transplantWeeks: -3, directSowWeeks: null,
     harvestStartWeeks: 60, harvestDurationWeeks: 8,
     varieties: "Mary Washington (heirloom), Jersey Giant, Jersey Knight, Purple Passion, Millennium, Pacific Purple",
+  },
+  celery: {
+    name: "Celery", category: "other", season: "cool", sowMethod: "transplant",
+    // Demands steady moisture + cool temps; long season. MSU + USU + OSU.
+    daysToMaturity: [100, 140], spacingSqFt: 1, yieldPerPlantLbs: [1, 2],
+    sunHours: 6, waterNeeds: "high", difficulty: 4,
+    avgConsumptionLbsPerPersonYear: 6, groceryPricePerLb: 1.50, caloriesPer100g: 16,
+    preservation: ["freeze", "dehydrate"],
+    startIndoorsWeeks: -10, transplantWeeks: -2, directSowWeeks: null,
+    harvestStartWeeks: 16, harvestDurationWeeks: 4,
+    varieties: "Tall Utah 52-70, Tango, Golden Self-Blanching, Redventure, Conquistador, Giant Pascal",
+  },
+  fennel: {
+    name: "Florence Fennel (Bulb)", category: "other", season: "cool", sowMethod: "either",
+    // Foeniculum vulgare var. azoricum — bolt-prone in heat. UNH + Wisconsin Hort.
+    // Allelopathic: isolate from beans, tomato, coriander.
+    daysToMaturity: [65, 100], spacingSqFt: 0.25, yieldPerPlantLbs: [0.5, 1],
+    sunHours: 6, waterNeeds: "moderate", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 3.00, caloriesPer100g: 31,
+    preservation: ["fresh", "freeze", "dehydrate"],
+    startIndoorsWeeks: -6, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 10, harvestDurationWeeks: 4,
+    varieties: "Zefa Fino, Orion, Preludio, Rondo, Victorio, Mantovano",
+  },
+  rhubarb: {
+    name: "Rhubarb", category: "other", season: "perennial", sowMethod: "transplant",
+    // Plant crowns year 1, NO harvest year 1, light year 2, full year 3+. UMN + Iowa State.
+    // Requires winter dormancy (≥500 hours below 4°C / 40°F); struggles in zones 8+ summer heat.
+    daysToMaturity: [365, 730], spacingSqFt: 9, yieldPerPlantLbs: [2, 4],
+    sunHours: 6, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 4.00, caloriesPer100g: 21,
+    preservation: ["freeze", "can", "dehydrate"],
+    startIndoorsWeeks: null, transplantWeeks: -4, directSowWeeks: null,
+    harvestStartWeeks: 60, harvestDurationWeeks: 8,
+    varieties: "Victoria, Canada Red, MacDonald, Crimson Cherry, Riverside Giant, Glaskin's Perpetual",
+  },
+  globe_artichoke: {
+    name: "Globe Artichoke", category: "other", season: "perennial", sowMethod: "transplant",
+    // Cynara cardunculus var. scolymus — perennial zones 7+, annual strategy elsewhere.
+    // UMass Amherst + Cornell + Texas A&M. ~0.4 lb/head × 6 heads = 2-3 lb/plant.
+    daysToMaturity: [90, 180], spacingSqFt: 9, yieldPerPlantLbs: [1.5, 3],
+    sunHours: 7, waterNeeds: "moderate", difficulty: 3,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 3.50, caloriesPer100g: 47,
+    preservation: ["freeze", "can", "ferment"],
+    startIndoorsWeeks: -10, transplantWeeks: -2, directSowWeeks: null,
+    harvestStartWeeks: 24, harvestDurationWeeks: 8,
+    varieties: "Green Globe, Imperial Star (annual), Violetta (purple), Tavor, Emerald, Northern Star (cold-hardy)",
+  },
+  blueberry: {
+    name: "Blueberries", category: "other", season: "perennial", sowMethod: "transplant",
+    // Year 3: ~0.5 lb/bush; year 4: 1-2 lb; peak 8-10 yr: 10+ lb. NCSU + Cornell + Clemson.
+    // Requires acidic soil (pH 4.5-5.5). Plant 2+ varieties for cross-pollination.
+    daysToMaturity: [730, 1095], spacingSqFt: 16, yieldPerPlantLbs: [2, 6],
+    sunHours: 7, waterNeeds: "moderate", difficulty: 3,
+    avgConsumptionLbsPerPersonYear: 3, groceryPricePerLb: 6.00, caloriesPer100g: 57,
+    preservation: ["freeze", "can", "dehydrate"],
+    startIndoorsWeeks: null, transplantWeeks: -6, directSowWeeks: null,
+    harvestStartWeeks: 100, harvestDurationWeeks: 5,
+    varieties: "Bluecrop (highbush), Duke (early), Elliott (late), Tifblue (rabbiteye), Pink Lemonade, Top Hat (dwarf), Patriot (cold-hardy)",
+  },
+  raspberry: {
+    name: "Raspberries", category: "other", season: "perennial", sowMethod: "transplant",
+    // Summer-bearing vs everbearing/primocane split. 2-3 ft spacing in hedgerow.
+    // Cornell Berry + OSU + PSU. Home conservative 1.5-3 lb/plant established.
+    daysToMaturity: [365, 730], spacingSqFt: 4, yieldPerPlantLbs: [1.5, 3],
+    sunHours: 7, waterNeeds: "moderate", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 3, groceryPricePerLb: 8.00, caloriesPer100g: 52,
+    preservation: ["freeze", "can", "dehydrate"],
+    startIndoorsWeeks: null, transplantWeeks: -6, directSowWeeks: null,
+    harvestStartWeeks: 52, harvestDurationWeeks: 6,
+    varieties: "Heritage (everbearing), Caroline (everbearing), Latham (summer), Boyne (cold-hardy), Fall Gold, Jewel (black), Anne (yellow)",
+  },
+  blackberry: {
+    name: "Blackberries", category: "other", season: "perennial", sowMethod: "transplant",
+    // Erect, semi-erect, trailing types. NCSU + OSU. 10-20 lb commercial; 5-10 home.
+    daysToMaturity: [365, 730], spacingSqFt: 9, yieldPerPlantLbs: [5, 10],
+    sunHours: 7, waterNeeds: "moderate", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 3, groceryPricePerLb: 7.00, caloriesPer100g: 43,
+    preservation: ["freeze", "can", "dehydrate"],
+    startIndoorsWeeks: null, transplantWeeks: -6, directSowWeeks: null,
+    harvestStartWeeks: 52, harvestDurationWeeks: 5,
+    varieties: "Chester (thornless semi-erect), Triple Crown (thornless), Navaho (erect thornless), Ouachita, Marionberry (trailing), Prime-Ark Freedom",
   },
 };
 

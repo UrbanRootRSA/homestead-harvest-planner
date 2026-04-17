@@ -264,6 +264,46 @@ export const COMPANIONS = [
   { a: "dill", b: "rutabaga", rel: "good", reason: "Dill umbels attract parasitic wasps that target rutabaga cabbage worms." },
   { a: "rutabaga", b: "strawberry", rel: "bad", reason: "Brassica root exudates stunt strawberry growth; shared slug pressure." },
   { a: "rutabaga", b: "tomato", rel: "bad", reason: "Brassica and Solanaceae compete for calcium; both heavy feeders." },
+
+  // New-crop companions (2026-04 expansion)
+  // Fennel — allelopathic to most crops (UNH, UC Master Gardeners)
+  { a: "fennel", b: "tomato", rel: "bad", reason: "Fennel root exudates stunt tomato growth; isolate fennel outside the main bed." },
+  { a: "fennel", b: "green_beans_bush", rel: "bad", reason: "Fennel allelopathy inhibits bean germination and nodulation in shared beds." },
+  { a: "cilantro", b: "fennel", rel: "bad", reason: "Fennel and cilantro suppress each other's germination; neither sets quality seed nearby." },
+  { a: "fennel", b: "kohlrabi", rel: "bad", reason: "Fennel allelopathy stunts kohlrabi stem swelling (West Coast Seeds, extension compilations)." },
+  { a: "dill", b: "fennel", rel: "bad", reason: "Apiaceae cross-pollination produces bitter seed on both; avoid shared beds." },
+
+  // Celery — leafy-shade + allium masking (UMN Extension)
+  { a: "celery", b: "onion", rel: "good", reason: "Onion scent deters celery leaf-tier and aphids; different root depths coexist." },
+  { a: "celery", b: "leek", rel: "good", reason: "Leek volatiles repel celery leaf miner; upright habits don't shade each other." },
+  { a: "cabbage", b: "celery", rel: "good", reason: "Celery aromatic oils repel cabbage moth; mutual flavour improvement per UMN." },
+
+  // Horseradish — classic potato defender (Mother Earth News + extension reviews)
+  { a: "horseradish", b: "potato", rel: "good", reason: "Horseradish at potato-patch corners deters Colorado potato beetle and builds disease resistance." },
+  { a: "cabbage", b: "horseradish", rel: "bad", reason: "Both Brassicaceae — share flea beetle and cabbage worm; rotate separately." },
+
+  // Rhubarb — cabbage-compatible perennial corner (extension roundup, Cornell)
+  { a: "cabbage", b: "rhubarb", rel: "good", reason: "Rhubarb broad leaves deter cabbage whites; mutual flavour pairing long-documented." },
+  { a: "broccoli", b: "rhubarb", rel: "good", reason: "Rhubarb repels cabbage moth from broccoli heads; perennial edge-of-bed pairing." },
+
+  // Blueberry — acid soil neighbours + pest masking (NCSU, Cornell Berry)
+  { a: "blueberry", b: "strawberry", rel: "good", reason: "Both acidic-soil perennials; strawberry shades blueberry root zone without competing for nutrients." },
+  { a: "blueberry", b: "thyme", rel: "good", reason: "Thyme ground cover retains soil moisture and repels Japanese beetle from blueberry foliage." },
+  { a: "blueberry", b: "tomato", rel: "bad", reason: "Tomato prefers pH 6.5 while blueberry needs pH 4.5-5.2; shared bed forces a compromise that weakens both." },
+
+  // Raspberry / Blackberry — bramble patch rules (NCSU Rubus portal, Cornell Berries)
+  { a: "blackberry", b: "raspberry", rel: "bad", reason: "Share Verticillium wilt and raspberry cane borer; 50 ft separation or rotation recommended." },
+  { a: "garlic", b: "raspberry", rel: "good", reason: "Garlic sulfur volatiles deter raspberry cane borer and Japanese beetle from brambles." },
+  { a: "blackberry", b: "chives", rel: "good", reason: "Chive flowers attract pollinators and allium scent repels aphid vectors of cane blight." },
+
+  // Jerusalem artichoke — isolate (NCSU Extension, Ohioline)
+  { a: "jerusalem_artichoke", b: "tomato", rel: "bad", reason: "Tall sunchoke shades tomato and releases allelopathic compounds; dedicate a separate bed." },
+
+  // Globe artichoke — tall perennial, benefits from understory herbs (UMass Amherst)
+  { a: "globe_artichoke", b: "peas_snap", rel: "good", reason: "Peas fix nitrogen for artichoke's heavy-feeder crowns; finish before artichoke canopy closes." },
+
+  // Malabar spinach — tropical climber (UF IFAS)
+  { a: "basil", b: "malabar_spinach", rel: "good", reason: "Basil deters aphids off Malabar vines; shared heat-loving season and water needs." },
 ];
 
 export const COMPANION_GROUPINGS = [
