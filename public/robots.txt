@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /api/
 
-Sitemap: https://homesteadharvestplanner.com/sitemap.xml
+Sitemap: https://thehomesteadplan.com/sitemap.xml

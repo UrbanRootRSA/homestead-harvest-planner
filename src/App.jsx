@@ -6297,7 +6297,7 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Support</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <a href="mailto:urbanroot.contact@gmail.com" style={linkStyle}>Contact</a>
+              <a href="/contact.html" style={linkStyle}>Contact</a>
               <a href="/privacy.html" style={linkStyle}>Privacy</a>
               <a href="/terms.html" style={linkStyle}>Terms</a>
               <a href="/refund.html" style={linkStyle}>Refund policy</a>
