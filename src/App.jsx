@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { CROPS, CATEGORIES } from "./data/crops.js";
 import { COMPANIONS, COMPANION_GROUPINGS, getCompanion } from "./data/companions.js";
+// COMPANIONS kept in the import surface for the future Crop Database tab.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Theme (T) — Homestead Harvest Planner: Forest & Terracotta ──
@@ -268,6 +269,17 @@ const clampInt = (v, min, max) => {
   return Math.max(min, Math.min(max, n));
 };
 
+// Sanitise any numeric field loaded from localStorage / import. Returns the
+// fallback when the value isn't a finite number, otherwise clamps to [min, max].
+// Use this for every numeric field in every schema loader — a single corrupt
+// entry spread into a defaults object otherwise cascades NaN through every
+// downstream calculation.
+const sanitizeNum = (v, fallback, min = -Infinity, max = Infinity) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+};
+
 const fmtInt = (n) => {
   if (!Number.isFinite(n)) return "—";
   return Math.round(n).toLocaleString();
@@ -341,7 +353,12 @@ function parseIsoDate(iso) {
   if (!m) return null;
   const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
   if (!Number.isFinite(y) || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  return new Date(y, mo - 1, d);
+  const date = new Date(y, mo - 1, d);
+  // Round-trip check: JS silently normalises Feb 30 to Mar 2. Reject that.
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) {
+    return null;
+  }
+  return date;
 }
 function toIsoDate(date) {
   if (!date) return "";
@@ -416,7 +433,7 @@ function splitRange(start, end, refYear) {
     segments.push({ start: yearStart, end, offYear: 0 });
   } else if (start >= yearStart && start < yearEnd && end >= yearEnd) {
     segments.push({ start, end: new Date(refYear, 11, 31), offYear: 0 });
-    segments.push({ start: yearStart instanceof Date ? new Date(refYear + 1, 0, 1) : null, end, offYear: +1 });
+    segments.push({ start: new Date(refYear + 1, 0, 1), end, offYear: +1 });
   } else {
     segments.push({ start, end, offYear: 0 });
   }
@@ -578,7 +595,9 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
           minHeight: 48,
           width: "100%",
           opacity: disabled ? 0.7 : 1,
-          outline: "none",
+          // Intentionally no outline override — let the global :focus-visible
+          // rule render the Urban Root accent ring. Inline outline:none here
+          // broke keyboard navigation (WCAG 2.4.7).
         }}
       />
     </label>
@@ -621,17 +640,6 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
         );
       })}
     </div>
-  );
-}
-
-// — LockIcon —
-function LockIcon({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="4" y="11" width="16" height="10" rx="2" />
-      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-    </svg>
   );
 }
 
@@ -996,8 +1004,8 @@ function SelfSufficiencyCalculator({
               metric={metric} />
           </div>
           <p style={{ marginTop: 10, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
-            Totals above include 20% extra for paths and margins. The bar shows
-            crop area only.
+            Totals above include {Math.round((PATH_BUFFER - 1) * 100)}% extra for
+            paths and margins. The bar shows crop area only.
           </p>
         </div>
 
@@ -1865,6 +1873,15 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
     () => getFrostDates(mode, zone, hemisphere, manualFrost, referenceYear),
     [mode, zone, hemisphere, manualFrost, referenceYear]
   );
+  // When manual dates are entered, anchor the timeline on the year of lastSpring
+  // so the 12-month strip matches what the user typed. Otherwise the chart
+  // silently goes empty (dates in 2024, timeline rendering 2026).
+  const effectiveReferenceYear = useMemo(() => {
+    if (mode === "manual" && frostDates?.lastSpring) {
+      return frostDates.lastSpring.getFullYear();
+    }
+    return referenceYear;
+  }, [mode, frostDates, referenceYear]);
 
   const toggleCrop = (id) => {
     const next = selectedCrops.includes(id)
@@ -1954,7 +1971,7 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
             fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
             fontSize: 15, fontWeight: 700, color: T.tx,
           }}>
-            {formatDate(frostDates.lastSpring, referenceYear)}
+            {formatDate(frostDates.lastSpring, effectiveReferenceYear)}
           </span>
           <span style={{ fontSize: 13, fontWeight: 600, color: T.tx2 }}>
             First fall frost:
@@ -1963,7 +1980,7 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
             fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
             fontSize: 15, fontWeight: 700, color: T.tx,
           }}>
-            {formatDate(frostDates.firstFall, referenceYear)}
+            {formatDate(frostDates.firstFall, effectiveReferenceYear)}
           </span>
           <span style={{ fontSize: 12, color: T.tx3, marginLeft: "auto" }}>
             {hemisphere === "south" ? "Southern" : "Northern"} hemisphere
@@ -2016,7 +2033,7 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
           <div style={eyebrowStyle}>Your planting calendar</div>
           <div style={{ marginTop: 14 }}>
             <PlantingTimelineChart
-              rows={perCropDates} referenceYear={referenceYear} />
+              rows={perCropDates} referenceYear={effectiveReferenceYear} />
           </div>
 
           <div style={{ ...eyebrowStyle, marginTop: 32 }}>Per crop</div>
@@ -2029,7 +2046,7 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
                 cropId={cropId} crop={crop} dates={dates}
                 sowMethodOverride={sowMethodChoice[cropId]}
                 onSowMethodChange={(m) => setCropSowMethod(cropId, m)}
-                referenceYear={referenceYear} />
+                referenceYear={effectiveReferenceYear} />
             ))}
           </div>
 
@@ -2251,7 +2268,13 @@ function PlantingTimelineChart({ rows, referenceYear }) {
 }
 
 function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChange, referenceYear }) {
-  const method = sowMethodOverride || crop.sowMethod;
+  // Resolve to an actual sow method for display — never leave the toggle
+  // showing "direct" while the calculator quietly anchors on "transplant"
+  // (which is what computePlantingDates does for "either" crops without an
+  // override). Priority: user's explicit override > crop default > transplant
+  // fallback matching the calc.
+  const method = sowMethodOverride
+    || (crop.sowMethod === "either" ? "transplant" : crop.sowMethod);
   const showMethodToggle = crop.sowMethod === "either";
 
   return (
@@ -2387,31 +2410,6 @@ function HomeView(props) {
   );
 }
 
-function LandingPlaceholder({ id, title, blurb, bg }) {
-  return (
-    <section id={id} style={{
-      background: bg || T.bg,
-      padding: "clamp(48px, 8vw, 96px) clamp(16px, 4vw, 48px)",
-      scrollMarginTop: 80,
-    }}>
-      <div style={{ maxWidth: 880, margin: "0 auto", textAlign: "center" }}>
-        <h2 style={{
-          margin: 0, fontFamily: T.fontDisplay,
-          fontSize: "clamp(1.5rem, 3vw, 2.25rem)", fontWeight: 400, color: T.tx,
-        }}>
-          {title}
-        </h2>
-        <p style={{
-          margin: "16px auto 0", maxWidth: 560,
-          fontSize: 16, color: T.tx2, lineHeight: 1.6,
-        }}>
-          {blurb}
-        </p>
-      </div>
-    </section>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Landing page sections ──
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2463,10 +2461,16 @@ function SectionHeading({ eyebrow, title, subtitle, align = "center" }) {
 }
 
 function SocialProofSection() {
+  // Numbers pulled from the live data so they never drift from reality.
+  const cropCount = Object.keys(CROPS).length;
+  const pairCount = COMPANIONS.length;
   const stats = [
-    { value: "63", label: "crops in the database", sub: "Tomatoes to parsnips. Six regional additions for non-US gardens." },
-    { value: "153", label: "companion pairings", sub: "Sourced from extension-service research, not Pinterest folklore." },
-    { value: "$19.99", label: "one-time purchase", sub: "No subscription. No renewals. Your plan is yours." },
+    { value: String(cropCount), label: "crops in the database",
+      sub: "Tomatoes to parsnips. Regional additions for non-US gardens." },
+    { value: String(pairCount), label: "companion pairings",
+      sub: "Sourced from extension-service research, not Pinterest folklore." },
+    { value: "$19.99", label: "one-time purchase",
+      sub: "No subscription. No renewals. Your plan is yours." },
   ];
   return (
     <LandingSection>
@@ -3014,30 +3018,82 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
               );
             })}
           </div>
+
+          <CurrencySelect value={currency} onChange={setCurrency} />
         </div>
       </div>
     </header>
   );
 }
 
+// — CurrencySelect (native <select> styled to match the header pill toggles) —
+// A 5-way choice is too many pills for the header; a styled native select is
+// compact on mobile, accessible, and threads through every cost display in
+// the Soil Calculator (and, later, the paid Cost Savings tab).
+const CURRENCY_OPTIONS = [
+  { symbol: "$", code: "USD" },
+  { symbol: "€", code: "EUR" },
+  { symbol: "£", code: "GBP" },
+  { symbol: "R", code: "ZAR" },
+  { symbol: "¥", code: "JPY" },
+];
+function CurrencySelect({ value, onChange }) {
+  return (
+    <label style={{
+      display: "inline-flex", alignItems: "center", gap: 6,
+      background: T.bg2, borderRadius: T.radiusPill,
+      padding: "0 10px 0 14px", minHeight: 46,
+      fontFamily: T.fontBody, fontSize: 13, fontWeight: 600, color: T.tx,
+    }}>
+      <span aria-hidden="true" style={{
+        fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+        fontSize: 15, fontWeight: 700,
+      }}>{value}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Currency"
+        style={{
+          appearance: "none", WebkitAppearance: "none",
+          background: "transparent", border: "none",
+          fontFamily: T.fontBody, fontSize: 13, fontWeight: 600, color: T.tx,
+          minHeight: 44, cursor: "pointer",
+          padding: "0 4px 0 0",
+        }}>
+        {CURRENCY_OPTIONS.map((c) => (
+          <option key={c.symbol} value={c.symbol}>{c.code}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function TabBar({ tab, setTab }) {
   const tabs = TABS; // show every tab, including Home, so there's always a visible selection
   const btnRefs = useRef([]);
-  const activeIdx = Math.max(0, tabs.findIndex((t) => t.id === tab));
 
-  const focusTab = (idx) => {
+  // Manual activation: arrow keys move FOCUS only, Space/Enter activates the
+  // focused tab. This matches the ARIA-authoring-practices recommendation for
+  // tablists whose panels swap substantial content (ours triggers scrollTo +
+  // a content re-render, which would be jarring to fire on every arrow-key).
+  const focusOnly = (idx) => {
     const clamped = (idx + tabs.length) % tabs.length;
     const el = btnRefs.current[clamped];
     if (el) el.focus();
-    setTab(tabs[clamped].id);
+  };
+
+  const currentFocusIdx = () => {
+    const i = btnRefs.current.findIndex((el) => el === document.activeElement);
+    return i >= 0 ? i : Math.max(0, tabs.findIndex((t) => t.id === tab));
   };
 
   const onKeyDown = (e) => {
+    const i = currentFocusIdx();
     switch (e.key) {
-      case "ArrowRight": e.preventDefault(); focusTab(activeIdx + 1); break;
-      case "ArrowLeft":  e.preventDefault(); focusTab(activeIdx - 1); break;
-      case "Home":       e.preventDefault(); focusTab(0); break;
-      case "End":        e.preventDefault(); focusTab(tabs.length - 1); break;
+      case "ArrowRight": e.preventDefault(); focusOnly(i + 1); break;
+      case "ArrowLeft":  e.preventDefault(); focusOnly(i - 1); break;
+      case "Home":       e.preventDefault(); focusOnly(0); break;
+      case "End":        e.preventDefault(); focusOnly(tabs.length - 1); break;
       default: break;
     }
   };
@@ -3056,6 +3112,7 @@ function TabBar({ tab, setTab }) {
           const active = tab === t.id;
           return (
             <button key={t.id}
+              id={`tab-${t.id}`}
               ref={(el) => (btnRefs.current[i] = el)}
               role="tab" aria-selected={active} aria-controls="main-panel"
               tabIndex={active ? 0 : -1}
@@ -3092,17 +3149,20 @@ function TabBar({ tab, setTab }) {
 
 function TabPageShell({ title, blurb, children }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
+  // Uses <h2> rather than <h1> so the only page-level <h1> is the hero on the
+  // landing/home view. Keeps the document outline sensible for SEO crawlers
+  // that render JS across tab routes.
   return (
     <section style={{
       padding: "clamp(32px, 5vw, 64px) clamp(16px, 4vw, 48px)",
     }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <h1 style={{
+        <h2 style={{
           margin: 0, fontFamily: T.fontDisplay,
           fontSize: "clamp(1.75rem, 4vw, 2.5rem)", fontWeight: 400, color: T.tx,
         }}>
           {title}
-        </h1>
+        </h2>
         {blurb && (
           <p style={{
             margin: "12px 0 28px", maxWidth: 640,
@@ -3180,10 +3240,14 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Learn</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <a href="#features" style={linkStyle}>Features</a>
-              <a href="#how-it-works" style={linkStyle}>How it works</a>
-              <a href="#pricing" style={linkStyle}>Pricing</a>
-              <a href="#faq" style={linkStyle}>FAQ</a>
+              <a href="#features" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "features"; }}>Features</a>
+              <a href="#how-it-works" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "how-it-works"; }}>How it works</a>
+              <a href="#pricing" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "pricing"; }}>Pricing</a>
+              <a href="#faq" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "faq"; }}>FAQ</a>
             </div>
           </div>
 
@@ -3267,10 +3331,27 @@ export default function App() {
   const [beds, setBeds] = useState(() => {
     const saved = loadState(LS_BEDS, null);
     if (Array.isArray(saved) && saved.length > 0) {
-      // Sanitize shape + numeric fields; drop entries missing a shape
+      // Drop entries with an invalid shape, then clamp every numeric field.
+      // A single corrupt value (e.g. lengthFt: "banana") otherwise cascades
+      // NaN through volumes, bag counts, and cost totals.
       const valid = saved
         .filter((b) => b && BED_SHAPES.some((s) => s.id === b.shape))
-        .map((b) => ({ ...DEFAULT_BED(), ...b }));
+        .map((b) => {
+          const def = DEFAULT_BED();
+          return {
+            ...def,
+            ...b,
+            lengthFt:       sanitizeNum(b.lengthFt,       def.lengthFt,       0.5, 100),
+            widthFt:        sanitizeNum(b.widthFt,        def.widthFt,        0.5, 50),
+            depthIn:        sanitizeNum(b.depthIn,        def.depthIn,        4,   48),
+            diameterFt:     sanitizeNum(b.diameterFt,     def.diameterFt,     0.5, 50),
+            outerLengthFt:  sanitizeNum(b.outerLengthFt,  def.outerLengthFt,  1,   100),
+            outerWidthFt:   sanitizeNum(b.outerWidthFt,   def.outerWidthFt,   1,   50),
+            cutoutLengthFt: sanitizeNum(b.cutoutLengthFt, def.cutoutLengthFt, 0,   99),
+            cutoutWidthFt:  sanitizeNum(b.cutoutWidthFt,  def.cutoutWidthFt,  0,   49),
+            qty:            clampInt   (b.qty,            def.qty,            1,   20),
+          };
+        });
       if (valid.length > 0) return valid;
     }
     return [DEFAULT_BED()];
