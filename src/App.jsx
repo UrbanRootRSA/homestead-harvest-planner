@@ -228,8 +228,11 @@ const SOIL_MIXES = [
 const BAG_SIZES_CUFT = [1, 1.5, 2];
 const BAG_SIZES_L = [40, 50, 75]; // common UK/AU/ZA compost and topsoil bag sizes
 
+// Module-level counter guarantees unique ids even when two beds are created
+// in the same millisecond (e.g. rapid preset import). Beats Date.now()+random.
+let bedIdCounter = 0;
 const DEFAULT_BED = () => ({
-  id: `bed_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+  id: `bed_${++bedIdCounter}`,
   shape: "rect",
   // stored internally as feet and inches regardless of metric toggle
   lengthFt: 8, widthFt: 4, depthIn: 12,
@@ -608,16 +611,43 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
 function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
   const padding = size === "sm" ? "8px 14px" : "10px 18px";
   const fontSize = size === "sm" ? 13 : 15;
+  const btnRefs = useRef([]);
+
+  // Arrow-key navigation for the radiogroup (per WAI-ARIA authoring practices).
+  // Unlike the tablist, activating a radio option is cheap (no scroll, no route
+  // change), so arrow keys both move focus AND select.
+  const onKeyDown = (e) => {
+    const currentIdx = btnRefs.current.findIndex((el) => el === document.activeElement);
+    const activeIdx = currentIdx >= 0 ? currentIdx : options.findIndex((o) => o.id === value);
+    let next = activeIdx;
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowDown": next = (activeIdx + 1 + options.length) % options.length; break;
+      case "ArrowLeft":
+      case "ArrowUp":   next = (activeIdx - 1 + options.length) % options.length; break;
+      case "Home":      next = 0; break;
+      case "End":       next = options.length - 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    const el = btnRefs.current[next];
+    if (el) el.focus();
+    onChange(options[next].id);
+  };
+
   return (
     <div role="radiogroup" aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
       style={{
         display: "flex", flexWrap: "wrap", gap: 6, padding: 4,
         background: T.bg2, borderRadius: T.radiusPill,
       }}>
-      {options.map((opt) => {
+      {options.map((opt, i) => {
         const active = value === opt.id;
         return (
           <button key={opt.id} type="button" role="radio" aria-checked={active}
+            ref={(el) => (btnRefs.current[i] = el)}
+            tabIndex={active ? 0 : -1}
             onClick={() => onChange(opt.id)}
             style={{
               flex: "1 1 auto", minHeight: size === "sm" ? 40 : 44,
@@ -643,12 +673,43 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
   );
 }
 
+// — BrandMark (inline SVG so the logo doesn't fall back to system font) —
+function BrandMark({ size = 32 }) {
+  return (
+    <span aria-hidden="true" style={{
+      width: size, height: size, borderRadius: Math.max(6, Math.round(size / 4)),
+      background: T.primary,
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      flexShrink: 0,
+    }}>
+      <svg viewBox="0 0 32 32" width={size * 0.62} height={size * 0.62}
+        role="img" aria-label="Homestead Harvest Planner logo">
+        {/* Stylised "H" — two verticals and a crossbar, evoking raised beds */}
+        <rect x="7"  y="5"  width="3.5" height="22" rx="1" fill={T.bg} />
+        <rect x="21.5" y="5" width="3.5" height="22" rx="1" fill={T.bg} />
+        <rect x="7"  y="14.5" width="18" height="3" rx="1" fill={T.bg} />
+        {/* Small "sprout" accent above the crossbar */}
+        <path d="M16 8 C 16 6, 17.5 5, 19 5 C 17.5 6, 17 7.5, 17 9 Z"
+          fill={T.gold} />
+      </svg>
+    </span>
+  );
+}
+
 // — CountUpNumber —
+// Shared text formatter for animated count-up displays. Used by CountUpNumber
+// and MiniStat — extracts the "NaN → em-dash, else format" rule so the two
+// components can't drift apart.
+function formatCountUp(display, value, decimals = 0) {
+  if (!Number.isFinite(value)) return "—";
+  return decimals > 0
+    ? display.toFixed(decimals)
+    : Math.round(display).toLocaleString();
+}
+
 function CountUpNumber({ value, decimals = 0, size = 64, color = T.primary, unit }) {
   const display = useCountUp(Number.isFinite(value) ? value : 0);
-  const text = Number.isFinite(value)
-    ? (decimals > 0 ? display.toFixed(decimals) : Math.round(display).toLocaleString())
-    : "—";
+  const text = formatCountUp(display, value, decimals);
   return (
     <span style={{
       fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
@@ -993,6 +1054,13 @@ function SelfSufficiencyCalculator({
           <MiniStat label="Estimated yield" value={results.totalYieldLbs * massConv}
             decimals={0} unit={unitMass} />
         </div>
+        {results.totalSpaceSqft > 0 && results.totalSpaceSqft < 10 && (
+          <p style={{ marginTop: 8, fontSize: 12, color: T.tx3, lineHeight: 1.5, fontStyle: "italic" }}>
+            That's small enough to fit in a single container, window box, or
+            corner of a raised bed. Cut-and-come-again greens and herbs
+            genuinely thrive at this scale.
+          </p>
+        )}
 
         {/* Category breakdown */}
         <div style={{ marginTop: 24 }}>
@@ -1049,9 +1117,7 @@ const eyebrowStyle = {
 
 function MiniStat({ label, value, unit, decimals = 0 }) {
   const display = useCountUp(Number.isFinite(value) ? value : 0);
-  const text = Number.isFinite(value)
-    ? (decimals > 0 ? display.toFixed(decimals) : Math.round(display).toLocaleString())
-    : "—";
+  const text = formatCountUp(display, value, decimals);
   const readable = Number.isFinite(value) ? `${text} ${unit}` : `${unit} not available`;
   return (
     <div role="group" aria-label={`${label}: ${readable}`} style={{
@@ -1183,29 +1249,35 @@ function computeSoilResults(beds, mix) {
 function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOverrides, metric, currency }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
 
-  // Resolve active mix + apply user price/pct overrides if Custom selected
+  // Price + percentage overrides are nested by mixId so editing prices in
+  // Classic doesn't bleed into Mel's Mix (and vice versa). Custom's a/b/c
+  // keys stay scoped to Custom, too.
+  const mixPriceOverrides = mixOverrides?.prices?.[mixId] || {};
+  const mixPctOverrides   = mixOverrides?.pcts?.[mixId]   || {};
+
+  // Resolve active mix + apply user pct overrides if Custom selected.
   const activeMix = useMemo(() => {
     const base = SOIL_MIXES.find((m) => m.id === mixId) || SOIL_MIXES[0];
-    if (mixId !== "custom" || !mixOverrides) return base;
+    if (mixId !== "custom") return base;
     return {
       ...base,
       components: base.components.map((c) => ({
         ...c,
-        pct: mixOverrides.pcts?.[c.key] ?? c.pct,
-        pricePerCuFt: mixOverrides.prices?.[c.key] ?? c.pricePerCuFt,
+        pct: mixPctOverrides[c.key] ?? c.pct,
       })),
     };
-  }, [mixId, mixOverrides]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mixId, JSON.stringify(mixPctOverrides)]);
 
-  // For non-custom mixes, still allow editable prices (US retail varies regionally).
-  const priceOverrides = mixOverrides?.prices || {};
+  // Price overrides apply to every mix (US retail varies regionally).
   const effectiveMix = useMemo(() => ({
     ...activeMix,
     components: activeMix.components.map((c) => ({
       ...c,
-      pricePerCuFt: priceOverrides[c.key] ?? c.pricePerCuFt,
+      pricePerCuFt: mixPriceOverrides[c.key] ?? c.pricePerCuFt,
     })),
-  }), [activeMix, priceOverrides]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [activeMix, JSON.stringify(mixPriceOverrides)]);
 
   const results = useMemo(() => computeSoilResults(beds, effectiveMix), [beds, effectiveMix]);
 
@@ -1216,13 +1288,19 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
   const setComponentPrice = (key, value) => {
     setMixOverrides({
       ...(mixOverrides || {}),
-      prices: { ...(mixOverrides?.prices || {}), [key]: value },
+      prices: {
+        ...(mixOverrides?.prices || {}),
+        [mixId]: { ...((mixOverrides?.prices || {})[mixId] || {}), [key]: value },
+      },
     });
   };
   const setComponentPct = (key, value) => {
     setMixOverrides({
       ...(mixOverrides || {}),
-      pcts: { ...(mixOverrides?.pcts || {}), [key]: value },
+      pcts: {
+        ...(mixOverrides?.pcts || {}),
+        [mixId]: { ...((mixOverrides?.pcts || {})[mixId] || {}), [key]: value },
+      },
     });
   };
 
@@ -1274,13 +1352,13 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
         }}>
           {effectiveMix.components.map((c) => {
             const displayPrice = metric
-              ? Number(((priceOverrides[c.key] ?? c.pricePerCuFt) / CUFT_TO_L).toFixed(3))
-              : priceOverrides[c.key] ?? c.pricePerCuFt;
+              ? Number(((mixPriceOverrides[c.key] ?? c.pricePerCuFt) / CUFT_TO_L).toFixed(3))
+              : mixPriceOverrides[c.key] ?? c.pricePerCuFt;
             const commitPrice = (v) => {
               const cuftPrice = metric ? v * CUFT_TO_L : v;
               setComponentPrice(c.key, Math.max(0, cuftPrice));
             };
-            const pctValue = Number(((mixOverrides?.pcts?.[c.key] ?? c.pct) * 100).toFixed(1));
+            const pctValue = Number(((mixPctOverrides[c.key] ?? c.pct) * 100).toFixed(1));
             return (
               <div key={c.key} style={{
                 padding: 14, borderRadius: T.radius,
@@ -1515,7 +1593,7 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
             How many like this?
           </div>
           <Counter value={bed.qty || 1}
-            onChange={(v) => onChange({ qty: Math.max(1, Math.min(20, v)) })}
+            onChange={(v) => onChange({ qty: v })}
             min={1} max={20} label={`bed ${index + 1} quantity`} />
         </div>
       </div>
@@ -1755,24 +1833,35 @@ function CompanionChecker({ selectedIds, setSelectedIds, focusCropId, setFocusCr
 }
 
 function CompatibilityMatrix({ ids }) {
-  // Render as a square grid. Headers omitted on the diagonal.
+  // Render as a square grid. Rotated column headers need vertical headroom on
+  // narrow viewports — we reserve 108 px and let long labels clip via
+  // overflow:hidden rather than bleed into the previous section.
   const cellSize = 44;
+  const headerHeight = 108;
   return (
-    <div style={{ display: "inline-block", minWidth: "100%" }}>
+    <div style={{ display: "inline-block", minWidth: "100%", paddingTop: 4 }}>
       <table style={{ borderCollapse: "separate", borderSpacing: 2 }}>
         <thead>
           <tr>
-            <th style={{ width: cellSize, height: cellSize }} aria-hidden="true" />
+            <th style={{ width: cellSize, height: headerHeight }} aria-hidden="true" />
             {ids.map((id) => (
               <th key={id} scope="col"
                 style={{
-                  width: cellSize, height: 100,
+                  width: cellSize, height: headerHeight,
                   fontSize: 11, fontWeight: 600, color: T.tx2,
                   fontFamily: T.fontBody, whiteSpace: "nowrap",
-                  transform: "rotate(-60deg)", transformOrigin: "center",
-                  padding: 0,
+                  padding: 0, verticalAlign: "bottom",
+                  overflow: "hidden",
                 }}>
-                <div style={{ display: "inline-block" }}>{CROPS[id]?.name || id}</div>
+                <div style={{
+                  display: "inline-block",
+                  transform: "rotate(-55deg)", transformOrigin: "left bottom",
+                  paddingLeft: cellSize / 2,
+                  maxWidth: 110,
+                  overflow: "hidden", textOverflow: "ellipsis",
+                }}>
+                  {CROPS[id]?.name || id}
+                </div>
               </th>
             ))}
           </tr>
@@ -1835,8 +1924,8 @@ function CompanionList({ title, tone, pairs, empty }) {
         <p style={{ fontSize: 13, color: T.tx3, fontStyle: "italic", margin: 0 }}>{empty}</p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
-          {pairs.map((p, i) => (
-            <li key={i} style={{
+          {pairs.map((p) => (
+            <li key={`${p.a}-${p.b}`} style={{
               padding: 10, borderRadius: T.radius,
               background: toneBg, border: `1px solid ${T.border}`,
             }}>
@@ -2058,15 +2147,27 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
         </div>
       )}
 
-      {!frostDates && (
-        <p role="alert" style={{
-          marginTop: 24, padding: 16, borderRadius: T.radius,
-          background: T.warningBg, color: T.tx,
-          fontSize: 14, lineHeight: 1.5,
-        }}>
-          Enter both frost dates (or pick a zone) to see your planting calendar.
-        </p>
-      )}
+      {!frostDates && (() => {
+        // Show which piece is still missing so the user knows what to fill in
+        // instead of "something's not working." Only relevant in manual mode.
+        let hint = "Enter both frost dates (or pick a zone) to see your planting calendar.";
+        if (mode === "manual") {
+          const hasSpring = Boolean(parseIsoDate(manualFrost?.lastSpring));
+          const hasFall = Boolean(parseIsoDate(manualFrost?.firstFall));
+          if (hasSpring && !hasFall) hint = "Add your first fall frost date to see the calendar.";
+          else if (!hasSpring && hasFall) hint = "Add your last spring frost date to see the calendar.";
+          else if (!hasSpring && !hasFall) hint = "Enter both frost dates above. The timeline renders automatically once they're valid.";
+        }
+        return (
+          <p role="alert" style={{
+            marginTop: 24, padding: 16, borderRadius: T.radius,
+            background: T.warningBg, color: T.tx,
+            fontSize: 14, lineHeight: 1.5,
+          }}>
+            {hint}
+          </p>
+        );
+      })()}
     </section>
   );
 }
@@ -2077,6 +2178,12 @@ function ZonePicker({ value, onChange, hemisphere }) {
   const opts = Object.keys(ZONE_FROST_DATES).map((k) => Number(k));
   return (
     <div>
+      <div style={{
+        fontSize: 14, fontWeight: 600, color: T.tx2,
+        marginBottom: 6, fontFamily: T.fontBody,
+      }}>
+        USDA hardiness zone
+      </div>
       <select
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
@@ -2097,6 +2204,12 @@ function ZonePicker({ value, onChange, hemisphere }) {
           );
         })}
       </select>
+      <p style={{ margin: "6px 0 0", fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+        These are United States Department of Agriculture hardiness zones.
+        UK (RHS), Australian, and South African zone systems don't map 1:1,
+        so non-US gardeners will get a better result from the "Enter frost
+        dates" option below.
+      </p>
     </div>
   );
 }
@@ -2967,12 +3080,7 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
         <a href="#home"
           onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
           style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-          <span style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: T.primary, color: T.bg,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: T.fontDisplay, fontSize: 20, fontWeight: 400,
-          }}>H</span>
+          <BrandMark size={32} />
           <span style={{
             fontFamily: T.fontDisplay, fontSize: isMobile ? 16 : 18,
             color: T.tx, fontWeight: 400,
@@ -3198,12 +3306,7 @@ function AppFooter() {
           {/* Brand */}
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{
-                width: 32, height: 32, borderRadius: 8,
-                background: T.primary, color: T.bg,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontFamily: T.fontDisplay, fontSize: 20, fontWeight: 400,
-              }}>H</span>
+              <BrandMark size={32} />
               <span style={{
                 fontFamily: T.fontDisplay, fontSize: 17, color: T.tx, fontWeight: 400,
               }}>Homestead Harvest Planner</span>
@@ -3359,7 +3462,27 @@ export default function App() {
   const [soilState, setSoilState] = useState(() => {
     const saved = loadState(LS_SOIL, null);
     const validMixId = SOIL_MIXES.some((m) => m.id === saved?.mixId) ? saved.mixId : "classic_60_30_10";
-    const overrides = (saved?.mixOverrides && typeof saved.mixOverrides === "object") ? saved.mixOverrides : null;
+    // Migration from the flat-map shape (Session 2) to the per-mix nested
+    // shape (Fix Now + MEDIUM pass). Detect the old format by its lack of any
+    // known mixId as a top-level key, then bucket the flat overrides under
+    // whatever mix the user was last on.
+    const isNestedShape = (obj) => {
+      if (!obj || typeof obj !== "object") return true;
+      const keys = Object.keys(obj);
+      if (keys.length === 0) return true;
+      return keys.every((k) => SOIL_MIXES.some((m) => m.id === k));
+    };
+    const migrateBucket = (obj) => {
+      if (!obj || typeof obj !== "object") return {};
+      if (isNestedShape(obj)) return obj;
+      return { [validMixId]: obj };
+    };
+    const rawOverrides = (saved?.mixOverrides && typeof saved.mixOverrides === "object")
+      ? saved.mixOverrides : null;
+    const overrides = rawOverrides ? {
+      prices: migrateBucket(rawOverrides.prices),
+      pcts:   migrateBucket(rawOverrides.pcts),
+    } : null;
     return { mixId: validMixId, mixOverrides: overrides };
   });
   const setMixId = (id) => setSoilState((s) => ({ ...s, mixId: id }));
@@ -3423,6 +3546,19 @@ export default function App() {
   useEffect(() => { persistState(LS_HEMISPHERE, hemisphere); }, [hemisphere]);
   useEffect(() => { persistState(LS_PRODUCE_TARGET, producePerPerson); }, [producePerPerson]);
   useEffect(() => { persistState(LS_PLANTING, plantingState); }, [plantingState]);
+
+  // If a long-lived browser session crosses Jan 1, bump the planting
+  // referenceYear to the new calendar year so the timeline doesn't silently
+  // keep rendering the prior season. Checks on every tab-visibility change.
+  useEffect(() => {
+    const bumpIfStale = () => {
+      const now = new Date().getFullYear();
+      setPlantingState((s) => (s.referenceYear < now ? { ...s, referenceYear: now } : s));
+    };
+    bumpIfStale();
+    document.addEventListener("visibilitychange", bumpIfStale);
+    return () => document.removeEventListener("visibilitychange", bumpIfStale);
+  }, []);
 
   // Hash routing: mount-only init + back/forward + hashchange.
   // hashchange covers footer links like #features that are landing-section
