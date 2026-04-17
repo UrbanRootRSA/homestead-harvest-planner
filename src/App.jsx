@@ -77,6 +77,7 @@ const LS_PLANTING = "hhp_planting";
 const LS_CROP_DB = "hhp_crop_db";
 const LS_COST_SAVINGS = "hhp_cost_savings";
 const LS_PRESERVATION = "hhp_preservation";
+const LS_PLAN = "hhp_plan";
 
 // Paywall storage (Session 4). hhp_paid is NOT read on mount — state machine
 // is paid:false / validating:true until the server confirms. See engineering-
@@ -186,7 +187,7 @@ const TABS = [
   { id: "soil",             label: "Soil",            paid: false, live: true,  blurb: "Raised-bed volume, soil mix breakdown, and bag estimates." },
   { id: "companion",        label: "Companion",       paid: false, live: true,  blurb: "Which crops grow well together, which ones fight." },
   { id: "planting-dates",   label: "Planting Dates",  paid: false, live: true,  blurb: "Start indoors, transplant, direct sow, and harvest windows for your zone." },
-  { id: "growing-plan",     label: "Growing Plan",    paid: true,  live: false, blurb: "AI-generated personalized growing plan for your garden." },
+  { id: "growing-plan",     label: "Growing Plan",    paid: true,  live: true,  blurb: "Personalised month-by-month growing plan for your garden." },
   { id: "crops",            label: "Crop Database",   paid: true,  live: true,  blurb: "Complete data for every crop, searchable and sortable." },
   { id: "cost-savings",     label: "Cost Savings",    paid: true,  live: true,  blurb: "Grocery savings, setup costs, ROI, and break-even timeline." },
   { id: "preservation",     label: "Preservation",    paid: true,  live: true,  blurb: "How to can, freeze, dehydrate, and store your harvest." },
@@ -2764,7 +2765,7 @@ function HowItWorksSection() {
     { n: "2", title: "See the math worked out",
       body: "Plant counts, bed space, soil volume, companion matrix, and a 12-month planting timeline. Everything updates live as you change inputs." },
     { n: "3", title: "(Later) Unlock the full growing plan",
-      body: "Paid tier adds an AI-generated personalised plan, a searchable crop database, cost savings tracking, and a preservation planner. Pay once, keep it." },
+      body: "Paid tier adds a personalised growing plan, a searchable crop database, cost savings tracking, and a preservation planner. Pay once, keep it." },
   ];
   return (
     <LandingSection id="how-it-works">
@@ -2887,7 +2888,7 @@ function ComparisonSection() {
 function PricingSection() {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const features = [
-    "AI-generated personalised growing plan",
+    "Personalised month-by-month growing plan tuned to your family and zone",
     "Complete crop database with 60+ vegetables and varieties",
     "Cost savings calculator with ROI and break-even timeline",
     "Preservation planner (can, freeze, dehydrate, root cellar)",
@@ -2997,8 +2998,8 @@ const FAQ_ITEMS = [
     a: "Good instinct. Our 153 pairings are sourced from university extensions and peer-reviewed allelopathy studies, with a short mechanism note on every entry. We skip \"basil makes tomatoes taste better\" style claims that don't have evidence.",
   },
   {
-    q: "Does it use AI?",
-    a: "The four free calculators are plain math. The paid growing-plan tab uses Claude (by Anthropic) to generate a personalised monthly schedule from your inputs. Everything is clearly labelled so you know where the math ends and the AI begins.",
+    q: "How is the growing plan created?",
+    a: "From your inputs: family size, hardiness zone, crops, garden space, sun exposure, soil, and experience. The plan returns a month-by-month schedule, bed layouts, succession timing, and yield estimates. Full technical detail (data handling, third parties, accuracy disclaimer) is in our Terms and Privacy Policy.",
   },
   {
     q: "What's the refund policy?",
@@ -3124,7 +3125,7 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
   }, [prefillKey]);
 
   const features = [
-    "AI-powered growing plan tuned to your family and zone",
+    "Personalised month-by-month growing plan tuned to your family and zone",
     "Complete crop database — 63 crops, searchable + sortable",
     "Cost savings calculator with grocery-vs-garden ROI",
     "Preservation planner for canning, freezing, dehydrating",
@@ -3316,6 +3317,1100 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
       </div>
     </section>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── Growing Plan (Tab 5, paid) ──
+// Personalised month-by-month plan generated server-side from the user's
+// existing inputs (family, zone, frost dates, crops) plus a small handful
+// of additional questions (sun, soil, water, experience, goals). Posts to
+// /api/generate which proxies to Claude Sonnet with structured-output
+// JSON-schema enforcement, then renders the parsed plan.
+// ═══════════════════════════════════════════════════════════════════════════
+const SUN_OPTIONS = [
+  { id: "full_sun",     label: "Full sun",      sub: "6-8h direct" },
+  { id: "partial_sun",  label: "Partial sun",   sub: "4-6h direct" },
+  { id: "partial_shade", label: "Partial shade", sub: "2-4h direct" },
+];
+const SOIL_OPTIONS = [
+  { id: "sandy",   label: "Sandy" },
+  { id: "loamy",   label: "Loamy" },
+  { id: "clay",    label: "Clay" },
+  { id: "unknown", label: "Don't know" },
+];
+const WATER_OPTIONS = [
+  { id: "drip",     label: "Drip" },
+  { id: "hand",     label: "Hand watering" },
+  { id: "sprinkler", label: "Sprinkler" },
+  { id: "rain",     label: "Rain only" },
+];
+const EXPERIENCE_OPTIONS = [
+  { id: "first_year", label: "First year" },
+  { id: "1_to_3",     label: "1-3 years" },
+  { id: "4_plus",     label: "4+ years" },
+];
+const GOAL_CHIPS = [
+  { id: "fresh",      label: "Fresh eating" },
+  { id: "preserving", label: "Preserving" },
+  { id: "selling",    label: "Selling at market" },
+  { id: "education",  label: "Teaching kids" },
+];
+const PLAN_INPUT_DEFAULTS = {
+  sunExposure: "full_sun",
+  soilType: "loamy",
+  waterMethod: "drip",
+  experience: "1_to_3",
+  goals: ["fresh", "preserving"],
+};
+const LOADING_MESSAGES = [
+  "Reading your inputs...",
+  "Picking varieties for your zone...",
+  "Mapping the planting calendar...",
+  "Sketching bed layouts...",
+  "Sizing yields and savings...",
+  "Drafting your tips...",
+];
+
+// Mirrors api/generate.js sanitisePlan(). Used when re-hydrating a cached plan
+// from localStorage so a tampered or migrated cache can't crash the renderer.
+// Returns null if the plan is unsalvageable (no monthlySchedule).
+const PLAN_STR_MAX = 800;
+const PLAN_SHORT_MAX = 80;
+const VALID_MONTHS = new Set(["January", "February", "March", "April", "May", "June",
+                              "July", "August", "September", "October", "November", "December"]);
+const CURRENCY_SYMBOLS = ["$", "€", "£", "R", "¥"];
+function _str(v, max = PLAN_STR_MAX) {
+  return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
+function _strArr(arr, max = 32, eachMax = PLAN_STR_MAX) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map((v) => _str(v, eachMax)).filter(Boolean).slice(0, max);
+}
+function _num(v, min = 0, max = 1e9) {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return 0;
+  return Math.max(min, Math.min(max, x));
+}
+function sanitisePlanShape(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const monthlySchedule = Array.isArray(raw.monthlySchedule)
+    ? raw.monthlySchedule.slice(0, 12).map((m) => ({
+        month: _str(m?.month, PLAN_SHORT_MAX),
+        tasks: _strArr(m?.tasks, 12, 240),
+      })).filter((m) => VALID_MONTHS.has(m.month) && m.tasks.length > 0)
+    : [];
+  if (monthlySchedule.length === 0) return null;
+  const savings = raw.savingsEstimate && typeof raw.savingsEstimate === "object" ? {
+    annualSavings: Math.round(_num(raw.savingsEstimate.annualSavings, 0, 1e7)),
+    currency: CURRENCY_SYMBOLS.includes(raw.savingsEstimate.currency)
+      ? raw.savingsEstimate.currency : "$",
+    topSavers: _strArr(raw.savingsEstimate.topSavers, 10, PLAN_SHORT_MAX),
+    note: _str(raw.savingsEstimate.note, 600),
+  } : null;
+  return {
+    summary: _str(raw.summary, 1200),
+    monthlySchedule,
+    bedLayouts: Array.isArray(raw.bedLayouts)
+      ? raw.bedLayouts.slice(0, 12).map((b) => ({
+          bedName: _str(b?.bedName, 120),
+          crops: _strArr(b?.crops, 24, PLAN_SHORT_MAX),
+          notes: _str(b?.notes, 600),
+        })).filter((b) => b.bedName && b.crops.length > 0)
+      : [],
+    successionPlanting: Array.isArray(raw.successionPlanting)
+      ? raw.successionPlanting.slice(0, 24).map((sp) => ({
+          crop: _str(sp?.crop, PLAN_SHORT_MAX),
+          plantings: Math.round(_num(sp?.plantings, 1, 12)),
+          intervalWeeks: Math.round(_num(sp?.intervalWeeks, 1, 52)),
+          note: _str(sp?.note, 400),
+        })).filter((sp) => sp.crop)
+      : [],
+    harvestTimeline: Array.isArray(raw.harvestTimeline)
+      ? raw.harvestTimeline.slice(0, 32).map((h) => ({
+          crop: _str(h?.crop, PLAN_SHORT_MAX),
+          startMonth: _str(h?.startMonth, PLAN_SHORT_MAX),
+          endMonth: _str(h?.endMonth, PLAN_SHORT_MAX),
+          peakMonth: _str(h?.peakMonth, PLAN_SHORT_MAX),
+        })).filter((h) => h.crop && h.startMonth)
+      : [],
+    yieldEstimates: Array.isArray(raw.yieldEstimates)
+      ? raw.yieldEstimates.slice(0, 32).map((y) => ({
+          crop: _str(y?.crop, PLAN_SHORT_MAX),
+          plants: Math.round(_num(y?.plants, 0, 9999)),
+          estimatedYield: Math.round(_num(y?.estimatedYield, 0, 100000) * 10) / 10,
+          unit: y?.unit === "kg" ? "kg" : "lb",
+          note: _str(y?.note, 400),
+        })).filter((y) => y.crop)
+      : [],
+    preservationGuide: Array.isArray(raw.preservationGuide)
+      ? raw.preservationGuide.slice(0, 32).map((p) => ({
+          crop: _str(p?.crop, PLAN_SHORT_MAX),
+          freshShare: _str(p?.freshShare, 32),
+          preservationMethods: _strArr(p?.preservationMethods, 8, PLAN_SHORT_MAX),
+          note: _str(p?.note, 400),
+        })).filter((p) => p.crop)
+      : [],
+    savingsEstimate: savings,
+    tips: _strArr(raw.tips, 12, 400),
+  };
+}
+
+function GrowingPlanTab({
+  baseResults, planState, setPlanState,
+  familySize, hemisphere, plantingState,
+  metric, currency, producePerPerson, setTab,
+}) {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+  const [loadingIdx, setLoadingIdx] = useState(0);
+  const [longRun, setLongRun] = useState(false); // swap copy after 30 s
+  const downloadAnchorRef = useRef(null);
+  // Track the current in-flight request so we can abort on unmount or on a
+  // 90-second timeout. Also revoke any prior blob URL before we create a new
+  // one — see #22, #23, #26.
+  const abortControllerRef = useRef(null);
+  const blobUrlRef = useRef(null);
+
+  // Cycle the loading copy while we wait so the UI doesn't look frozen.
+  useEffect(() => {
+    if (!generating) return;
+    const t = setInterval(() => setLoadingIdx((i) => (i + 1) % LOADING_MESSAGES.length), 2400);
+    return () => clearInterval(t);
+  }, [generating]);
+
+  // Unmount cleanup: abort any open fetch and revoke any outstanding blob URL.
+  // We also revoke on beforeunload so refresh / tab-close doesn't leak the
+  // last download URL forever (#26).
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      if (blobUrlRef.current) {
+        try { URL.revokeObjectURL(blobUrlRef.current); } catch { /* noop */ }
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      if (abortControllerRef.current) {
+        try { abortControllerRef.current.abort(); } catch { /* noop */ }
+        abortControllerRef.current = null;
+      }
+      if (blobUrlRef.current) {
+        try { URL.revokeObjectURL(blobUrlRef.current); } catch { /* noop */ }
+        blobUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const inputs = planState.inputs;
+  const plan = planState.plan;
+  const cropIds = baseResults.perCrop.map((r) => r.cropId);
+  const cropNames = baseResults.perCrop.map((r) => r.crop.name);
+
+  // Sorted-IDs fingerprint — used to detect when the user has changed crop
+  // selection since the cached plan was generated (#15).
+  const currentFingerprint = useMemo(
+    () => cropIds.slice().sort().join(","),
+    [cropIds]
+  );
+  const fingerprintStale = !!plan && !!planState.cropFingerprint
+    && planState.cropFingerprint !== currentFingerprint;
+
+  // Manual frost mode missing dates? Block generation (#5).
+  const manualMissing = plantingState.mode === "manual"
+    && (!plantingState.manualFrost?.lastSpring || !plantingState.manualFrost?.firstFall);
+
+  const updateInput = (key, value) => {
+    setPlanState((prev) => ({
+      ...prev,
+      inputs: { ...prev.inputs, [key]: value },
+    }));
+  };
+  const toggleGoal = (id) => {
+    setPlanState((prev) => {
+      const next = prev.inputs.goals.includes(id)
+        ? prev.inputs.goals.filter((g) => g !== id)
+        : [...prev.inputs.goals, id];
+      return { ...prev, inputs: { ...prev.inputs, goals: next } };
+    });
+  };
+  const clearPlan = () => {
+    if (window.confirm("Clear the current plan and start over?")) {
+      setPlanState((prev) => ({ ...prev, plan: null, generatedAt: null, cropFingerprint: "" }));
+    }
+  };
+
+  // ── Resolve frost dates from plantingState (zone or manual) ──
+  const frostDates = useMemo(
+    () => getFrostDates(plantingState.mode, plantingState.zone, hemisphere,
+                       plantingState.manualFrost, plantingState.referenceYear),
+    [plantingState, hemisphere]
+  );
+  const lastSpringFrostStr = frostDates.lastSpring
+    ? formatDate(frostDates.lastSpring, plantingState.referenceYear)
+    : "";
+  const firstFallFrostStr = frostDates.firstFall
+    ? formatDate(frostDates.firstFall, plantingState.referenceYear)
+    : "";
+  const zoneStr = plantingState.mode === "zone"
+    ? `USDA zone ${plantingState.zone}`
+    : "Manual frost entry";
+
+  // ── Garden space estimate from selection ──
+  // Use the RAW (un-buffered) area so the LLM sees actual growing area, not
+  // path overhead. The buffered total is for layout/UX only (#10).
+  const gardenSqFt = Math.max(50, Math.round(baseResults.totalSpaceRaw));
+
+  const goalLabels = inputs.goals
+    .map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label)
+    .filter(Boolean);
+
+  const generate = async () => {
+    if (cropIds.length === 0) {
+      setError("Pick at least one crop on the Self-Sufficiency tab first.");
+      return;
+    }
+    if (manualMissing) {
+      setError("Manual frost mode is selected but the dates are blank. Open Planting Dates and set both.");
+      return;
+    }
+    setError("");
+    setGenerating(true);
+    setLoadingIdx(0);
+    setLongRun(false);
+    // 90-second hard timeout for the fetch. Show a reassurance line at 30 s
+    // so the user knows we're still working (#22, #23).
+    const ac = new AbortController();
+    abortControllerRef.current = ac;
+    const longRunTimer = setTimeout(() => setLongRun(true), 30000);
+    const timeoutTimer = setTimeout(() => {
+      try { ac.abort(); } catch { /* noop */ }
+    }, 90000);
+    try {
+      // Read licence from LS at request time (not at mount) so a key entered
+      // mid-session is picked up without a refresh.
+      const licenseKey = loadState(LS_KEY, "");
+      const instanceId = loadState(LS_INSTANCE, "");
+      const resp = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
+        body: JSON.stringify({
+          licenseKey, instanceId,
+          familySize,
+          zone: zoneStr,
+          lastSpringFrost: lastSpringFrostStr,
+          firstFallFrost: firstFallFrostStr,
+          hemisphere,
+          // Always send sq ft; the server labels accordingly. The LLM is
+          // told via displayUnits which units to use in OUTPUT (#11/#12).
+          gardenSqFt,
+          sunExposure: SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure,
+          soilType: SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType,
+          waterMethod: WATER_OPTIONS.find((o) => o.id === inputs.waterMethod)?.label || inputs.waterMethod,
+          experience: EXPERIENCE_OPTIONS.find((o) => o.id === inputs.experience)?.label || inputs.experience,
+          goals: goalLabels,
+          crops: cropNames,
+          displayUnits: metric ? "metric" : "imperial",
+          currency,
+          // Always send lb; producePerPerson is stored in lb regardless of
+          // metric toggle.
+          producePerPersonLbs: producePerPerson,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) {
+        setError(data?.error || `The plan generator returned an error (${resp.status}). Please try again.`);
+        setGenerating(false);
+        return;
+      }
+      setPlanState((prev) => ({
+        ...prev,
+        plan: data.plan,
+        generatedAt: Date.now(),
+        cropFingerprint: currentFingerprint,
+      }));
+      setGenerating(false);
+    } catch (e) {
+      // AbortError means either we aborted on unmount (no UI needed) or the
+      // 90 s timeout fired. Distinguish by checking the controller's signal.
+      if (e?.name === "AbortError") {
+        if (!ac.signal.aborted) return; // unmount, component is gone
+        setError("The plan generator took too long to respond. Please try again.");
+      } else {
+        console.error("[GrowingPlan] fetch failed:", e?.message);
+        setError("Couldn't reach the plan generator. Check your connection and try again.");
+      }
+      setGenerating(false);
+    } finally {
+      clearTimeout(longRunTimer);
+      clearTimeout(timeoutTimer);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const downloadHtml = () => {
+    if (!plan) return;
+    const html = buildPlanReportHtml({
+      plan, inputs, familySize, zoneStr,
+      lastSpringFrostStr, firstFallFrostStr, hemisphere,
+      gardenSqFt, metric, currency, cropNames, generatedAt: planState.generatedAt,
+    });
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    // Revoke the previous URL before creating a new one — every additional
+    // download otherwise leaks an object URL until the page unloads (#26).
+    if (blobUrlRef.current) {
+      try { URL.revokeObjectURL(blobUrlRef.current); } catch { /* noop */ }
+    }
+    const url = URL.createObjectURL(blob);
+    blobUrlRef.current = url;
+    // The hidden anchor is rendered in JSX below; trust the ref instead of
+    // creating a throwaway element (#9, #43).
+    const a = downloadAnchorRef.current;
+    if (!a) return;
+    a.href = url;
+    a.download = `Homestead-Harvest-Plan-${new Date().toISOString().slice(0, 10)}.html`;
+    a.click();
+  };
+
+  return (
+    <section aria-label="Growing Plan" style={{
+      background: T.card, border: `1.5px solid ${T.border}`,
+      borderRadius: T.radiusLg, padding: isMobile ? 20 : 32, boxShadow: T.shadow.lg,
+    }}>
+      {/* ── Inputs from prior tabs (read-only summary) ── */}
+      <div style={{
+        padding: 16, borderRadius: T.radius,
+        background: T.bg2, border: `1.5px solid ${T.border}`,
+        marginBottom: 24,
+      }}>
+        <div style={{ ...eyebrowStyle, marginBottom: 8 }}>From your other tabs</div>
+        <div style={{
+          display: "grid", gap: "6px 24px",
+          gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+          fontSize: 14, color: T.tx2,
+        }}>
+          <span><span style={{ color: T.tx3 }}>Family:</span> <strong style={{ color: T.tx }}>{familySize}</strong></span>
+          <span><span style={{ color: T.tx3 }}>Hemisphere:</span> <strong style={{ color: T.tx }}>{hemisphere === "south" ? "Southern" : "Northern"}</strong></span>
+          <span><span style={{ color: T.tx3 }}>Climate:</span> <strong style={{ color: T.tx }}>{zoneStr}</strong></span>
+          <span><span style={{ color: T.tx3 }}>Garden space:</span> <strong style={{ color: T.tx }}>{metric ? `${(gardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${gardenSqFt} sq ft`}</strong></span>
+          <span style={{ gridColumn: isMobile ? "auto" : "1 / -1" }}>
+            <span style={{ color: T.tx3 }}>Crops ({cropNames.length}):</span>{" "}
+            <span style={{ color: T.tx }}>{cropNames.length > 0 ? cropNames.slice(0, 8).join(", ") + (cropNames.length > 8 ? `, +${cropNames.length - 8} more` : "") : "None selected yet"}</span>
+          </span>
+        </div>
+      </div>
+
+      {/* ── New inputs ── */}
+      <div style={{ display: "grid", gap: 20 }}>
+        <div>
+          <label style={labelStyle}>Sun exposure</label>
+          <PillSelect options={SUN_OPTIONS} value={inputs.sunExposure}
+            onChange={(v) => updateInput("sunExposure", v)} ariaLabel="Sun exposure" />
+        </div>
+        <div style={{
+          display: "grid", gap: 20,
+          gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+        }}>
+          <div>
+            <label style={labelStyle}>Soil type</label>
+            <PillSelect options={SOIL_OPTIONS} value={inputs.soilType}
+              onChange={(v) => updateInput("soilType", v)} size="sm" ariaLabel="Soil type" />
+          </div>
+          <div>
+            <label style={labelStyle}>Watering</label>
+            <PillSelect options={WATER_OPTIONS} value={inputs.waterMethod}
+              onChange={(v) => updateInput("waterMethod", v)} size="sm" ariaLabel="Watering method" />
+          </div>
+        </div>
+        <div>
+          <label style={labelStyle}>Your experience</label>
+          <PillSelect options={EXPERIENCE_OPTIONS} value={inputs.experience}
+            onChange={(v) => updateInput("experience", v)} ariaLabel="Experience level" />
+        </div>
+        <div>
+          <label style={labelStyle}>Goals (pick any that apply)</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {GOAL_CHIPS.map((g) => {
+              const active = inputs.goals.includes(g.id);
+              return (
+                <button key={g.id} type="button"
+                  onClick={() => toggleGoal(g.id)}
+                  aria-pressed={active}
+                  style={{
+                    padding: "10px 16px", minHeight: 44,
+                    borderRadius: T.radiusPill,
+                    background: active ? T.primary : T.bg2,
+                    color: active ? "#FEFCF8" : T.tx2,
+                    border: `1.5px solid ${active ? T.primary : T.border}`,
+                    fontFamily: T.fontBody, fontSize: 14, fontWeight: 600,
+                    cursor: "pointer", transition: "all 0.15s ease",
+                  }}>
+                  {g.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Generate / Regenerate button ── */}
+      <div style={{ marginTop: 28 }}>
+        {(() => {
+          const disabled = generating || cropNames.length === 0 || manualMissing;
+          // Disabled-state styling: drop opacity in addition to flipping the
+          // background, so it reads as "not actionable" even when the colour
+          // change alone is subtle (#14).
+          const disabledLook = disabled || generating;
+          return (
+            <button type="button" onClick={generate} disabled={disabled}
+              style={{
+                width: "100%", padding: "16px 24px", minHeight: 56,
+                borderRadius: T.radiusPill,
+                background: generating ? T.tx3 : T.accent,
+                color: "#FEFCF8", border: "none",
+                fontFamily: T.fontBody, fontSize: 17, fontWeight: 700,
+                cursor: disabled ? "default" : "pointer",
+                opacity: disabledLook ? 0.7 : 1,
+                boxShadow: generating ? "none" : T.shadow.accent,
+                transition: "all 0.18s ease",
+              }}>
+              {generating
+                ? LOADING_MESSAGES[loadingIdx]
+                : plan ? "Regenerate plan" : "Generate my growing plan"}
+            </button>
+          );
+        })()}
+        {generating && (
+          <p style={{
+            marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center", lineHeight: 1.5,
+          }}>
+            {longRun
+              ? "Still working — large plans take longer than usual. Please don't close the tab."
+              : "This usually takes 20-40 seconds. Please don't close the tab."}
+          </p>
+        )}
+        {cropNames.length === 0 && !generating && (
+          <p style={{
+            marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center",
+          }}>
+            Pick at least one crop on the{" "}
+            <a href="#home"
+              onClick={(e) => { if (typeof setTab === "function") { e.preventDefault(); setTab("home"); } }}
+              style={{ color: T.primary, fontWeight: 700, textDecoration: "underline" }}>
+              Self-Sufficiency tab
+            </a>{" "}
+            to enable plan generation.
+          </p>
+        )}
+        {manualMissing && cropNames.length > 0 && !generating && (
+          <p style={{
+            marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center",
+          }}>
+            Manual frost mode is selected but the dates are blank. Open{" "}
+            <a href="#planting-dates"
+              onClick={(e) => { if (typeof setTab === "function") { e.preventDefault(); setTab("planting-dates"); } }}
+              style={{ color: T.primary, fontWeight: 700, textDecoration: "underline" }}>
+              Planting Dates
+            </a>{" "}
+            and set both.
+          </p>
+        )}
+        {error && (
+          <div role="alert" style={{
+            marginTop: 12, padding: "10px 14px", borderRadius: T.radius,
+            background: T.errorBg, color: T.error,
+            border: `1px solid ${T.error}`, fontSize: 14,
+          }}>{error}</div>
+        )}
+      </div>
+
+      {/* ── Stale-plan banner: cropFingerprint changed since last generation (#15) ── */}
+      {plan && !generating && fingerprintStale && (
+        <div role="status" style={{
+          marginTop: 20, padding: "12px 16px", borderRadius: T.radius,
+          background: T.goldBg, color: T.gold,
+          border: `1px solid ${T.gold}`, fontSize: 14, lineHeight: 1.5,
+        }}>
+          Your crop selection has changed since this plan was generated. Click <strong>Regenerate</strong> to update.
+        </div>
+      )}
+
+      {/* ── Plan output ── */}
+      {plan && !generating && (
+        <PlanRenderer plan={plan} metric={metric} currency={currency}
+          isMobile={isMobile}
+          generatedAt={planState.generatedAt}
+          onDownload={downloadHtml}
+          onClear={clearPlan} />
+      )}
+      {/* hidden anchor for download */}
+      <a ref={downloadAnchorRef} style={{ display: "none" }} aria-hidden="true" />
+    </section>
+  );
+}
+
+// ── PlanRenderer: renders the structured plan returned by the API ──────────
+const MONTH_ORDER = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"];
+// Returns -1 for unknown month names. Callers that build timelines or sort
+// rows MUST filter on `>= 0` rather than coerce silently — otherwise an
+// unknown month sorts as January and renders a phantom bar.
+function monthIndex(name) {
+  return MONTH_ORDER.indexOf(name);
+}
+
+function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownload, onClear }) {
+  return (
+    <div style={{ marginTop: 32 }}>
+      {/* ── Action bar ── */}
+      <div style={{
+        display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+        justifyContent: "space-between", marginBottom: 20,
+      }}>
+        <div style={{ fontSize: 13, color: T.tx3 }}>
+          {generatedAt ? `Generated ${new Date(generatedAt).toLocaleString()}` : ""}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={onDownload}
+            style={{
+              padding: "10px 18px", minHeight: 44, borderRadius: T.radiusPill,
+              background: T.primary, color: "#FEFCF8", border: "none",
+              fontFamily: T.fontBody, fontSize: 14, fontWeight: 600, cursor: "pointer",
+            }}>
+            Download as HTML
+          </button>
+          <button type="button" onClick={onClear}
+            style={{
+              padding: "10px 18px", minHeight: 44, borderRadius: T.radiusPill,
+              background: "transparent", color: T.tx2,
+              border: `1.5px solid ${T.border}`,
+              fontFamily: T.fontBody, fontSize: 14, fontWeight: 600, cursor: "pointer",
+            }}>
+            Clear plan
+          </button>
+        </div>
+      </div>
+
+      {/* ── Summary ── */}
+      <PlanSection title="Summary">
+        <p style={{ margin: 0, fontSize: 16, color: T.tx, lineHeight: 1.6 }}>{plan.summary}</p>
+      </PlanSection>
+
+      {/* ── Monthly schedule ── */}
+      <PlanSection title="Month-by-month schedule">
+        <div style={{
+          display: "grid", gap: 12,
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(260px, 1fr))",
+        }}>
+          {plan.monthlySchedule
+            .slice()
+            .sort((a, b) => monthIndex(a.month) - monthIndex(b.month))
+            .map((m) => (
+              <div key={m.month} style={{
+                padding: 14, borderRadius: T.radius,
+                background: T.bg2, border: `1.5px solid ${T.border}`,
+              }}>
+                <div style={{
+                  fontFamily: T.fontDisplay, fontSize: 18, color: T.tx, fontWeight: 400,
+                  marginBottom: 8,
+                }}>
+                  {m.month}
+                </div>
+                <ul style={{ margin: 0, padding: "0 0 0 18px", color: T.tx2, fontSize: 14, lineHeight: 1.55 }}>
+                  {m.tasks.map((t, i) => <li key={i} style={{ marginBottom: 4 }}>{t}</li>)}
+                </ul>
+              </div>
+            ))}
+        </div>
+      </PlanSection>
+
+      {/* ── Bed layouts ── */}
+      {plan.bedLayouts.length > 0 && (
+        <PlanSection title="Bed layouts">
+          <div style={{ display: "grid", gap: 12 }}>
+            {plan.bedLayouts.map((b, i) => (
+              <div key={i} style={{
+                padding: 14, borderRadius: T.radius,
+                background: T.bg2, border: `1.5px solid ${T.border}`,
+              }}>
+                <div style={{ fontWeight: 700, color: T.tx, fontSize: 15, marginBottom: 6 }}>
+                  {b.bedName}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  {b.crops.map((c, j) => (
+                    <span key={j} style={{
+                      padding: "4px 10px", borderRadius: T.radiusPill,
+                      background: T.primaryBg, color: T.primary,
+                      fontSize: 12, fontWeight: 600,
+                    }}>{c}</span>
+                  ))}
+                </div>
+                {b.notes && <p style={{ margin: 0, fontSize: 13, color: T.tx2, lineHeight: 1.55 }}>{b.notes}</p>}
+              </div>
+            ))}
+          </div>
+        </PlanSection>
+      )}
+
+      {/* ── Succession planting ── */}
+      {plan.successionPlanting.length > 0 && (
+        <PlanSection title="Succession planting">
+          <div style={{ display: "grid", gap: 8 }}>
+            {plan.successionPlanting.map((s, i) => (
+              <div key={i} style={{
+                padding: "12px 14px", borderRadius: T.radius,
+                background: T.bg2, border: `1.5px solid ${T.border}`,
+                display: "grid", gap: 4,
+                gridTemplateColumns: isMobile ? "1fr" : "minmax(140px, 200px) auto 1fr",
+                alignItems: "baseline",
+              }}>
+                <div style={{ fontWeight: 700, color: T.tx, fontSize: 14 }}>{s.crop}</div>
+                <div style={{
+                  fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+                  fontSize: 13, color: T.tx2,
+                }}>
+                  {s.plantings} plantings · every {s.intervalWeeks} {s.intervalWeeks === 1 ? "week" : "weeks"}
+                </div>
+                <div style={{ fontSize: 13, color: T.tx2, lineHeight: 1.5 }}>{s.note}</div>
+              </div>
+            ))}
+          </div>
+        </PlanSection>
+      )}
+
+      {/* ── Harvest timeline ── */}
+      {plan.harvestTimeline.length > 0 && (
+        <PlanSection title="Harvest timeline">
+          <PlanHarvestChart rows={plan.harvestTimeline} />
+        </PlanSection>
+      )}
+
+      {/* ── Yield estimates ── */}
+      {plan.yieldEstimates.length > 0 && (
+        <PlanSection title="Estimated yields">
+          <div style={{ display: "grid", gap: 8 }}>
+            {plan.yieldEstimates.map((y, i) => (
+              <div key={i} style={{
+                padding: "10px 14px", borderRadius: T.radius,
+                background: T.bg2, border: `1.5px solid ${T.border}`,
+                display: "grid", gap: 4,
+                gridTemplateColumns: isMobile ? "1fr" : "minmax(140px, 200px) auto 1fr",
+                alignItems: "baseline",
+              }}>
+                <div style={{ fontWeight: 700, color: T.tx, fontSize: 14 }}>{y.crop}</div>
+                <div style={{
+                  fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+                  fontSize: 14, color: T.primary, fontWeight: 700,
+                }}>
+                  {y.plants} plants · ~{y.estimatedYield.toFixed(1)} {y.unit}
+                </div>
+                {y.note && <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>{y.note}</div>}
+              </div>
+            ))}
+          </div>
+        </PlanSection>
+      )}
+
+      {/* ── Preservation guide ── */}
+      {plan.preservationGuide.length > 0 && (
+        <PlanSection title="Preservation guide">
+          <div style={{ display: "grid", gap: 8 }}>
+            {plan.preservationGuide.map((p, i) => (
+              <div key={i} style={{
+                padding: "10px 14px", borderRadius: T.radius,
+                background: T.bg2, border: `1.5px solid ${T.border}`,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 700, color: T.tx, fontSize: 14 }}>{p.crop}</div>
+                  <div style={{ fontSize: 12, color: T.tx3 }}>Fresh: <strong style={{ color: T.tx2 }}>{p.freshShare}</strong></div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                  {p.preservationMethods.map((m, j) => (
+                    <span key={j} style={{
+                      padding: "3px 9px", borderRadius: T.radiusPill,
+                      background: T.goldBg, color: T.gold,
+                      fontSize: 11, fontWeight: 600,
+                    }}>{m}</span>
+                  ))}
+                </div>
+                {p.note && <p style={{ margin: "6px 0 0", fontSize: 13, color: T.tx2, lineHeight: 1.5 }}>{p.note}</p>}
+              </div>
+            ))}
+          </div>
+        </PlanSection>
+      )}
+
+      {/* ── Savings estimate ── */}
+      {plan.savingsEstimate && (
+        <PlanSection title="Estimated annual savings">
+          <div style={{
+            padding: 18, borderRadius: T.radiusLg,
+            background: `linear-gradient(180deg, ${T.primaryBg} 0%, ${T.bg2} 100%)`,
+            border: `1.5px solid ${T.border}`, textAlign: "center",
+          }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 4 }}>
+              <span style={{
+                fontFamily: T.fontNum, fontWeight: 700,
+                fontSize: isMobile ? 28 : 40, color: T.tx2,
+              }}>{plan.savingsEstimate.currency || currency}</span>
+              <span style={{
+                fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+                fontWeight: 700, fontSize: isMobile ? 36 : 56, color: T.primary, lineHeight: 1,
+              }}>
+                {plan.savingsEstimate.annualSavings.toLocaleString()}
+              </span>
+            </div>
+            {plan.savingsEstimate.topSavers.length > 0 && (
+              <div style={{ marginTop: 12, fontSize: 13, color: T.tx2 }}>
+                Top savers:{" "}
+                {plan.savingsEstimate.topSavers.map((s, i) => (
+                  <span key={i} style={{
+                    display: "inline-block", padding: "2px 8px", borderRadius: T.radiusPill,
+                    background: T.card, border: `1px solid ${T.border}`,
+                    fontWeight: 600, color: T.tx, marginLeft: 4,
+                  }}>{s}</span>
+                ))}
+              </div>
+            )}
+            {plan.savingsEstimate.note && (
+              <p style={{ margin: "10px auto 0", maxWidth: 460, fontSize: 13, color: T.tx2, lineHeight: 1.5 }}>
+                {plan.savingsEstimate.note}
+              </p>
+            )}
+          </div>
+        </PlanSection>
+      )}
+
+      {/* ── Tips ── */}
+      {plan.tips.length > 0 && (
+        <PlanSection title="Tips for your first season">
+          <ul style={{
+            margin: 0, padding: 0, listStyle: "none", display: "grid", gap: 8,
+          }}>
+            {plan.tips.map((t, i) => (
+              <li key={i} style={{
+                padding: "10px 14px", borderRadius: T.radius,
+                background: T.bg2, border: `1px solid ${T.border}`,
+                fontSize: 14, color: T.tx, lineHeight: 1.55,
+              }}>{t}</li>
+            ))}
+          </ul>
+        </PlanSection>
+      )}
+
+      <p style={{ marginTop: 28, fontSize: 12, color: T.tx3, lineHeight: 1.55 }}>
+        This plan was generated automatically from the inputs above. Generated plans are advisory,
+        not authoritative; cross-check with local extension-service guidance before acting on
+        anything irreversible. Full disclosure: see our <a href="/terms.html" style={{ color: T.tx2, textDecoration: "underline" }}>Terms</a>.
+      </p>
+    </div>
+  );
+}
+
+function PlanSection({ title, children }) {
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h3 style={{
+        margin: "0 0 12px", fontFamily: T.fontDisplay, fontWeight: 400,
+        fontSize: 22, color: T.tx,
+      }}>{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+// Compact bar-chart for the harvest timeline. Each row is a crop; the bar
+// runs from startMonth to endMonth across a 12-column grid. Wraps year-end
+// (e.g. tomatoes Sep–Mar) by drawing two segments.
+function PlanHarvestChart({ rows }) {
+  // Drop rows the LLM produced with non-canonical month names — the grid
+  // requires a valid startIdx; without filtering, a bad row would render
+  // a phantom January bar (#13).
+  const filtered = rows
+    .map((r) => {
+      const startIdx = monthIndex(r.startMonth);
+      let endIdx = monthIndex(r.endMonth);
+      let peakIdx = monthIndex(r.peakMonth);
+      // Soften end/peak: if the LLM only gave a startMonth, single-cell bar.
+      if (endIdx === -1) endIdx = startIdx;
+      if (peakIdx === -1) peakIdx = startIdx;
+      return { ...r, startIdx, endIdx, peakIdx };
+    })
+    .filter((r) => r.startIdx >= 0);
+  if (filtered.length === 0) return null;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <div style={{ minWidth: 560 }}>
+        <div style={{
+          display: "grid", gridTemplateColumns: "minmax(120px, 160px) repeat(12, 1fr)",
+          gap: 4, fontSize: 11, color: T.tx3, fontWeight: 600,
+          paddingBottom: 6, borderBottom: `1px solid ${T.border}`, marginBottom: 8,
+        }}>
+          <div />
+          {MONTH_ORDER.map((m) => (
+            <div key={m} style={{ textAlign: "center", fontFamily: T.fontBody }}>{m.slice(0, 3)}</div>
+          ))}
+        </div>
+        {filtered.map((r, i) => {
+          const segments = [];
+          if (r.endIdx >= r.startIdx) {
+            segments.push([r.startIdx, r.endIdx]);
+          } else {
+            segments.push([r.startIdx, 11]);
+            segments.push([0, r.endIdx]);
+          }
+          return (
+            <div key={i} style={{
+              display: "grid", gridTemplateColumns: "minmax(120px, 160px) repeat(12, 1fr)",
+              gap: 4, alignItems: "center", padding: "4px 0",
+            }}>
+              <div style={{
+                fontSize: 13, fontWeight: 600, color: T.tx,
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>{r.crop}</div>
+              {Array.from({ length: 12 }, (_, m) => {
+                const inRange = segments.some(([a, b]) => m >= a && m <= b);
+                const isPeak = m === r.peakIdx && inRange;
+                return (
+                  <div key={m} style={{
+                    height: 18, borderRadius: 4,
+                    background: inRange ? (isPeak ? T.accent : T.primary) : T.bg2,
+                    opacity: inRange ? (isPeak ? 1 : 0.85) : 1,
+                  }} title={inRange ? `${r.crop} - ${MONTH_ORDER[m]}${isPeak ? " (peak)" : ""}` : ""} />
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Self-contained HTML report builder ─────────────────────────────────────
+function escapeHtml(s) {
+  if (s == null) return "";
+  // Defensive: numbers, booleans, etc. all coerce safely to a string. Returning
+  // "" for non-strings used to swallow valid values like "0".
+  const str = typeof s === "string" ? s : String(s);
+  return str
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+// Inline CSS hex values must match the T design tokens. Verified at audit
+// 2026-04-17. If T changes, update here too:
+//   bg=#FAF7F2, card=#FEFCF8, border=#DDD6C8, tx=#2C2418, tx2=#6B5D4F,
+//   tx3=#7A6E5F, bg2=#F2EDE4, primary=#2D5A27, accent=#C45D3E,
+//   primaryBg=#E6F0E5, goldBg=#FBF6E6, gold=#B8942C
+function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
+                              lastSpringFrostStr, firstFallFrostStr, hemisphere,
+                              gardenSqFt, metric, currency, cropNames, generatedAt }) {
+  const dateStr = generatedAt ? new Date(generatedAt).toLocaleString() : new Date().toLocaleString();
+  const sunLabel = SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure;
+  const soilLabel = SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType;
+  const waterLabel = WATER_OPTIONS.find((o) => o.id === inputs.waterMethod)?.label || inputs.waterMethod;
+  const expLabel = EXPERIENCE_OPTIONS.find((o) => o.id === inputs.experience)?.label || inputs.experience;
+  const goalLabel = inputs.goals.map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label || id).join(", ");
+  const spaceStr = metric ? `${(gardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${gardenSqFt} sq ft`;
+
+  const monthly = plan.monthlySchedule.slice().sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
+
+  const css = `
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; background: #FAF7F2; color: #2C2418; margin: 0; padding: 24px 16px; line-height: 1.55; }
+    .wrap { max-width: 880px; margin: 0 auto; background: #FEFCF8; border: 1px solid #DDD6C8; border-radius: 12px; padding: 32px 28px; }
+    h1, h2, h3 { font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; color: #2C2418; line-height: 1.2; }
+    h1 { font-size: clamp(24px, 4vw, 34px); margin: 0 0 6px; }
+    h2 { font-size: clamp(20px, 3vw, 26px); margin: 32px 0 12px; }
+    h3 { font-size: 18px; margin: 20px 0 8px; }
+    .muted { color: #7A6E5F; font-size: 13px; }
+    .num { font-family: 'Barlow', sans-serif; font-variant-numeric: tabular-nums; font-weight: 700; }
+    .meta { display: grid; gap: 6px 24px; grid-template-columns: 1fr 1fr; padding: 14px 16px; background: #F2EDE4; border-radius: 8px; margin: 16px 0 24px; font-size: 14px; }
+    .card { padding: 14px 16px; border: 1px solid #DDD6C8; background: #F2EDE4; border-radius: 8px; margin-bottom: 10px; }
+    .grid-3 { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    ul.tasks { margin: 0; padding-left: 20px; color: #6B5D4F; font-size: 14px; }
+    .chip { display: inline-block; padding: 3px 10px; border-radius: 999px; background: #E6F0E5; color: #2D5A27; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; }
+    .chip-gold { background: #FBF6E6; color: #B8942C; }
+    .savings { padding: 22px 18px; border-radius: 12px; background: linear-gradient(180deg, #E6F0E5 0%, #F2EDE4 100%); text-align: center; border: 1px solid #DDD6C8; }
+    .savings .big { font-size: 48px; color: #2D5A27; }
+    .savings .currency { font-size: 30px; color: #6B5D4F; vertical-align: top; }
+    .timeline { display: grid; grid-template-columns: minmax(120px, 160px) repeat(12, 1fr); gap: 4px; align-items: center; padding: 4px 0; font-size: 12px; }
+    .timeline .label { font-weight: 600; }
+    .timeline .cell { height: 16px; border-radius: 4px; background: #F2EDE4; }
+    .timeline .cell.on { background: #2D5A27; }
+    .timeline .cell.peak { background: #C45D3E; }
+    .header-row { display: grid; grid-template-columns: minmax(120px, 160px) repeat(12, 1fr); gap: 4px; padding-bottom: 6px; border-bottom: 1px solid #DDD6C8; margin-bottom: 8px; font-size: 11px; color: #7A6E5F; font-weight: 600; text-align: center; }
+    footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #DDD6C8; font-size: 12px; color: #7A6E5F; }
+    a { color: #2D5A27; }
+    .print-btn { display: inline-block; padding: 10px 18px; border-radius: 999px; background: #2D5A27; color: #FEFCF8; border: none; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .wrap { border: none; box-shadow: none; padding: 0; max-width: 100%; }
+      .print-btn { display: none; }
+      .meta { background: #f7f4ee; }
+      a { text-decoration: none; color: #2C2418; }
+    }
+    @media (max-width: 600px) {
+      .meta { grid-template-columns: 1fr; }
+      .timeline, .header-row { font-size: 10px; }
+    }
+  `;
+
+  const monthlyHtml = monthly.map((m) => `
+    <div class="card">
+      <h3 style="margin-top:0;margin-bottom:6px;">${escapeHtml(m.month)}</h3>
+      <ul class="tasks">${m.tasks.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>
+    </div>
+  `).join("");
+
+  const bedsHtml = plan.bedLayouts.length > 0 ? `
+    <h2>Bed layouts</h2>
+    ${plan.bedLayouts.map((b) => `
+      <div class="card">
+        <strong>${escapeHtml(b.bedName)}</strong>
+        <div style="margin: 6px 0;">${b.crops.map((c) => `<span class="chip">${escapeHtml(c)}</span>`).join("")}</div>
+        ${b.notes ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(b.notes)}</p>` : ""}
+      </div>
+    `).join("")}
+  ` : "";
+
+  const successionHtml = plan.successionPlanting.length > 0 ? `
+    <h2>Succession planting</h2>
+    ${plan.successionPlanting.map((s) => `
+      <div class="card">
+        <strong>${escapeHtml(s.crop)}</strong>
+        <div class="num" style="font-size:13px;color:#6B5D4F;margin-top:4px;">
+          ${s.plantings} plantings, every ${s.intervalWeeks} ${s.intervalWeeks === 1 ? "week" : "weeks"}
+        </div>
+        ${s.note ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(s.note)}</p>` : ""}
+      </div>
+    `).join("")}
+  ` : "";
+
+  const harvestHtml = plan.harvestTimeline.length > 0 ? `
+    <h2>Harvest timeline</h2>
+    <div style="overflow-x:auto;">
+      <div style="min-width:560px;">
+        <div class="header-row">
+          <div></div>${MONTH_ORDER.map((m) => `<div>${m.slice(0, 3)}</div>`).join("")}
+        </div>
+        ${plan.harvestTimeline.map((r) => {
+          const startIdx = monthIndex(r.startMonth);
+          const endIdx = monthIndex(r.endMonth);
+          const peakIdx = monthIndex(r.peakMonth);
+          const segments = endIdx >= startIdx ? [[startIdx, endIdx]] : [[startIdx, 11], [0, endIdx]];
+          const cells = Array.from({ length: 12 }, (_, m) => {
+            const on = segments.some(([a, b]) => m >= a && m <= b);
+            const peak = m === peakIdx && on;
+            const cls = peak ? "cell on peak" : on ? "cell on" : "cell";
+            return `<div class="${cls}"></div>`;
+          }).join("");
+          return `<div class="timeline"><div class="label">${escapeHtml(r.crop)}</div>${cells}</div>`;
+        }).join("")}
+      </div>
+    </div>
+  ` : "";
+
+  const yieldHtml = plan.yieldEstimates.length > 0 ? `
+    <h2>Estimated yields</h2>
+    ${plan.yieldEstimates.map((y) => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
+          <strong>${escapeHtml(y.crop)}</strong>
+          <span class="num" style="color:#2D5A27;">${y.plants} plants &middot; ~${y.estimatedYield.toFixed(1)} ${escapeHtml(y.unit)}</span>
+        </div>
+        ${y.note ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(y.note)}</p>` : ""}
+      </div>
+    `).join("")}
+  ` : "";
+
+  const presHtml = plan.preservationGuide.length > 0 ? `
+    <h2>Preservation guide</h2>
+    ${plan.preservationGuide.map((p) => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <strong>${escapeHtml(p.crop)}</strong>
+          <span class="muted">Fresh: <strong>${escapeHtml(p.freshShare)}</strong></span>
+        </div>
+        <div style="margin-top:6px;">${p.preservationMethods.map((m) => `<span class="chip chip-gold">${escapeHtml(m)}</span>`).join("")}</div>
+        ${p.note ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(p.note)}</p>` : ""}
+      </div>
+    `).join("")}
+  ` : "";
+
+  const savingsHtml = plan.savingsEstimate ? `
+    <h2>Estimated annual savings</h2>
+    <div class="savings">
+      <div><span class="num currency">${escapeHtml(plan.savingsEstimate.currency || currency)}</span><span class="num big">${plan.savingsEstimate.annualSavings.toLocaleString()}</span></div>
+      ${plan.savingsEstimate.topSavers.length > 0 ? `<div style="margin-top:10px;font-size:13px;color:#6B5D4F;">Top savers: ${plan.savingsEstimate.topSavers.map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join("")}</div>` : ""}
+      ${plan.savingsEstimate.note ? `<p style="margin:10px auto 0;max-width:460px;font-size:13px;color:#6B5D4F;">${escapeHtml(plan.savingsEstimate.note)}</p>` : ""}
+    </div>
+  ` : "";
+
+  const tipsHtml = plan.tips.length > 0 ? `
+    <h2>Tips for your first season</h2>
+    ${plan.tips.map((t) => `<div class="card"><span style="font-size:14px;">${escapeHtml(t)}</span></div>`).join("")}
+  ` : "";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homestead Harvest Plan - ${escapeHtml(dateStr)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Plus+Jakarta+Sans:wght@400;600;700&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
+<style>${css}</style>
+</head>
+<body>
+  <div class="wrap">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+      <div>
+        <h1>Your Homestead Harvest Plan</h1>
+        <div class="muted">by Urban Root &middot; generated ${escapeHtml(dateStr)}</div>
+      </div>
+      <button class="print-btn" type="button" onclick="window.print()">Save as PDF</button>
+    </div>
+
+    <div class="meta">
+      <span><span class="muted">Family:</span> <strong>${familySize}</strong></span>
+      <span><span class="muted">Hemisphere:</span> <strong>${hemisphere === "south" ? "Southern" : "Northern"}</strong></span>
+      <span><span class="muted">Climate:</span> <strong>${escapeHtml(zoneStr)}</strong></span>
+      <span><span class="muted">Garden space:</span> <strong>${escapeHtml(spaceStr)}</strong></span>
+      <span><span class="muted">Last spring frost:</span> <strong>${escapeHtml(lastSpringFrostStr || "n/a")}</strong></span>
+      <span><span class="muted">First fall frost:</span> <strong>${escapeHtml(firstFallFrostStr || "n/a")}</strong></span>
+      <span><span class="muted">Sun:</span> <strong>${escapeHtml(sunLabel)}</strong></span>
+      <span><span class="muted">Soil:</span> <strong>${escapeHtml(soilLabel)}</strong></span>
+      <span><span class="muted">Watering:</span> <strong>${escapeHtml(waterLabel)}</strong></span>
+      <span><span class="muted">Experience:</span> <strong>${escapeHtml(expLabel)}</strong></span>
+      <span style="grid-column:1/-1;"><span class="muted">Goals:</span> <strong>${escapeHtml(goalLabel || "(none)")}</strong></span>
+      <span style="grid-column:1/-1;"><span class="muted">Crops (${cropNames.length}):</span> <strong>${escapeHtml(cropNames.join(", "))}</strong></span>
+    </div>
+
+    <h2>Summary</h2>
+    <p style="font-size:16px;line-height:1.6;">${escapeHtml(plan.summary)}</p>
+
+    <h2>Month-by-month schedule</h2>
+    <div class="grid-3">${monthlyHtml}</div>
+
+    ${bedsHtml}
+    ${successionHtml}
+    ${harvestHtml}
+    ${yieldHtml}
+    ${presHtml}
+    ${savingsHtml}
+    ${tipsHtml}
+
+    <footer>
+      <p style="margin:0 0 6px;"><strong>Disclaimer.</strong> This plan was generated automatically from your inputs. Generated plans are advisory, not authoritative; cross-check with local extension-service guidance before acting on anything irreversible.</p>
+      <p style="margin:0;">Homestead Harvest Planner by Urban Root &middot; thehomesteadplan.com</p>
+    </footer>
+  </div>
+</body>
+</html>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4578,14 +5673,23 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
 
         {/* Hemisphere + Metric toggles */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div role="radiogroup" aria-label="Hemisphere" title="Used for planting-date calculations when the Planting Dates tab ships"
+          <div role="radiogroup" aria-label="Hemisphere"
+            title="Hemisphere flips planting dates by 6 months — pick yours so spring/autumn line up with your calendar."
             style={{
-              display: "flex", background: T.bg2, borderRadius: T.radiusPill,
-              padding: 3,
+              display: "flex", alignItems: "center",
+              background: T.bg2, borderRadius: T.radiusPill,
+              padding: 3, paddingLeft: isMobile ? 8 : 10,
             }}>
+            <span aria-hidden="true" style={{
+              fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
+              textTransform: "uppercase", color: T.tx2, marginRight: 6,
+              fontFamily: T.fontBody,
+            }}>
+              {isMobile ? "Hemi" : "Hemisphere"}
+            </span>
             {[
-              { id: "north", short: "N", long: "Northern" },
-              { id: "south", short: "S", long: "Southern" },
+              { id: "north", short: "N. Hem.", long: "Northern" },
+              { id: "south", short: "S. Hem.", long: "Southern" },
             ].map((h) => {
               const active = hemisphere === h.id;
               return (
@@ -4626,40 +5730,135 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
 // compact on mobile, accessible, and threads through every cost display in
 // the Soil Calculator (and, later, the paid Cost Savings tab).
 const CURRENCY_OPTIONS = [
-  { symbol: "$", code: "USD" },
-  { symbol: "€", code: "EUR" },
-  { symbol: "£", code: "GBP" },
-  { symbol: "R", code: "ZAR" },
-  { symbol: "¥", code: "JPY" },
+  { symbol: "$", code: "USD", name: "US Dollar" },
+  { symbol: "€", code: "EUR", name: "Euro" },
+  { symbol: "£", code: "GBP", name: "British Pound" },
+  { symbol: "R", code: "ZAR", name: "South African Rand" },
+  { symbol: "¥", code: "JPY", name: "Japanese Yen" },
 ];
+// Custom popover instead of <select> — the native dropdown renders in OS
+// chrome (Windows ships a 1990s-era listbox), which clashed badly with the
+// warm parchment design system. The popover is anchored to the trigger,
+// closes on outside click + Escape, and uses arrow-key navigation.
 function CurrencySelect({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const triggerRef = useRef(null);
+  const itemRefs = useRef([]);
+  const active = CURRENCY_OPTIONS.find((c) => c.symbol === value) || CURRENCY_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (!wrapRef.current?.contains(e.target)) setOpen(false); };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        // Restore focus to the trigger so keyboard users don't land on <body>.
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    // Focus the active option once the popover paints.
+    const idx = CURRENCY_OPTIONS.findIndex((c) => c.symbol === value);
+    requestAnimationFrame(() => itemRefs.current[idx]?.focus());
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, value]);
+
+  const onItemKeyDown = (e, idx) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      itemRefs.current[(idx + 1) % CURRENCY_OPTIONS.length]?.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      itemRefs.current[(idx - 1 + CURRENCY_OPTIONS.length) % CURRENCY_OPTIONS.length]?.focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      itemRefs.current[0]?.focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      itemRefs.current[CURRENCY_OPTIONS.length - 1]?.focus();
+    } else if (e.key === "Tab") {
+      // Focus is about to leave the popover — close it so the open state
+      // tracks where the keyboard actually is. Don't preventDefault: the
+      // browser still moves focus to the next tabbable element.
+      setOpen(false);
+    }
+  };
+
   return (
-    <label style={{
-      display: "inline-flex", alignItems: "center", gap: 6,
-      background: T.bg2, borderRadius: T.radiusPill,
-      padding: "0 10px 0 14px", minHeight: 46,
-      fontFamily: T.fontBody, fontSize: 13, fontWeight: 600, color: T.tx,
-    }}>
-      <span aria-hidden="true" style={{
-        fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
-        fontSize: 15, fontWeight: 700,
-      }}>{value}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label="Currency"
+    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+      <button type="button"
+        ref={triggerRef}
+        aria-haspopup="listbox" aria-expanded={open}
+        aria-label={`Currency: ${active.name}. Click to change.`}
+        onClick={() => setOpen((o) => !o)}
         style={{
-          appearance: "none", WebkitAppearance: "none",
-          background: "transparent", border: "none",
+          display: "inline-flex", alignItems: "center", gap: 8,
+          background: T.bg2, borderRadius: T.radiusPill,
+          padding: "0 12px 0 14px", minHeight: 46, minWidth: 90,
+          border: "none", cursor: "pointer",
           fontFamily: T.fontBody, fontSize: 13, fontWeight: 600, color: T.tx,
-          minHeight: 44, cursor: "pointer",
-          padding: "0 4px 0 0",
         }}>
-        {CURRENCY_OPTIONS.map((c) => (
-          <option key={c.symbol} value={c.symbol}>{c.code}</option>
-        ))}
-      </select>
-    </label>
+        <span aria-hidden="true" style={{
+          fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+          fontSize: 15, fontWeight: 700, color: T.tx,
+        }}>{active.symbol}</span>
+        <span style={{ color: T.tx2 }}>{active.code}</span>
+        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"
+          style={{
+            color: T.tx2, marginLeft: 2,
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform 0.15s ease",
+          }}>
+          <path d="M2.5 4.5 L6 8 L9.5 4.5" stroke="currentColor" strokeWidth="1.6"
+            fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <ul role="listbox" aria-label="Currency"
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30,
+            margin: 0, padding: 6, listStyle: "none",
+            background: T.card, borderRadius: T.radius,
+            border: `1.5px solid ${T.border}`, boxShadow: T.shadow.lg,
+            minWidth: 200,
+          }}>
+          {CURRENCY_OPTIONS.map((c, i) => {
+            const isActive = c.symbol === value;
+            return (
+              <li key={c.code}>
+                <button type="button" role="option"
+                  ref={(el) => (itemRefs.current[i] = el)}
+                  aria-selected={isActive}
+                  onClick={() => { onChange(c.symbol); setOpen(false); }}
+                  onKeyDown={(e) => onItemKeyDown(e, i)}
+                  style={{
+                    width: "100%", display: "flex", alignItems: "center", gap: 12,
+                    padding: "10px 12px", borderRadius: T.radius,
+                    background: isActive ? T.primaryBg : "transparent",
+                    color: isActive ? T.primary : T.tx,
+                    border: "none", cursor: "pointer", textAlign: "left",
+                    fontFamily: T.fontBody, fontSize: 14, fontWeight: isActive ? 700 : 500,
+                    minHeight: 44,
+                  }}>
+                  <span aria-hidden="true" style={{
+                    fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+                    fontSize: 16, fontWeight: 700, width: 16, textAlign: "center",
+                    color: isActive ? T.primary : T.tx,
+                  }}>{c.symbol}</span>
+                  <span style={{ fontWeight: 700, minWidth: 36 }}>{c.code}</span>
+                  <span style={{ color: isActive ? T.primary : T.tx3, fontSize: 13 }}>{c.name}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -5076,6 +6275,42 @@ export default function App() {
     return { priceOverrides: cleanPrices, setupCosts: cleanSetup };
   });
 
+  // Growing Plan state (Tab 5 — paid)
+  // Persists the user's input choices AND the last generated plan + timestamp
+  // so reloads don't blow away an expensive call. Plan body is sanitised on
+  // load so a corrupt cache can't crash the renderer.
+  const [planState, setPlanState] = useState(() => {
+    const saved = loadState(LS_PLAN, null);
+    const validInputs = (raw) => {
+      if (!raw || typeof raw !== "object") return { ...PLAN_INPUT_DEFAULTS };
+      return {
+        sunExposure: SUN_OPTIONS.some((o) => o.id === raw.sunExposure) ? raw.sunExposure : PLAN_INPUT_DEFAULTS.sunExposure,
+        soilType:    SOIL_OPTIONS.some((o) => o.id === raw.soilType)   ? raw.soilType   : PLAN_INPUT_DEFAULTS.soilType,
+        waterMethod: WATER_OPTIONS.some((o) => o.id === raw.waterMethod) ? raw.waterMethod : PLAN_INPUT_DEFAULTS.waterMethod,
+        experience:  EXPERIENCE_OPTIONS.some((o) => o.id === raw.experience) ? raw.experience : PLAN_INPUT_DEFAULTS.experience,
+        goals: Array.isArray(raw.goals)
+          ? raw.goals.filter((g) => GOAL_CHIPS.some((c) => c.id === g)).slice(0, GOAL_CHIPS.length)
+          : [...PLAN_INPUT_DEFAULTS.goals],
+      };
+    };
+    if (!saved || typeof saved !== "object") {
+      return { inputs: { ...PLAN_INPUT_DEFAULTS }, plan: null, generatedAt: null, cropFingerprint: "" };
+    }
+    // Run cached plan through the same sanitiser the server uses, so a corrupt
+    // or tampered cache (or one written by an older code version) can't crash
+    // the renderer. Drops the plan but keeps inputs if shape is unsalvageable.
+    const cachedPlan = sanitisePlanShape(saved.plan);
+    const generatedAt = typeof saved.generatedAt === "number" ? saved.generatedAt : null;
+    const cropFingerprint = typeof saved.cropFingerprint === "string"
+      ? saved.cropFingerprint.slice(0, 4096) : "";
+    return {
+      inputs: validInputs(saved.inputs),
+      plan: cachedPlan,
+      generatedAt: cachedPlan ? generatedAt : null,
+      cropFingerprint: cachedPlan ? cropFingerprint : "",
+    };
+  });
+
   // Preservation Planner state (Tab 8 — paid)
   const [preservation, setPreservation] = useState(() => {
     const saved = loadState(LS_PRESERVATION, null);
@@ -5119,6 +6354,7 @@ export default function App() {
   useEffect(() => { persistState(LS_CROP_DB, cropDbState); }, [cropDbState]);
   useEffect(() => { persistState(LS_COST_SAVINGS, costSavings); }, [costSavings]);
   useEffect(() => { persistState(LS_PRESERVATION, preservation); }, [preservation]);
+  useEffect(() => { persistState(LS_PLAN, planState); }, [planState]);
 
   // If a long-lived browser session crosses Jan 1, bump the planting
   // referenceYear to the new calendar year so the timeline doesn't silently
@@ -5489,7 +6725,18 @@ export default function App() {
           </TabPageShell>
         )}
         {activeTab.paid && !validating && paid && tab === "growing-plan" && (
-          <ComingSoon tab={activeTab} />
+          <TabPageShell
+            title="Your Personalised Growing Plan"
+            blurb="Pull in your family, climate, garden space, and crop selection. Add a few details about your sun, soil, and experience. Generate a month-by-month plan you can save or print.">
+            <GrowingPlanTab
+              baseResults={baseResults}
+              planState={planState} setPlanState={setPlanState}
+              familySize={familySize} hemisphere={hemisphere}
+              plantingState={plantingState}
+              metric={metric} currency={currency}
+              producePerPerson={producePerPerson}
+              setTab={setTab} />
+          </TabPageShell>
         )}
       </main>
 
