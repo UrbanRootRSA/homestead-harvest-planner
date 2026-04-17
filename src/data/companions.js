@@ -195,7 +195,6 @@ export const COMPANIONS = [
   { a: "green_beans_pole", b: "potato", rel: "good", reason: "Pole beans fix nitrogen for potato foliage and deter Colorado potato beetle." },
   { a: "carrot", b: "green_beans_bush", rel: "good", reason: "Beans fix nitrogen for carrot tops; different root depths." },
   { a: "carrot", b: "green_beans_pole", rel: "good", reason: "Pole bean nitrogen feeds carrot tops; non-competing root zones." },
-  { a: "eggplant", b: "green_beans_bush", rel: "good", reason: "Bush beans protect eggplant from Colorado potato beetle; provide nitrogen boost." },
   { a: "peas_snap", b: "turnip", rel: "good", reason: "Peas fix nitrogen for turnip greens; turnip repels aphids off pea vines." },
   { a: "peas_shell", b: "turnip", rel: "good", reason: "Peas enrich nitrogen; turnip acts as aphid deterrent for pea vines." },
   { a: "green_beans_bush", b: "turnip", rel: "good", reason: "Bush beans add nitrogen for turnip top growth; matched cool-season timing." },

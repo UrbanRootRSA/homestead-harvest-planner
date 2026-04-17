@@ -325,6 +325,23 @@ const fmtRange = (arr, unit = "") => {
   return `${a}${unit}–${b}${unit}`;
 };
 
+// Maturity formatter that knows about perennials. Berry / rhubarb /
+// artichoke crops carry `daysToMaturity: [730, 1095]` meaning 2-3 years
+// to first productive harvest — rendering that as "730-1095 days"
+// alongside annual rows like "60-90 days" reads as broken. For perennials,
+// convert to integer-year ranges (round half-up) so the UI stays readable.
+// Annuals pass through to fmtRange unchanged.
+const fmtMaturity = (daysRange, season) => {
+  if (season !== "perennial") return `${fmtRange(daysRange)} days`;
+  if (!Array.isArray(daysRange) || daysRange.length !== 2) return "Perennial";
+  const [lo, hi] = daysRange;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return "Perennial";
+  const yrLo = Math.max(1, Math.round(lo / 365));
+  const yrHi = Math.max(yrLo, Math.round(hi / 365));
+  if (yrLo === yrHi) return `Year ${yrLo}+`;
+  return `Year ${yrLo}–${yrHi}+`;
+};
+
 // — Planting date helpers —
 // All dates use the numeric Date constructor and setDate for offsets (never
 // epoch-ms arithmetic; that breaks across DST). Single anchor = lastSpring.
@@ -1229,7 +1246,7 @@ function CropBreakdownCard({ result, metric, areaConv, massConv, unitArea, unitM
         </span>
         <span style={{ color: T.tx3 }}>Maturity</span>
         <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
-          {fmtRange(crop.daysToMaturity)} days
+          {fmtMaturity(crop.daysToMaturity, crop.season)}
         </span>
       </div>
     </div>
@@ -2359,17 +2376,23 @@ function PlantingTimelineChart({ rows, referenceYear }) {
       {/* Rows */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {rows.map(({ cropId, crop, dates }) => {
-          const indoorsBars = dates.startIndoors && dates.transplant
+          // Perennials (berries, rhubarb, asparagus, artichoke, sunchoke,
+          // horseradish, sorrel, tarragon, marjoram) don't fit a one-year
+          // timeline — harvest lags planting by 12-36 months. Render a
+          // distinct "plant once" row instead of a confusing year-1 green
+          // bar with no harvest. Audit #4 (795c2ae).
+          const isPerennial = crop.season === "perennial";
+          const indoorsBars = !isPerennial && dates.startIndoors && dates.transplant
             ? phaseFor(dates.startIndoors, dates.transplant, PHASE_COLORS.indoors)
             : [];
           const sowBase = dates.anchorMethod === "transplant" ? dates.transplant : dates.directSow;
-          const growBars = sowBase && dates.harvestStart
+          const growBars = !isPerennial && sowBase && dates.harvestStart
             ? phaseFor(sowBase, dates.harvestStart, PHASE_COLORS.grow)
             : [];
-          const harvestBars = dates.harvestStart && dates.harvestEnd
+          const harvestBars = !isPerennial && dates.harvestStart && dates.harvestEnd
             ? phaseFor(dates.harvestStart, dates.harvestEnd, PHASE_COLORS.harvest)
             : [];
-          const edges = edgeIndicators(dates);
+          const edges = isPerennial ? [] : edgeIndicators(dates);
 
           return (
             <div key={cropId} style={{
@@ -2385,36 +2408,50 @@ function PlantingTimelineChart({ rows, referenceYear }) {
               </div>
               <div style={{
                 position: "relative", flex: 1, height: 28,
-                background: T.card, borderRadius: T.radius,
-                border: `1px solid ${T.border}`,
+                background: isPerennial ? T.goldBg : T.card, borderRadius: T.radius,
+                border: `1px solid ${isPerennial ? T.gold : T.border}`,
                 overflow: "hidden",
+                display: isPerennial ? "flex" : undefined,
+                alignItems: isPerennial ? "center" : undefined,
+                justifyContent: isPerennial ? "center" : undefined,
               }}>
-                {/* Month gridlines */}
-                {monthLabels.map((_, i) => i > 0 && (
-                  <div key={i} style={{
-                    position: "absolute", top: 0, bottom: 0,
-                    left: `${(i / 12) * 100}%`, width: 1,
-                    background: T.border, opacity: 0.5,
-                  }} />
-                ))}
-                {/* Phase bars */}
-                {[...indoorsBars, ...growBars, ...harvestBars].map((b) => (
-                  <div key={b.key} style={{
-                    position: "absolute", top: 2, bottom: 2,
-                    left: `${b.leftPct}%`, width: `${b.widthPct}%`,
-                    background: b.color, borderRadius: 3,
-                    opacity: 0.92,
-                  }} />
-                ))}
-                {/* Edge indicators */}
-                {edges.map((e, i) => (
-                  <div key={i} title={`${e.label}`} style={{
-                    position: "absolute", top: 2, bottom: 2,
-                    [e.side]: 0, width: 6,
-                    background: e.side === "left" ? PHASE_COLORS.indoors : PHASE_COLORS.harvest,
-                    borderRadius: 2, opacity: 0.7,
-                  }} />
-                ))}
+                {isPerennial ? (
+                  <span style={{
+                    fontSize: isMobile ? 11 : 12, fontWeight: 600, color: T.gold,
+                    letterSpacing: "0.02em", whiteSpace: "nowrap", padding: "0 8px",
+                  }}>
+                    {isMobile ? "Perennial — year 2+" : "Perennial — plant once, harvests year 2+"}
+                  </span>
+                ) : (
+                  <>
+                    {/* Month gridlines */}
+                    {monthLabels.map((_, i) => i > 0 && (
+                      <div key={i} style={{
+                        position: "absolute", top: 0, bottom: 0,
+                        left: `${(i / 12) * 100}%`, width: 1,
+                        background: T.border, opacity: 0.5,
+                      }} />
+                    ))}
+                    {/* Phase bars */}
+                    {[...indoorsBars, ...growBars, ...harvestBars].map((b) => (
+                      <div key={b.key} style={{
+                        position: "absolute", top: 2, bottom: 2,
+                        left: `${b.leftPct}%`, width: `${b.widthPct}%`,
+                        background: b.color, borderRadius: 3,
+                        opacity: 0.92,
+                      }} />
+                    ))}
+                    {/* Edge indicators */}
+                    {edges.map((e, i) => (
+                      <div key={i} title={`${e.label}`} style={{
+                        position: "absolute", top: 2, bottom: 2,
+                        [e.side]: 0, width: 6,
+                        background: e.side === "left" ? PHASE_COLORS.indoors : PHASE_COLORS.harvest,
+                        borderRadius: 2, opacity: 0.7,
+                      }} />
+                    ))}
+                  </>
+                )}
               </div>
             </div>
           );
@@ -3574,6 +3611,9 @@ function GrowingPlanTab({
       setError("Manual frost mode is selected but the dates are blank. Open Planting Dates and set both.");
       return;
     }
+    // Clear any prior server error BEFORE the confirm dialog — a user who
+    // cancels should not stay staring at the last run's error message.
+    setError("");
     // Confirm before regenerating when the current plan still matches the
     // selected crops. Each call consumes one of the user's 20/hr quota and
     // spends ~$0.06 on the Anthropic side. Stale-fingerprint case skips the
@@ -3584,7 +3624,6 @@ function GrowingPlanTab({
       );
       if (!ok) return;
     }
-    setError("");
     setGenerating(true);
     setLoadingIdx(0);
     setLongRun(false);
@@ -4643,7 +4682,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                 <th scope="col" style={cropDbThStyle}>Crop</th>
                 <th scope="col" style={cropDbThStyle}>Season</th>
                 <th scope="col" style={cropDbThStyle}>Sow</th>
-                <th scope="col" style={cropDbThStyle}>Days</th>
+                <th scope="col" style={cropDbThStyle}>Maturity</th>
                 <th scope="col" style={cropDbThStyle}>Space ({unitArea})</th>
                 <th scope="col" style={cropDbThStyle}>Yield ({unitMass}/plant)</th>
                 <th scope="col" style={cropDbThStyle}>Sun (h)</th>
@@ -4695,7 +4734,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                       </td>
                       <td style={cropDbTdStyle}>{SEASON_LABELS[row.season]}</td>
                       <td style={cropDbTdStyle}>{SOW_LABELS[row.sowMethod]}</td>
-                      <td style={cropDbTdNumStyle}>{fmtRange(row.daysToMaturity)}</td>
+                      <td style={cropDbTdNumStyle}>{fmtMaturity(row.daysToMaturity, row.season)}</td>
                       <td style={cropDbTdNumStyle}>
                         {(row.spacingSqFt * areaConv).toFixed(metric ? 2 : 1)}
                       </td>
@@ -4793,7 +4832,7 @@ function CropDbCard({ row, expanded, onToggle, massConv, areaConv, unitMass, uni
           display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px 12px",
           fontSize: 13, color: T.tx2, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
         }}>
-          <span><span style={{ color: T.tx3 }}>Days:</span> {fmtRange(row.daysToMaturity)}</span>
+          <span><span style={{ color: T.tx3 }}>Maturity:</span> {fmtMaturity(row.daysToMaturity, row.season)}</span>
           <span><span style={{ color: T.tx3 }}>Sun:</span> {row.sunHours}h</span>
           <span><span style={{ color: T.tx3 }}>Space:</span> {(row.spacingSqFt * areaConv).toFixed(1)} {unitArea}</span>
           <span><span style={{ color: T.tx3 }}>Yield:</span> {(row.yieldPerPlantLbs[0] * massConv).toFixed(1)}–{(row.yieldPerPlantLbs[1] * massConv).toFixed(1)} {unitMass}</span>
@@ -4957,12 +4996,22 @@ function NoCropsBanner({ cta = "Go to Self-Sufficiency" }) {
       }}>
         This tab builds on your Self-Sufficiency selection. Head over there, pick the crops your family actually eats, and this calculator will fill with real numbers.
       </p>
-      <a href="#home" style={{
-        display: "inline-block", padding: "12px 24px", minHeight: 44,
-        background: T.primary, color: "#FEFCF8",
-        borderRadius: T.radiusPill, textDecoration: "none",
-        fontFamily: T.fontBody, fontSize: 15, fontWeight: 700,
-      }}>
+      <a href="#home"
+        onClick={() => {
+          // The global hashchange listener switches the tab but doesn't
+          // scroll to top when the click originates halfway down a long
+          // paid tab. Force it here so the user lands on the Self-Suff
+          // hero instead of in the middle of Home content.
+          if (typeof window !== "undefined") {
+            setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+          }
+        }}
+        style={{
+          display: "inline-block", padding: "12px 24px", minHeight: 44,
+          background: T.primary, color: "#FEFCF8",
+          borderRadius: T.radiusPill, textDecoration: "none",
+          fontFamily: T.fontBody, fontSize: 15, fontWeight: 700,
+        }}>
         {cta}
       </a>
     </section>
@@ -4975,9 +5024,12 @@ function CostSavingsCalculator({
   metric, currency,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
-  // Guard: the whole tab is a Self-Sufficiency passthrough. Without crops
-  // selected every number collapses to zero and the hero reads broken.
-  if (!baseResults.perCrop.length) return <NoCropsBanner />;
+  // Empty-state guard: the whole tab is a Self-Sufficiency passthrough.
+  // Without crops selected every number collapses to zero. Computed here
+  // but applied AFTER all hooks run (below) to keep hook order stable
+  // across renders — React's Rules of Hooks forbid an early return that
+  // skips subsequent useMemo calls.
+  const noCrops = !baseResults.perCrop.length;
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";
@@ -5077,6 +5129,15 @@ function CostSavingsCalculator({
     ? Math.max(0.1, totals.breakEvenMonths)
     : null;
 
+  // Perennial flag: blueberry, raspberry, rhubarb etc. take 1-3 years to
+  // produce. The hero savings number assumes established plants, so
+  // surface the caveat whenever the user's selection includes any.
+  const hasPerennials = baseResults.perCrop.some((r) => r.crop.season === "perennial");
+
+  // Apply the empty-state branch AFTER all hooks have run — see comment
+  // at the top of this component for the Rules-of-Hooks rationale.
+  if (noCrops) return <NoCropsBanner />;
+
   return (
     <section aria-label="Cost Savings Calculator" style={{
       background: T.card, border: `1.5px solid ${T.border}`,
@@ -5112,6 +5173,21 @@ function CostSavingsCalculator({
               : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
         </p>
       </div>
+
+      {/* ── Perennial establishment caveat ── */}
+      {/* Berries, rhubarb, asparagus, artichoke etc. produce little-to-zero
+          yield in years 1-2. The savings number assumes established plants.
+          Without this caveat a first-year homesteader expects same-season
+          grocery savings from a blueberry bush that won't fruit for 2-3 yr. */}
+      {hasPerennials && (
+        <div role="note" style={{
+          marginTop: 16, padding: "12px 16px", borderRadius: T.radius,
+          background: T.goldBg, color: T.gold,
+          border: `1px solid ${T.gold}`, fontSize: 13, lineHeight: 1.5,
+        }}>
+          <strong>Perennials take time to establish.</strong> Berries, rhubarb, asparagus, artichoke, sunchoke, horseradish, tarragon, and marjoram in your selection typically produce little or nothing in year 1. The savings number assumes established plants (year 2-3+).
+        </div>
+      )}
 
       {/* ── KPI row ── */}
       {/* Break-even and ROI are rendered as bare "—" via MiniStat's
@@ -5356,8 +5432,9 @@ function PreservationPlanner({
   metric,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
-  // Same guard as Cost Savings: no crops → no totals worth showing.
-  if (!baseResults.perCrop.length) return <NoCropsBanner />;
+  // Same empty-state pattern as Cost Savings — check now, branch AFTER
+  // hooks to preserve order across renders (Rules of Hooks).
+  const noCrops = !baseResults.perCrop.length;
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";
@@ -5413,6 +5490,9 @@ function PreservationPlanner({
   const shelfFeet = totals.shelfInches / 12;
   const shelfMeters = (totals.shelfInches * IN_TO_CM) / 100;
   const freezerCuM = totals.freezerCuFt * CUFT_TO_CUM;
+
+  // Post-hook empty-state branch (see noCrops comment at top).
+  if (noCrops) return <NoCropsBanner />;
 
   return (
     <section aria-label="Preservation Planner" style={{
