@@ -59,6 +59,8 @@ const LS_CURRENCY = "hhp_currency";
 const LS_BEDS = "hhp_beds";
 const LS_SOIL = "hhp_soil";
 const LS_COMPANION = "hhp_companion";
+const LS_HEMISPHERE = "hhp_hemisphere";
+const LS_PRODUCE_TARGET = "hhp_produce_target";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Conversion constants + USDA baseline ──
@@ -77,10 +79,12 @@ const SETTLING_BUFFER = 1.15;       // +15% to fill soil, settles 10-20% over fi
 const PATH_BUFFER = 1.30;
 // USDA ERS per-capita fresh produce consumption ≈ 330 lb/person/year (veg +
 // fruit + potatoes). Carleen Madigan's The Backyard Homestead plans 300-400 lb
-// per person for full self-sufficiency including storage crops. 300 is the
-// defensible middle ground for the "household produce target" denominator;
-// 200 understates reality and makes modest gardens look ~80% self-sufficient.
-const ANNUAL_PRODUCE_PER_PERSON_LBS = 300;
+// per person for full self-sufficiency. UK / South African dietary averages
+// land lower (150-200 lb). User can override via the produce-target field in
+// the Self-Sufficiency Calculator; this is just the default.
+const DEFAULT_PRODUCE_PER_PERSON_LBS = 300;
+const MIN_PRODUCE_PER_PERSON_LBS = 50;
+const MAX_PRODUCE_PER_PERSON_LBS = 800;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Crop database (v1 seed — 20 crops covering all categories) ──
@@ -561,6 +565,70 @@ const CROPS = {
     startIndoorsWeeks: null, transplantWeeks: -3, directSowWeeks: null,
     harvestStartWeeks: 60, harvestDurationWeeks: 8,
   },
+
+  // ─── Regional additions: crops important outside North America ─────────
+  // Sources: LSU AgCenter (okra), Clemson Extension, Utah State Extension,
+  // FAO Ecocrop, Penn State (amaranth, cowpea), AVRDC World Vegetable Center.
+  okra: {
+    name: "Okra", category: "fruiting", season: "warm", sowMethod: "either",
+    // Southern US + West African staple. Heat-loving, drought-tolerant.
+    daysToMaturity: [50, 65], spacingSqFt: 1, yieldPerPlantLbs: [1, 2],
+    sunHours: 8, waterNeeds: "low", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 4.00, caloriesPer100g: 33,
+    preservation: ["freeze", "can", "dehydrate", "ferment"],
+    startIndoorsWeeks: -4, transplantWeeks: 2, directSowWeeks: 2,
+    harvestStartWeeks: 8, harvestDurationWeeks: 10,
+  },
+  bok_choy: {
+    name: "Bok Choy", category: "leafy", season: "cool", sowMethod: "either",
+    // East Asian brassica. Fast-growing cool-season cut-and-come-again.
+    daysToMaturity: [45, 60], spacingSqFt: 0.25, yieldPerPlantLbs: [0.5, 1],
+    sunHours: 4, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 2.50, caloriesPer100g: 13,
+    preservation: ["ferment", "freeze"],
+    startIndoorsWeeks: -4, transplantWeeks: -2, directSowWeeks: -2,
+    harvestStartWeeks: 6, harvestDurationWeeks: 6,
+  },
+  daikon: {
+    name: "Daikon Radish", category: "root", season: "cool", sowMethod: "direct",
+    // East Asian long radish. Summer-sown for fall harvest in most zones.
+    daysToMaturity: [50, 70], spacingSqFt: 0.25, yieldPerPlantLbs: [1, 2],
+    sunHours: 5, waterNeeds: "moderate", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 1.50, caloriesPer100g: 18,
+    preservation: ["ferment", "fresh", "root_cellar"],
+    startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: 2,
+    harvestStartWeeks: 9, harvestDurationWeeks: 4,
+  },
+  cowpea: {
+    name: "Cowpea (Black-Eyed Pea)", category: "legume", season: "warm", sowMethod: "direct",
+    // West African + Southern US staple. Heat-tolerant where regular peas fail.
+    daysToMaturity: [60, 90], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.6],
+    sunHours: 8, waterNeeds: "low", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 2.00, caloriesPer100g: 336,
+    preservation: ["dehydrate", "can", "freeze"],
+    startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: 2,
+    harvestStartWeeks: 10, harvestDurationWeeks: 6,
+  },
+  amaranth: {
+    name: "Amaranth (Callaloo)", category: "leafy", season: "warm", sowMethod: "either",
+    // Dual-purpose leaf + grain. Caribbean / African / Indian staple. Heat-tolerant.
+    daysToMaturity: [40, 70], spacingSqFt: 1, yieldPerPlantLbs: [0.5, 1],
+    sunHours: 6, waterNeeds: "low", difficulty: 1,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 4.00, caloriesPer100g: 23,
+    preservation: ["freeze", "dehydrate"],
+    startIndoorsWeeks: -4, transplantWeeks: 2, directSowWeeks: 2,
+    harvestStartWeeks: 6, harvestDurationWeeks: 10,
+  },
+  bitter_melon: {
+    name: "Bitter Melon", category: "fruiting", season: "warm", sowMethod: "either",
+    // South + Southeast Asian vining crop. Needs trellis and warm nights.
+    daysToMaturity: [60, 90], spacingSqFt: 4, yieldPerPlantLbs: [3, 8],
+    sunHours: 8, waterNeeds: "high", difficulty: 2,
+    avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 3.00, caloriesPer100g: 17,
+    preservation: ["freeze", "dehydrate"],
+    startIndoorsWeeks: -6, transplantWeeks: 3, directSowWeeks: 3,
+    harvestStartWeeks: 9, harvestDurationWeeks: 10,
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -787,6 +855,26 @@ const COMPANIONS = [
   { a: "corn", b: "watermelon", rel: "good", reason: "Corn shelters watermelon from wind; different root depths coexist." },
   { a: "cantaloupe", b: "potato", rel: "bad", reason: "Potato digging disrupts cantaloupe shallow roots; shared fungal disease risk." },
   { a: "potato", b: "watermelon", rel: "bad", reason: "Heavy-feeder competition; potato harvest damages watermelon roots." },
+
+  // Regional additions
+  { a: "basil", b: "okra", rel: "good", reason: "Basil volatiles deter aphids and stink bugs off okra pods." },
+  { a: "green_beans_bush", b: "okra", rel: "good", reason: "Bush beans fix nitrogen for okra's heavy summer feeding." },
+  { a: "okra", b: "peas_snap", rel: "good", reason: "Early peas finish before okra sprawls; nitrogen handoff to warm-season okra." },
+  { a: "bok_choy", b: "tomato", rel: "bad", reason: "Brassica competes for calcium; worsens tomato blossom-end rot." },
+  { a: "bok_choy", b: "onion", rel: "good", reason: "Onion scent repels cabbage maggot fly and flea beetles from bok choy." },
+  { a: "bok_choy", b: "dill", rel: "good", reason: "Dill umbels attract Trichogramma wasps that parasitize cabbage worm eggs on bok choy." },
+  { a: "bok_choy", b: "strawberry", rel: "bad", reason: "Brassica root exudates stunt strawberry; shared aphid pressure." },
+  { a: "cucumber", b: "daikon", rel: "good", reason: "Daikon trap-crops striped cucumber beetle and breaks soil compaction." },
+  { a: "daikon", b: "zucchini", rel: "good", reason: "Daikon deters squash bug and cucumber beetle while breaking subsoil for squash roots." },
+  { a: "carrot", b: "cowpea", rel: "good", reason: "Cowpea fixes nitrogen for carrot tops; heat-tolerant where regular peas fail." },
+  { a: "corn", b: "cowpea", rel: "good", reason: "Three-Sisters analog: cowpea fixes nitrogen, corn trellises the vining types." },
+  { a: "cowpea", b: "onion", rel: "bad", reason: "Allium volatiles suppress cowpea Rhizobium; reduces nitrogen fixation and pod set." },
+  { a: "cowpea", b: "garlic", rel: "bad", reason: "Garlic allicin inhibits cowpea nitrogen-fixing nodules." },
+  { a: "amaranth", b: "corn", rel: "good", reason: "Amaranth attracts predatory beetles that eat corn earworm eggs; similar upright habit." },
+  { a: "amaranth", b: "onion", rel: "good", reason: "Onion deters aphids off amaranth leaves; amaranth adds biomass without shading." },
+  { a: "bitter_melon", b: "onion", rel: "good", reason: "Onion scent masks bitter melon from cucumber beetle and aphids." },
+  { a: "bitter_melon", b: "basil", rel: "good", reason: "Basil volatiles deter aphids and thrips that attack bitter melon vines." },
+  { a: "bitter_melon", b: "potato", rel: "bad", reason: "Potato depletes potassium needed for bitter melon fruit set; shared wilt susceptibility." },
 ];
 
 const COMPANION_GROUPINGS = [
@@ -1288,7 +1376,7 @@ function CategoryBar({ categorySpaceMap, totalSpaceSqft, metric }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Core calculation ──
 // ═══════════════════════════════════════════════════════════════════════════
-function computeResults(selectedMap, familySize, goalKey) {
+function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = DEFAULT_PRODUCE_PER_PERSON_LBS) {
   const goalMult = GOAL_MULTIPLIER[goalKey] ?? 0.7;
   const perCrop = [];
   let totalSpaceSqft = 0;
@@ -1326,7 +1414,7 @@ function computeResults(selectedMap, familySize, goalKey) {
   // Denominator uses a full-year baseline (no goalMult) so the KPI honestly
   // represents "% of a household's annual produce". Numerator honors the user's
   // chosen goal via plantsNeeded sizing.
-  const householdTarget = ANNUAL_PRODUCE_PER_PERSON_LBS * familySize;
+  const householdTarget = producePerPersonLbs * familySize;
   const rawSelfSufficiencyPct = householdTarget > 0
     ? (totalYieldLbs / householdTarget) * 100
     : 0;
@@ -1345,6 +1433,39 @@ function computeResults(selectedMap, familySize, goalKey) {
   };
 }
 
+// — ProduceTargetField (editable household produce-per-person baseline) —
+// The denominator of the self-sufficiency %. 300 lb/person/year is US-centric
+// (USDA ERS) — UK households eat closer to 180 lb, ZA subsistence diets vary
+// widely. Letting the user override keeps the KPI honest across regions.
+function ProduceTargetField({ value, onChange, metric, isMobile }) {
+  const displayUnit = metric ? "kg" : "lb";
+  const displayValue = metric ? Number((value * LB_TO_KG).toFixed(1)) : value;
+  const min = metric ? MIN_PRODUCE_PER_PERSON_LBS * LB_TO_KG : MIN_PRODUCE_PER_PERSON_LBS;
+  const max = metric ? MAX_PRODUCE_PER_PERSON_LBS * LB_TO_KG : MAX_PRODUCE_PER_PERSON_LBS;
+  const commit = (v) => {
+    const asLbs = metric ? v / LB_TO_KG : v;
+    onChange(Math.max(MIN_PRODUCE_PER_PERSON_LBS, Math.min(MAX_PRODUCE_PER_PERSON_LBS, asLbs)));
+  };
+  return (
+    <div style={{
+      display: "grid", gap: 12, alignItems: "end",
+      gridTemplateColumns: isMobile ? "1fr" : "minmax(240px, 320px) 1fr",
+    }}>
+      <Field label={`Annual produce per person (${displayUnit})`}
+        unit={displayUnit}
+        value={displayValue} onChange={commit}
+        min={Math.round(min)} max={Math.round(max)} step={10} />
+      <p style={{
+        margin: isMobile ? "-4px 0 0" : "0 0 12px",
+        fontSize: 13, color: T.tx3, lineHeight: 1.5,
+      }}>
+        Default 300&nbsp;lb/person (USDA fresh-produce average). UK households
+        average closer to 180&nbsp;lb; full-homestead targets run 400+.
+      </p>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Self-Sufficiency Calculator (Tab 1 / hero) ──
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1353,12 +1474,13 @@ function SelfSufficiencyCalculator({
   goal, setGoal,
   selection, setSelection,
   metric,
+  producePerPerson, setProducePerPerson,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
 
   const results = useMemo(
-    () => computeResults(selection, familySize, goal),
-    [selection, familySize, goal]
+    () => computeResults(selection, familySize, goal, producePerPerson),
+    [selection, familySize, goal, producePerPerson]
   );
 
   const applyPreset = useCallback((presetKey) => {
@@ -1436,6 +1558,13 @@ function SelfSufficiencyCalculator({
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ───── Produce target (editable baseline) ───── */}
+      <div style={{ marginTop: 24 }}>
+        <ProduceTargetField
+          value={producePerPerson} onChange={setProducePerPerson}
+          metric={metric} isMobile={isMobile} />
       </div>
 
       {/* ───── Crop selection ───── */}
@@ -2535,8 +2664,17 @@ function ComingSoon({ tab }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ── App chrome (header, tab nav, footer) ──
 // ═══════════════════════════════════════════════════════════════════════════
-function AppHeader({ metric, setMetric, currency, setCurrency }) {
+function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHemisphere }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
+  const pillBtnStyle = (active) => ({
+    padding: "0 14px", minHeight: 40, minWidth: 44, border: "none", cursor: "pointer",
+    background: active ? T.card : "transparent",
+    color: active ? T.tx : T.tx2,
+    fontWeight: active ? 700 : 500,
+    borderRadius: T.radiusPill,
+    boxShadow: active ? T.shadow.sm : "none",
+    fontFamily: T.fontBody, fontSize: 13,
+  });
   return (
     <header style={{
       position: "sticky", top: 0, zIndex: 20,
@@ -2547,7 +2685,8 @@ function AppHeader({ metric, setMetric, currency, setCurrency }) {
       <div style={{
         maxWidth: 1200, margin: "0 auto",
         padding: `12px clamp(16px, 4vw, 48px)`,
-        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 12, flexWrap: "wrap",
       }}>
         {/* Logo / title */}
         <a href="#home"
@@ -2567,26 +2706,38 @@ function AppHeader({ metric, setMetric, currency, setCurrency }) {
           </span>
         </a>
 
-        {/* Metric toggle */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* Hemisphere + Metric toggles */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div role="radiogroup" aria-label="Hemisphere" title="Used for planting-date calculations when the Planting Dates tab ships"
+            style={{
+              display: "flex", background: T.bg2, borderRadius: T.radiusPill,
+              padding: 3,
+            }}>
+            {[
+              { id: "north", short: "N", long: "Northern" },
+              { id: "south", short: "S", long: "Southern" },
+            ].map((h) => {
+              const active = hemisphere === h.id;
+              return (
+                <button key={h.id} type="button" role="radio" aria-checked={active}
+                  aria-label={`${h.long} hemisphere`}
+                  onClick={() => setHemisphere(h.id)}
+                  style={pillBtnStyle(active)}>
+                  {isMobile ? h.short : h.long}
+                </button>
+              );
+            })}
+          </div>
+
           <div role="radiogroup" aria-label="Unit system" style={{
-            display: "flex", background: T.bg2, borderRadius: T.radiusPill,
-            padding: 4, fontSize: 13, fontFamily: T.fontBody,
+            display: "flex", background: T.bg2, borderRadius: T.radiusPill, padding: 3,
           }}>
             {["imperial", "metric"].map((u) => {
               const active = (u === "metric") === metric;
               return (
                 <button key={u} type="button" role="radio" aria-checked={active}
                   onClick={() => setMetric(u === "metric")}
-                  style={{
-                    padding: "0 18px", minHeight: 44, minWidth: 44, border: "none",
-                    cursor: "pointer",
-                    background: active ? T.card : "transparent",
-                    color: active ? T.tx : T.tx2,
-                    fontWeight: active ? 700 : 500,
-                    borderRadius: T.radiusPill,
-                    boxShadow: active ? T.shadow.sm : "none",
-                  }}>
+                  style={pillBtnStyle(active)}>
                   {u === "metric" ? "Metric" : "Imperial"}
                 </button>
               );
@@ -2728,6 +2879,16 @@ export default function App() {
     const c = loadState(LS_CURRENCY, "$");
     return typeof c === "string" && c.length <= 3 ? c : "$";
   });
+  const [hemisphere, setHemisphere] = useState(() => {
+    const h = loadState(LS_HEMISPHERE, "north");
+    return h === "south" ? "south" : "north";
+  });
+  const [producePerPerson, setProducePerPerson] = useState(() => {
+    const raw = loadState(LS_PRODUCE_TARGET, DEFAULT_PRODUCE_PER_PERSON_LBS);
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return DEFAULT_PRODUCE_PER_PERSON_LBS;
+    return Math.max(MIN_PRODUCE_PER_PERSON_LBS, Math.min(MAX_PRODUCE_PER_PERSON_LBS, n));
+  });
 
   // Calculator state
   const [familySize, setFamilySize] = useState(() =>
@@ -2787,6 +2948,8 @@ export default function App() {
   useEffect(() => { persistState(LS_BEDS, beds); }, [beds]);
   useEffect(() => { persistState(LS_SOIL, soilState); }, [soilState]);
   useEffect(() => { persistState(LS_COMPANION, companionSelection); }, [companionSelection]);
+  useEffect(() => { persistState(LS_HEMISPHERE, hemisphere); }, [hemisphere]);
+  useEffect(() => { persistState(LS_PRODUCE_TARGET, producePerPerson); }, [producePerPerson]);
 
   // Hash routing: mount-only init + back/forward
   useEffect(() => {
@@ -2828,6 +2991,7 @@ export default function App() {
     goal, setGoal,
     selection, setSelection,
     metric,
+    producePerPerson, setProducePerPerson,
   };
 
   return (
@@ -2838,7 +3002,8 @@ export default function App() {
       <GlobalStyles />
 
       <AppHeader metric={metric} setMetric={setMetric}
-        currency={currency} setCurrency={setCurrency} />
+        currency={currency} setCurrency={setCurrency}
+        hemisphere={hemisphere} setHemisphere={setHemisphere} />
 
       <TabBar tab={tab} setTab={changeTab} />
 
