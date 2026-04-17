@@ -71,6 +71,10 @@ function isAllowedOrigin(req) {
   for (const allowed of ALLOWED_ORIGINS) {
     if (referer.startsWith(allowed + "/") || referer === allowed) return true;
   }
+  // Vercel-assigned URLs for this project (matches validate-key.js).
+  // Licence-key gate still protects Anthropic spend — origin check is defence-in-depth.
+  if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
+  if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
   return false;
 }
 
