@@ -183,7 +183,8 @@ const PRESETS = {
 // ── Tabs ──
 // ═══════════════════════════════════════════════════════════════════════════
 const TABS = [
-  { id: "home",             label: "Self-Sufficiency",paid: false, live: true,  blurb: "" },
+  { id: "home",             label: "Home",            paid: false, live: true,  blurb: "" },
+  { id: "self-sufficiency", label: "Self-Sufficiency",paid: false, live: true,  blurb: "Tell us what your family eats. Get plant counts, garden space, and self-sufficiency % instantly." },
   { id: "soil",             label: "Soil",            paid: false, live: true,  blurb: "Raised-bed volume, soil mix breakdown, and bag estimates." },
   { id: "companion",        label: "Companion",       paid: false, live: true,  blurb: "Which crops grow well together, which ones fight." },
   { id: "planting-dates",   label: "Planting Dates",  paid: false, live: true,  blurb: "Start indoors, transplant, direct sow, and harvest windows for your zone." },
@@ -315,6 +316,21 @@ const fmtInt = (n) => {
 const fmtDecimal = (n, d = 1) => {
   if (!Number.isFinite(n)) return "—";
   return n.toFixed(d);
+};
+
+// Lightly tints a hex color to use as a card background. Keeps the crop
+// selector legible across 8 category colours — pure primary tint worked
+// for one green theme; per-category tints need a consistent ~12% alpha.
+const hexToRgba = (hex, alpha = 0.12) => {
+  if (typeof hex !== "string") return `rgba(0,0,0,${alpha})`;
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  if (full.length !== 6) return `rgba(0,0,0,${alpha})`;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  if ([r, g, b].some((n) => !Number.isFinite(n))) return `rgba(0,0,0,${alpha})`;
+  return `rgba(${r},${g},${b},${alpha})`;
 };
 
 const fmtRange = (arr, unit = "") => {
@@ -677,7 +693,10 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
 }
 
 // — PillSelect (for goal, frequency; segmented control) —
-function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
+// activeColor: optional override for the active-pill background. Used by
+// the crop-selector frequency controls to tint each pill to its category
+// (leafy green, root amber, etc.) instead of the default primary green.
+function PillSelect({ options, value, onChange, size = "md", ariaLabel, activeColor }) {
   const padding = size === "sm" ? "8px 14px" : "10px 18px";
   const fontSize = size === "sm" ? 13 : 15;
   const btnRefs = useRef([]);
@@ -722,7 +741,7 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
               flex: "1 1 auto", minHeight: size === "sm" ? 40 : 44,
               padding, fontSize, fontWeight: active ? 700 : 500,
               fontFamily: T.fontBody, color: active ? "#FEFCF8" : T.tx2,
-              background: active ? T.primary : "transparent",
+              background: active ? (activeColor || T.primary) : "transparent",
               border: "none", borderRadius: T.radiusPill, cursor: "pointer",
               transition: "all 0.18s ease", whiteSpace: "nowrap",
             }}>
@@ -913,7 +932,7 @@ function ProduceTargetField({ value, onChange, metric, isMobile }) {
       display: "grid", gap: 12, alignItems: "end",
       gridTemplateColumns: isMobile ? "1fr" : "minmax(240px, 320px) 1fr",
     }}>
-      <Field label={`Annual produce per person (${displayUnit})`}
+      <Field label="Annual produce per person"
         unit={displayUnit}
         value={displayValue} onChange={commit}
         min={Math.round(min)} max={Math.round(max)} step={10} />
@@ -987,7 +1006,14 @@ function SelfSufficiencyCalculator({
       boxShadow: T.shadow.lg,
     }}>
       {/* ───── Inputs ───── */}
-      <div style={{ display: "grid", gap: 24, gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr" }}>
+      {/* Family size stays compact; goal level gets the whole remaining row
+          so three labelled cards fit cleanly without the pill-row wrap that
+          previously forced "Fresh + some preserving" onto a second line. */}
+      <div style={{
+        display: "grid", gap: 24,
+        gridTemplateColumns: isMobile ? "1fr" : "minmax(180px, 240px) 1fr",
+        alignItems: "start",
+      }}>
         <div>
           <label style={labelStyle}>Family size</label>
           <Counter value={familySize} onChange={setFamilySize}
@@ -995,8 +1021,39 @@ function SelfSufficiencyCalculator({
         </div>
         <div>
           <label style={labelStyle}>Goal level</label>
-          <PillSelect options={GOAL_OPTIONS} value={goal} onChange={setGoal}
-            ariaLabel="Goal level" />
+          <div role="radiogroup" aria-label="Goal level"
+            style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+              gap: 10,
+            }}>
+            {GOAL_OPTIONS.map((opt) => {
+              const active = goal === opt.id;
+              return (
+                <button key={opt.id} type="button" role="radio" aria-checked={active}
+                  onClick={() => setGoal(opt.id)}
+                  style={{
+                    textAlign: "left", padding: "12px 14px", minHeight: 64,
+                    background: active ? T.primary : T.bg2,
+                    color: active ? "#FEFCF8" : T.tx,
+                    border: `1.5px solid ${active ? T.primary : T.border}`,
+                    borderRadius: T.radius,
+                    cursor: "pointer", transition: "all 0.18s ease",
+                    fontFamily: T.fontBody,
+                  }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.25 }}>
+                    {opt.label}
+                  </div>
+                  <div style={{
+                    fontSize: 12, marginTop: 4,
+                    color: active ? "rgba(254,252,248,0.78)" : T.tx3,
+                  }}>
+                    {opt.sub}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -1046,12 +1103,16 @@ function SelfSufficiencyCalculator({
               <div style={{ display: "grid", gap: 8, gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)" }}>
                 {cropsByCategory[cat.id].map(({ cropId, name }) => {
                   const selected = Boolean(selection[cropId]);
+                  // Selected state borrows the category colour (leafy green,
+                  // root amber, fruiting terracotta, etc.) so the selection
+                  // matches the section's dot/eyebrow. One-colour-fits-all
+                  // previously read as "all crops are green leafy things".
                   return (
                     <div key={cropId}
                       style={{
                         padding: "10px 12px", borderRadius: T.radius,
-                        background: selected ? T.primaryBg : T.bg,
-                        border: `1.5px solid ${selected ? T.primary : T.border}`,
+                        background: selected ? hexToRgba(cat.color, 0.14) : T.bg,
+                        border: `1.5px solid ${selected ? cat.color : T.border}`,
                         transition: "all 0.18s ease",
                       }}>
                       <label style={{
@@ -1060,7 +1121,7 @@ function SelfSufficiencyCalculator({
                       }}>
                         <input type="checkbox" checked={selected}
                           onChange={() => toggleCrop(cropId)}
-                          style={{ width: 18, height: 18, cursor: "pointer", accentColor: T.primary }}
+                          style={{ width: 18, height: 18, cursor: "pointer", accentColor: cat.color }}
                           aria-label={name} />
                         <span style={{ fontSize: 15, fontWeight: 600, color: T.tx }}>{name}</span>
                       </label>
@@ -1070,6 +1131,7 @@ function SelfSufficiencyCalculator({
                             value={selection[cropId]}
                             onChange={(f) => setCropFrequency(cropId, f)}
                             size="sm"
+                            activeColor={cat.color}
                             ariaLabel={`Consumption frequency for ${name}`} />
                         </div>
                       )}
@@ -2568,48 +2630,84 @@ function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChan
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Landing hero wrapper + Home tab content ──
 // ═══════════════════════════════════════════════════════════════════════════
-function HomeView(props) {
+// HomeView is now marketing-first. The calculator lives on its own tab
+// (#self-sufficiency) so first-time visitors see the product pitch — stats
+// cards, feature grid, pricing — above the fold instead of having to
+// scroll past a 1400-px calculator to learn what the tool does.
+function HomeView({ setTab }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
+  const goToCalculator = (e) => {
+    if (e) e.preventDefault();
+    if (typeof setTab === "function") setTab("self-sufficiency");
+    else window.location.hash = "self-sufficiency";
+  };
   return (
     <>
       {/* Hero */}
       <section style={{
         background: `linear-gradient(180deg, ${T.bg} 0%, ${T.bg2} 100%)`,
-        paddingTop: isMobile ? 32 : 64,
-        paddingBottom: isMobile ? 32 : 48,
+        paddingTop: isMobile ? 40 : 72,
+        paddingBottom: isMobile ? 40 : 64,
         paddingLeft: "clamp(16px, 4vw, 48px)",
         paddingRight: "clamp(16px, 4vw, 48px)",
       }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-          <div style={{ maxWidth: 760, margin: "0 auto", textAlign: "center" }}>
-            <div style={{
-              display: "inline-block", padding: "6px 14px", borderRadius: T.radiusPill,
-              background: T.goldBg, color: T.gold,
-              fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-              marginBottom: 18,
-            }}>
-              Free. No account. Pay once, use forever.
-            </div>
-            <h1 style={{
-              margin: 0, fontFamily: T.fontDisplay,
-              fontSize: "clamp(2rem, 5vw, 3.5rem)", lineHeight: 1.1,
-              color: T.tx, fontWeight: 400,
-            }}>
-              Know exactly what to grow
-            </h1>
-            <p style={{
-              margin: "20px auto 0", maxWidth: 580,
-              fontSize: isMobile ? 16 : 18, lineHeight: 1.6, color: T.tx2,
-            }}>
-              Plan your homestead garden based on what your family actually eats.
-              Tell us your family size and the crops you'll grow, get instant plant counts,
-              space, and yield estimates.
-            </p>
+        <div style={{ maxWidth: 900, margin: "0 auto", textAlign: "center" }}>
+          <div style={{
+            display: "inline-block", padding: "6px 14px", borderRadius: T.radiusPill,
+            background: T.goldBg, color: T.gold,
+            fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+            marginBottom: 18,
+          }}>
+            Free. No account. Pay once, use forever.
           </div>
-
-          {/* The calculator, immediately usable */}
-          <div style={{ marginTop: isMobile ? 28 : 40 }}>
-            <SelfSufficiencyCalculator {...props} />
+          <h1 style={{
+            margin: 0, fontFamily: T.fontDisplay,
+            fontSize: "clamp(2.2rem, 5.5vw, 4rem)", lineHeight: 1.08,
+            color: T.tx, fontWeight: 400, letterSpacing: "-0.01em",
+          }}>
+            Know exactly what to grow
+          </h1>
+          <p style={{
+            margin: "20px auto 0", maxWidth: 620,
+            fontSize: isMobile ? 16 : 19, lineHeight: 1.6, color: T.tx2,
+          }}>
+            Plan your homestead garden based on what your family actually eats.
+            Four free calculators plus an AI-written year-long growing plan.
+          </p>
+          <div style={{
+            marginTop: isMobile ? 28 : 36,
+            display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap",
+          }}>
+            <a href="#self-sufficiency" onClick={goToCalculator}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "14px 26px", minHeight: 52,
+                background: T.accent, color: "#FEFCF8",
+                borderRadius: T.radiusPill, textDecoration: "none",
+                fontFamily: T.fontBody, fontSize: 16, fontWeight: 700,
+                boxShadow: T.shadow.accent,
+              }}>
+              Start with the free calculator
+              <span aria-hidden="true" style={{ fontSize: 18, lineHeight: 1 }}>→</span>
+            </a>
+            <a href="#pricing" onClick={(e) => {
+                e.preventDefault();
+                if (typeof setTab === "function") setTab("home");
+                setTimeout(() => {
+                  const el = document.getElementById("pricing");
+                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }, 60);
+              }}
+              style={{
+                display: "inline-flex", alignItems: "center",
+                padding: "14px 22px", minHeight: 52,
+                background: "transparent", color: T.tx,
+                border: `1.5px solid ${T.border}`,
+                borderRadius: T.radiusPill, textDecoration: "none",
+                fontFamily: T.fontBody, fontSize: 15, fontWeight: 600,
+              }}>
+              See pricing
+            </a>
           </div>
         </div>
       </section>
@@ -2719,7 +2817,7 @@ function SocialProofSection() {
 
 const FEATURE_CARDS = [
   {
-    id: "home",
+    id: "self-sufficiency",
     title: "Self-Sufficiency Calculator",
     desc: "Family size in, plant count and garden space out. Tells you what % of a year's produce you'd grow.",
     cta: "Try the calculator",
@@ -3844,8 +3942,8 @@ function GrowingPlanTab({
             marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center",
           }}>
             Pick at least one crop on the{" "}
-            <a href="#home"
-              onClick={(e) => { if (typeof setTab === "function") { e.preventDefault(); setTab("home"); } }}
+            <a href="#self-sufficiency"
+              onClick={(e) => { if (typeof setTab === "function") { e.preventDefault(); setTab("self-sufficiency"); } }}
               style={{ color: T.primary, fontWeight: 700, textDecoration: "underline" }}>
               Self-Sufficiency tab
             </a>{" "}
@@ -4963,8 +5061,8 @@ const DEFAULT_SETUP_COSTS = {
 // Shared empty-state banner for paid tabs that depend on the
 // Self-Sufficiency crop selection. Rendered when baseResults.perCrop is
 // empty so the user gets a clear "do this first" instead of a page of
-// zeros and em-dashes. Uses href="#home" so the existing hashchange
-// listener does the routing — no setTab prop needed.
+// zeros and em-dashes. Uses href="#self-sufficiency" so the existing
+// hashchange listener does the routing — no setTab prop needed.
 function NoCropsBanner({ cta = "Go to Self-Sufficiency" }) {
   return (
     <section aria-label="Pick crops first" style={{
@@ -4996,12 +5094,12 @@ function NoCropsBanner({ cta = "Go to Self-Sufficiency" }) {
       }}>
         This tab builds on your Self-Sufficiency selection. Head over there, pick the crops your family actually eats, and this calculator will fill with real numbers.
       </p>
-      <a href="#home"
+      <a href="#self-sufficiency"
         onClick={() => {
           // The global hashchange listener switches the tab but doesn't
           // scroll to top when the click originates halfway down a long
           // paid tab. Force it here so the user lands on the Self-Suff
-          // hero instead of in the middle of Home content.
+          // hero instead of in the middle of content.
           if (typeof window !== "undefined") {
             setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
           }
@@ -5758,8 +5856,8 @@ function ComingSoon({ tab }) {
         }}>
           {tab.blurb}
         </p>
-        <a href="#home"
-          onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
+        <a href="#self-sufficiency"
+          onClick={(e) => { e.preventDefault(); window.location.hash = "self-sufficiency"; }}
           style={{
             display: "inline-block", marginTop: 24,
             padding: "12px 22px", borderRadius: T.radiusPill,
@@ -5801,14 +5899,16 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 12, flexWrap: "wrap",
       }}>
-        {/* Logo / title */}
+        {/* Logo / title — deliberately oversized so the masthead reads like
+            a premium print journal instead of a calculator widget. */}
         <a href="#home"
           onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
-          style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-          <BrandMark size={32} />
+          style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 14, textDecoration: "none" }}>
+          <BrandMark size={isMobile ? 36 : 48} />
           <span style={{
-            fontFamily: T.fontDisplay, fontSize: isMobile ? 16 : 18,
-            color: T.tx, fontWeight: 400,
+            fontFamily: T.fontDisplay, fontSize: isMobile ? 20 : 28,
+            color: T.tx, fontWeight: 400, letterSpacing: "-0.01em",
+            lineHeight: 1.05,
           }}>
             {isMobile ? "Homestead" : "Homestead Harvest Planner"}
           </span>
@@ -6161,8 +6261,8 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Calculators</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <a href="#home" style={linkStyle}
-                onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}>Self-Sufficiency</a>
+              <a href="#self-sufficiency" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "self-sufficiency"; }}>Self-Sufficiency</a>
               <a href="#soil" style={linkStyle}
                 onClick={(e) => { e.preventDefault(); window.location.hash = "soil"; }}>Soil</a>
               <a href="#companion" style={linkStyle}
@@ -6223,9 +6323,11 @@ function AppFooter() {
 // ── Main App ──
 // ═══════════════════════════════════════════════════════════════════════════
 const VALID_TABS = TABS.map((t) => t.id);
-// Hash aliases for backwards compat with pre-merge URLs. #self-sufficiency
-// used to be its own route; it now resolves to #home (the same calculator).
-const HASH_ALIASES = { "self-sufficiency": "home" };
+// Hash aliases kept intentionally empty. Home and Self-Sufficiency are
+// now separate tabs — a brief merge window (Apr 2026) routed
+// #self-sufficiency → #home, but the split reinstated each as its own id.
+// If old bookmarks surface, add them back here as { "old-id": "new-id" }.
+const HASH_ALIASES = {};
 const resolveHash = (h) => HASH_ALIASES[h] || h;
 
 export default function App() {
@@ -6793,7 +6895,14 @@ export default function App() {
       <TabBar tab={tab} setTab={changeTab} paid={paid} validating={validating} />
 
       <main id="main-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
-        {tab === "home" && <HomeView {...calcProps} />}
+        {tab === "home" && <HomeView setTab={changeTab} />}
+        {tab === "self-sufficiency" && (
+          <TabPageShell
+            title="Self-Sufficiency Calculator"
+            blurb="Tell us your family size and what you actually eat. Get plant counts, garden space, and self-sufficiency % instantly.">
+            <SelfSufficiencyCalculator {...calcProps} />
+          </TabPageShell>
+        )}
         {tab === "soil" && (
           <TabPageShell
             title="Raised Bed Soil Calculator"
