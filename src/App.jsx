@@ -6196,9 +6196,12 @@ function TabPageShell({ title, blurb, children }) {
   // Uses <h2> rather than <h1> so the only page-level <h1> is the hero on the
   // landing/home view. Keeps the document outline sensible for SEO crawlers
   // that render JS across tab routes.
+  // Top padding is kept tight so the title reads as "attached" to the tab bar
+  // rather than floating in a field of empty bg. Bottom padding stays generous
+  // to give content room to breathe before the footer.
   return (
     <section style={{
-      padding: "clamp(32px, 5vw, 64px) clamp(16px, 4vw, 48px)",
+      padding: "clamp(20px, 3vw, 36px) clamp(16px, 4vw, 48px) clamp(32px, 5vw, 64px)",
     }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <h2 style={{
