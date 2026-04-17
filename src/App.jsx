@@ -15,7 +15,10 @@ const T = {
 
   tx: "#2C2418",
   tx2: "#6B5D4F",
-  tx3: "#9A8E80",
+  // tx3 was #9A8E80 — measured ~2.6:1 on bg2 and ~3.2:1 on card, sub-AA for
+  // 12-13px secondary text. Darkened to #7A6E5F to clear 4.5:1 on both
+  // surfaces while staying clearly subordinate to tx2. Audit #79.
+  tx3: "#7A6E5F",
 
   primary: "#2D5A27",
   primaryDark: "#1E3E1A",
@@ -184,9 +187,9 @@ const TABS = [
   { id: "companion",        label: "Companion",       paid: false, live: true,  blurb: "Which crops grow well together, which ones fight." },
   { id: "planting-dates",   label: "Planting Dates",  paid: false, live: true,  blurb: "Start indoors, transplant, direct sow, and harvest windows for your zone." },
   { id: "growing-plan",     label: "Growing Plan",    paid: true,  live: false, blurb: "AI-generated personalized growing plan for your garden." },
-  { id: "crops",            label: "Crop Database",   paid: true,  live: false, blurb: "Complete data for every crop, searchable and sortable." },
-  { id: "cost-savings",     label: "Cost Savings",    paid: true,  live: false, blurb: "Grocery savings, setup costs, ROI, and break-even timeline." },
-  { id: "preservation",     label: "Preservation",    paid: true,  live: false, blurb: "How to can, freeze, dehydrate, and store your harvest." },
+  { id: "crops",            label: "Crop Database",   paid: true,  live: true,  blurb: "Complete data for every crop, searchable and sortable." },
+  { id: "cost-savings",     label: "Cost Savings",    paid: true,  live: true,  blurb: "Grocery savings, setup costs, ROI, and break-even timeline." },
+  { id: "preservation",     label: "Preservation",    paid: true,  live: true,  blurb: "How to can, freeze, dehydrate, and store your harvest." },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3332,6 +3335,17 @@ const PRESERVATION_LABELS = {
 const PRESERVATION_SHELF_MONTHS = {
   can: 14, freeze: 10, dehydrate: 18, ferment: 9, root_cellar: 4, sauce: 14, fresh: 0.5,
 };
+// Truncate a comma-separated varieties string to the first 3 entries with
+// an ellipsis when the list is longer. Single split() + consistent output.
+// Audit #62.
+const VARIETIES_PREVIEW_MAX = 3;
+function summarizeVarieties(str) {
+  if (!str) return "";
+  const parts = str.split(",");
+  if (parts.length <= VARIETIES_PREVIEW_MAX) return str;
+  return `${parts.slice(0, VARIETIES_PREVIEW_MAX).join(",")}…`;
+}
+
 const CROP_DB_SORTS = [
   { id: "name_asc",       label: "Name A→Z" },
   { id: "name_desc",      label: "Name Z→A" },
@@ -3342,18 +3356,24 @@ const CROP_DB_SORTS = [
 ];
 
 function CropDatabaseTab({ metric, dbState, setDbState }) {
-  const isMobile = useMediaQuery("(max-width: 760px)");
+  const isMobile = useMediaQuery("(max-width: 640px)");
   const { search, categoryFilter, sort, expandedId } = dbState;
-  const setSearch     = (v) => setDbState({ ...dbState, search: v });
-  const setSort       = (v) => setDbState({ ...dbState, sort: v });
-  const setExpandedId = (v) => setDbState({ ...dbState, expandedId: v });
+  // Functional setters everywhere — see audit #82.
+  const setSearch     = (v) => setDbState((p) => ({ ...p, search: v, expandedId: null }));
+  const setSort       = (v) => setDbState((p) => ({ ...p, sort: v }));
+  const setExpandedId = (v) => setDbState((p) => ({ ...p, expandedId: v }));
   const toggleCategory = (id) => {
-    const next = categoryFilter.includes(id)
-      ? categoryFilter.filter((c) => c !== id)
-      : [...categoryFilter, id];
-    setDbState({ ...dbState, categoryFilter: next });
+    setDbState((p) => {
+      const next = p.categoryFilter.includes(id)
+        ? p.categoryFilter.filter((c) => c !== id)
+        : [...p.categoryFilter, id];
+      // Drop expandedId on filter change — otherwise a row that the user
+      // closed by filtering it out will silently re-open if the filter is
+      // widened again. Audit #13/#44.
+      return { ...p, categoryFilter: next, expandedId: null };
+    });
   };
-  const clearFilters = () => setDbState({ ...dbState, search: "", categoryFilter: [] });
+  const clearFilters = () => setDbState((p) => ({ ...p, search: "", categoryFilter: [], expandedId: null }));
 
   const massConv = metric ? LB_TO_KG : 1;
   const areaConv = metric ? SQFT_TO_SQM : 1;
@@ -3366,27 +3386,35 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
       .filter(([id, c]) => {
         if (categoryFilter.length > 0 && !categoryFilter.includes(c.category)) return false;
         if (!q) return true;
-        const haystack = `${c.name} ${c.varieties || ""} ${id}`.toLowerCase();
+        // Search common-name + cultivar names only. Raw crop ids are an
+        // implementation detail; including them lets a user accidentally
+        // match every underscored id by typing "_". Audit #37.
+        const haystack = `${c.name} ${c.varieties || ""}`.toLowerCase();
         return haystack.includes(q);
       })
       .map(([id, c]) => ({ id, ...c }));
     const dir = sort.endsWith("_desc") ? -1 : 1;
+    // Defensive readers — a malformed range field on a future crop would
+    // otherwise produce NaN comparators and a non-deterministic sort order.
+    // Audit #38, #39.
+    const lowOf  = (range, fb) => Array.isArray(range) && Number.isFinite(range[0]) ? range[0] : fb;
+    const highOf = (range, fb) => Array.isArray(range) && Number.isFinite(range[1]) ? range[1] : fb;
     filtered.sort((a, b) => {
       switch (sort) {
         case "name_asc":
         case "name_desc":
           return a.name.localeCompare(b.name) * dir;
         case "days_asc":
-          return (a.daysToMaturity[0] - b.daysToMaturity[0]) * dir;
+          return (lowOf(a.daysToMaturity, 0) - lowOf(b.daysToMaturity, 0)) * dir;
         case "yield_desc": {
-          const ya = (a.yieldPerPlantLbs[0] + a.yieldPerPlantLbs[1]) / 2;
-          const yb = (b.yieldPerPlantLbs[0] + b.yieldPerPlantLbs[1]) / 2;
+          const ya = (lowOf(a.yieldPerPlantLbs, 0) + highOf(a.yieldPerPlantLbs, 0)) / 2;
+          const yb = (lowOf(b.yieldPerPlantLbs, 0) + highOf(b.yieldPerPlantLbs, 0)) / 2;
           return (ya - yb) * dir;
         }
         case "space_asc":
-          return (a.spacingSqFt - b.spacingSqFt) * dir;
+          return ((a.spacingSqFt || 0) - (b.spacingSqFt || 0)) * dir;
         case "difficulty_asc":
-          return (a.difficulty - b.difficulty) * dir;
+          return ((a.difficulty || 0) - (b.difficulty || 0)) * dir;
         default: return 0;
       }
     });
@@ -3409,6 +3437,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Try 'tomato' or 'San Marzano'"
             aria-label="Search crops"
+            maxLength={64}
             style={{
               fontSize: 16, fontFamily: T.fontBody, color: T.tx,
               background: T.card, border: `1.5px solid ${T.border}`,
@@ -3510,9 +3539,9 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                 <th scope="col" style={cropDbThStyle}>Season</th>
                 <th scope="col" style={cropDbThStyle}>Sow</th>
                 <th scope="col" style={cropDbThStyle}>Days</th>
-                <th scope="col" style={cropDbThStyle}>Space</th>
-                <th scope="col" style={cropDbThStyle}>Yield/plant</th>
-                <th scope="col" style={cropDbThStyle}>Sun</th>
+                <th scope="col" style={cropDbThStyle}>Space ({unitArea})</th>
+                <th scope="col" style={cropDbThStyle}>Yield ({unitMass}/plant)</th>
+                <th scope="col" style={cropDbThStyle}>Sun (h)</th>
                 <th scope="col" style={cropDbThStyle}>Water</th>
                 <th scope="col" style={cropDbThStyle}>Diff.</th>
               </tr>
@@ -3553,8 +3582,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                             <div style={{ fontWeight: 700 }}>{row.name}</div>
                             {row.varieties && (
                               <div style={{ fontSize: 12, color: T.tx3, marginTop: 2, lineHeight: 1.3 }}>
-                                {row.varieties.split(",").slice(0, 3).join(",")}
-                                {row.varieties.split(",").length > 3 ? "…" : ""}
+                                {summarizeVarieties(row.varieties)}
                               </div>
                             )}
                           </div>
@@ -3565,13 +3593,11 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                       <td style={cropDbTdNumStyle}>{fmtRange(row.daysToMaturity)}</td>
                       <td style={cropDbTdNumStyle}>
                         {(row.spacingSqFt * areaConv).toFixed(metric ? 2 : 1)}
-                        <span style={{ color: T.tx3, marginLeft: 4, fontSize: 11 }}>{unitArea}</span>
                       </td>
                       <td style={cropDbTdNumStyle}>
                         {(row.yieldPerPlantLbs[0] * massConv).toFixed(1)}–{(row.yieldPerPlantLbs[1] * massConv).toFixed(1)}
-                        <span style={{ color: T.tx3, marginLeft: 4, fontSize: 11 }}>{unitMass}</span>
                       </td>
-                      <td style={cropDbTdNumStyle}>{row.sunHours}h</td>
+                      <td style={cropDbTdNumStyle}>{row.sunHours}</td>
                       <td style={cropDbTdStyle}>{WATER_LABELS[row.waterNeeds]}</td>
                       <td style={cropDbTdNumStyle}>
                         <DifficultyDots level={row.difficulty} />
@@ -3648,11 +3674,15 @@ function CropDbCard({ row, expanded, onToggle, massConv, areaConv, unitMass, uni
               {cat?.label} · {SEASON_LABELS[row.season]} · {SOW_LABELS[row.sowMethod]}
             </div>
           </div>
-          <span style={{
-            fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
-            color: T.tx2, fontSize: 18, transform: expanded ? "rotate(180deg)" : "none",
-            transition: "transform 0.15s ease",
-          }}>⌄</span>
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"
+            style={{
+              flexShrink: 0, color: T.tx2,
+              transform: expanded ? "rotate(180deg)" : "none",
+              transition: "transform 0.15s ease",
+            }}>
+            <path d="M3 5 L7 9 L11 5" stroke="currentColor" strokeWidth="2"
+              fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         </div>
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px 12px",
@@ -3787,15 +3817,11 @@ const DEFAULT_SETUP_COSTS = {
 };
 
 function CostSavingsCalculator({
-  selection, familySize, goal, producePerPerson,
+  baseResults,
   beds, soilState, costSavings, setCostSavings,
   metric, currency,
 }) {
-  const isMobile = useMediaQuery("(max-width: 760px)");
-  const baseResults = useMemo(
-    () => computeResults(selection, familySize, goal, producePerPerson),
-    [selection, familySize, goal, producePerPerson]
-  );
+  const isMobile = useMediaQuery("(max-width: 640px)");
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";
@@ -3821,29 +3847,44 @@ function CostSavingsCalculator({
     return computeSoilResults(beds, effectiveMix).totalCost;
   }, [beds, soilState]);
 
+  // Functional setters so back-to-back updates in the same React batch
+  // (e.g. user blurs two Field components together) compose correctly
+  // instead of the second overwriting the first's stale closure. Audit #82.
   const updatePrice = (cropId, value) => {
-    setCostSavings({
-      ...costSavings,
-      priceOverrides: { ...costSavings.priceOverrides, [cropId]: value },
-    });
+    setCostSavings((prev) => ({
+      ...prev,
+      priceOverrides: { ...prev.priceOverrides, [cropId]: value },
+    }));
   };
   const updateSetup = (key, value) => {
-    setCostSavings({
-      ...costSavings,
-      setupCosts: { ...costSavings.setupCosts, [key]: value },
-    });
+    setCostSavings((prev) => ({
+      ...prev,
+      setupCosts: { ...prev.setupCosts, [key]: value },
+    }));
   };
   const fillSoilCost = () => {
     if (soilCostEstimate > 0) {
       updateSetup("soil", Math.round(soilCostEstimate * 100) / 100);
     }
   };
-  const resetPrices = () => setCostSavings({ ...costSavings, priceOverrides: {} });
+  const resetPrices = () => {
+    if (window.confirm("Reset every per-crop price back to the default? Your custom prices will be cleared.")) {
+      setCostSavings((prev) => ({ ...prev, priceOverrides: {} }));
+    }
+  };
+  const resetSetupCosts = () => {
+    if (window.confirm("Reset all setup costs back to the defaults?")) {
+      setCostSavings((prev) => ({ ...prev, setupCosts: { ...DEFAULT_SETUP_COSTS } }));
+    }
+  };
 
   // ── Per-crop savings table ──
   // Fallback chain: user override → crop-default → 0. The final 0 guard
   // covers a future crop shipped without `groceryPricePerLb` so a missing
   // field can't NaN-cascade through totals, hero, or bar widths. Audit #3.
+  // Render in baseResults order (matches Self-Sufficiency tab) so editing
+  // a price doesn't reorder the row mid-edit and yank the cursor with it.
+  // The bar widths still convey ranking visually. Audit #49.
   const perCropSavings = useMemo(() => {
     return baseResults.perCrop.map((r) => {
       const stored = costSavings.priceOverrides[r.cropId];
@@ -3853,8 +3894,14 @@ function CostSavingsCalculator({
         : (typeof cropDefault === "number" && Number.isFinite(cropDefault) ? cropDefault : 0);
       const annualSavings = r.expectedYieldLbs * pricePerLb;
       return { ...r, pricePerLb, annualSavings };
-    }).sort((a, b) => b.annualSavings - a.annualSavings);
+    });
   }, [baseResults, costSavings.priceOverrides]);
+  // Bar-chart denominator uses the max savings across all rows so per-row
+  // widths still reflect ranking even though the row order itself is stable.
+  const maxSavingsForBars = useMemo(
+    () => perCropSavings.reduce((m, r) => Math.max(m, r.annualSavings), 0),
+    [perCropSavings]
+  );
 
   const totals = useMemo(() => {
     const totalSavings = perCropSavings.reduce((s, r) => s + r.annualSavings, 0);
@@ -3869,7 +3916,7 @@ function CostSavingsCalculator({
     return { totalSavings, totalSetup, breakEvenMonths, roiPct, hasCrops: perCropSavings.length > 0 };
   }, [perCropSavings, costSavings.setupCosts]);
 
-  const maxSavings = perCropSavings[0]?.annualSavings || 1;
+  const maxSavings = maxSavingsForBars;
   const heroBreakEven = Number.isFinite(totals.breakEvenMonths)
     ? Math.max(0.1, totals.breakEvenMonths)
     : null;
@@ -3906,7 +3953,7 @@ function CostSavingsCalculator({
             ? "Add at least one crop in the Self-Sufficiency tab to see your break-even timeline."
             : totals.totalSetup === 0
               ? "Add your setup costs below to see when your garden pays for itself."
-              : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> month{heroBreakEven >= 2 ? "s" : ""}.</>}
+              : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
         </p>
       </div>
 
@@ -3933,19 +3980,34 @@ function CostSavingsCalculator({
       <div style={{ marginTop: 32 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
           <label style={labelStyle}>Garden setup costs ({currency})</label>
-          {soilCostEstimate > 0 && (
-            <button type="button" onClick={fillSoilCost}
-              title="Soil-mix prices are entered in the Soil Calculator and shown in your selected currency symbol. No FX conversion is applied."
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {soilCostEstimate > 0 && (
+              <button type="button" onClick={fillSoilCost}
+                title="Soil-mix prices are entered in the Soil Calculator and shown in your selected currency symbol. No FX conversion is applied."
+                style={{
+                  background: "transparent", border: `1.5px dashed ${T.primary}`,
+                  color: T.primary, borderRadius: T.radiusPill,
+                  padding: "6px 12px", minHeight: 36, cursor: "pointer",
+                  fontFamily: T.fontBody, fontSize: 12, fontWeight: 600,
+                }}>
+                Use Soil Calculator total ({currency}{soilCostEstimate.toFixed(0)})
+              </button>
+            )}
+            <button type="button" onClick={resetSetupCosts}
               style={{
-                background: "transparent", border: `1.5px dashed ${T.primary}`,
-                color: T.primary, borderRadius: T.radiusPill,
-                padding: "6px 12px", minHeight: 36, cursor: "pointer",
+                background: "transparent", border: "none", color: T.tx2,
                 fontFamily: T.fontBody, fontSize: 12, fontWeight: 600,
+                cursor: "pointer", textDecoration: "underline", padding: "6px 4px",
               }}>
-              Use Soil Calculator total ({currency}{soilCostEstimate.toFixed(0)})
+              Reset to defaults
             </button>
-          )}
+          </div>
         </div>
+        <p style={{
+          margin: "0 0 10px", fontSize: 12, color: T.tx3, lineHeight: 1.5,
+        }}>
+          Defaults reflect 2026 US retail averages. Currency is a display symbol only; no FX conversion is applied.
+        </p>
         <div style={{
           marginTop: 10, display: "grid", gap: 12,
           gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(5, 1fr)",
@@ -4020,7 +4082,7 @@ function CostSavingsCalculator({
                           const asLb = metric ? v * LB_TO_KG : v;
                           updatePrice(r.cropId, Math.max(0, Number(asLb.toFixed(6))));
                         }}
-                        min={0} max={500} step={0.25} />
+                        min={0} max={500} />
                     </div>
                     <div style={{
                       height: 12, borderRadius: 6, background: T.card,
@@ -4133,36 +4195,38 @@ function computePreservationForCrop(yieldLbs, freshPct, method) {
 }
 
 function PreservationPlanner({
-  selection, familySize, goal, producePerPerson,
+  baseResults,
   preservation, setPreservation,
   metric,
 }) {
-  const isMobile = useMediaQuery("(max-width: 760px)");
-  const baseResults = useMemo(
-    () => computeResults(selection, familySize, goal, producePerPerson),
-    [selection, familySize, goal, producePerPerson]
-  );
+  const isMobile = useMediaQuery("(max-width: 640px)");
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";
   const freshPct = preservation.freshPct;
 
+  // Functional setters per audit #82.
   const setFreshPct = (v) => {
     const clamped = Math.max(FRESH_PCT_MIN, Math.min(FRESH_PCT_MAX, v));
-    setPreservation({ ...preservation, freshPct: clamped });
+    setPreservation((prev) => ({ ...prev, freshPct: clamped }));
   };
   const setMethod = (cropId, method) => {
-    setPreservation({
-      ...preservation,
-      methodChoice: { ...preservation.methodChoice, [cropId]: method },
-    });
+    setPreservation((prev) => ({
+      ...prev,
+      methodChoice: { ...prev.methodChoice, [cropId]: method },
+    }));
+  };
+  const resetPreservation = () => {
+    if (window.confirm("Reset every per-crop preservation method back to the default?")) {
+      setPreservation((prev) => ({ ...prev, methodChoice: {} }));
+    }
   };
 
   const perCrop = useMemo(() => {
     return baseResults.perCrop.map((r) => {
       const options = preservationOptionsFor(r.crop);
       const stored = preservation.methodChoice[r.cropId];
-      const method = options.some((o) => o.id === stored) ? stored : options[0].id;
+      const method = options.some((o) => o.id === stored) ? stored : (options[0]?.id ?? "fresh");
       const detail = computePreservationForCrop(r.expectedYieldLbs, freshPct, method);
       return { ...r, options, method, detail };
     });
@@ -4209,7 +4273,8 @@ function PreservationPlanner({
               value={freshPct}
               onChange={(e) => setFreshPct(Number(e.target.value))}
               aria-label="Fresh-eating percentage"
-              style={{ width: "100%", accentColor: T.primary, minHeight: 40 }} />
+              className="hhp-range"
+              style={{ width: "100%", accentColor: T.primary, minHeight: 44, touchAction: "manipulation" }} />
             <div style={{
               display: "flex", justifyContent: "space-between",
               fontSize: 12, color: T.tx3, marginTop: 4,
@@ -4281,7 +4346,19 @@ function PreservationPlanner({
 
       {/* ── Per-crop breakdown ── */}
       <div style={{ marginTop: 32 }}>
-        <label style={labelStyle}>Preservation method per crop</label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <label style={labelStyle}>Preservation method per crop</label>
+          {Object.keys(preservation.methodChoice).length > 0 && (
+            <button type="button" onClick={resetPreservation}
+              style={{
+                background: "transparent", border: "none", color: T.tx2,
+                fontFamily: T.fontBody, fontSize: 12, fontWeight: 600,
+                cursor: "pointer", textDecoration: "underline", padding: "6px 4px",
+              }}>
+              Reset to defaults
+            </button>
+          )}
+        </div>
         {perCrop.length === 0 ? (
           <p style={{ marginTop: 12, color: T.tx3, fontSize: 14, fontStyle: "italic" }}>
             Pick crops on the Self-Sufficiency tab to plan how to put the harvest by.
@@ -4349,7 +4426,7 @@ function PreservationCropRow({ row, onMethodChange, massConv, unitMass, metric }
         return "";
     }
   })();
-  const freshOnlyCrop = row.options.length === 1 && row.options[0].id === "fresh";
+  const freshOnlyCrop = row.options.length === 1 && row.options[0]?.id === "fresh";
 
   return (
     <div style={{
@@ -5314,6 +5391,15 @@ export default function App() {
     producePerPerson, setProducePerPerson,
   };
 
+  // Single source of truth for crop-level results. Cost Savings, Preservation
+  // (and a future AI Growing Plan tab) all branch off this — keeping one
+  // memoized computation prevents the two paid tabs from drifting if the
+  // formula in computeResults changes. Audit #61.
+  const baseResults = useMemo(
+    () => computeResults(selection, familySize, goal, producePerPerson),
+    [selection, familySize, goal, producePerPerson]
+  );
+
   return (
     <div style={{
       minHeight: "100vh", background: T.bg, color: T.tx,
@@ -5386,8 +5472,7 @@ export default function App() {
             title="Cost Savings Calculator"
             blurb="Turn your Self-Sufficiency selection into hard numbers: annual grocery savings, setup costs, break-even, and ROI.">
             <CostSavingsCalculator
-              selection={selection} familySize={familySize} goal={goal}
-              producePerPerson={producePerPerson}
+              baseResults={baseResults}
               beds={beds} soilState={soilState}
               costSavings={costSavings} setCostSavings={setCostSavings}
               metric={metric} currency={currency} />
@@ -5398,8 +5483,7 @@ export default function App() {
             title="Preservation Planner"
             blurb="Pick a preservation method per crop. We size the jars, freezer space, dehydrator batches, and shelf inches you'll need.">
             <PreservationPlanner
-              selection={selection} familySize={familySize} goal={goal}
-              producePerPerson={producePerPerson}
+              baseResults={baseResults}
               preservation={preservation} setPreservation={setPreservation}
               metric={metric} />
           </TabPageShell>
@@ -5444,6 +5528,22 @@ function GlobalStyles() {
       .ur-crop-card:hover {
         background: ${T.cardHover};
         border-color: ${T.tx3};
+      }
+
+      /* Bigger range thumb so the touch target meets 44x44 (Apple HIG).
+         Native default is ~16px on most browsers — too small for fingers
+         on the preservation slider. Audit #45. */
+      .hhp-range { -webkit-appearance: none; appearance: none; height: 6px; background: ${T.bg2}; border-radius: 999px; padding: 0; }
+      .hhp-range::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none;
+        width: 28px; height: 28px; border-radius: 50%;
+        background: ${T.primary}; border: 3px solid #FEFCF8;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2); cursor: pointer;
+      }
+      .hhp-range::-moz-range-thumb {
+        width: 28px; height: 28px; border-radius: 50%;
+        background: ${T.primary}; border: 3px solid #FEFCF8;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2); cursor: pointer;
       }
 
       @keyframes fadeUp {
