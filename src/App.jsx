@@ -47,6 +47,12 @@ const T = {
     accent: "0 4px 16px rgba(196, 93, 62, 0.25)",
   },
 
+  // Translucent white overlay for chips sitting on a primary-coloured surface
+  // (e.g. the "Soon" chip inside an active tab button). Tokenised so no raw
+  // rgba values escape into the component tree.
+  onPrimaryOverlay: "rgba(254, 252, 248, 0.2)",
+  onPrimaryDim: "rgba(254, 252, 248, 0.78)",  // dimmed text on primary surface
+
   fontDisplay: '"DM Serif Display", Georgia, serif',
   fontBody: '"Plus Jakarta Sans", system-ui, sans-serif',
   fontNum: '"Barlow", "Plus Jakarta Sans", sans-serif',
@@ -661,7 +667,7 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
             {opt.sub && (
               <span style={{
                 display: "block", fontSize: 11, fontWeight: 400, marginTop: 2,
-                color: active ? "rgba(254, 252, 248, 0.78)" : T.tx3,
+                color: active ? T.onPrimaryDim : T.tx3,
               }}>
                 {opt.sub}
               </span>
@@ -1282,7 +1288,11 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
   const results = useMemo(() => computeSoilResults(beds, effectiveMix), [beds, effectiveMix]);
 
   const addBed = () => setBeds([...beds, DEFAULT_BED()]);
-  const removeBed = (id) => setBeds(beds.filter((b) => b.id !== id).length ? beds.filter((b) => b.id !== id) : beds);
+  const removeBed = (id) => {
+    // Keep at least one bed in the list so the calculator always has inputs.
+    const next = beds.filter((b) => b.id !== id);
+    if (next.length > 0) setBeds(next);
+  };
   const updateBed = (id, patch) => setBeds(beds.map((b) => (b.id === id ? { ...b, ...patch } : b)));
 
   const setComponentPrice = (key, value) => {
@@ -1417,7 +1427,7 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
             with 15% settling buffer
           </p>
           {results.hasInvalidLShape && (
-            <p role="alert" style={{
+            <p role="status" aria-live="polite" style={{
               margin: "12px auto 0", padding: "8px 12px", maxWidth: 440,
               background: T.errorBg, color: T.error, borderRadius: T.radius,
               fontSize: 13, fontWeight: 600,
@@ -2199,7 +2209,7 @@ function ZonePicker({ value, onChange, hemisphere }) {
           const f = getFrostDates("zone", z, hemisphere, null, refYear);
           return (
             <option key={z} value={z}>
-              Zone {z} — last frost {formatDate(f.lastSpring)}, first frost {formatDate(f.firstFall)}
+              Zone {z}: last frost {formatDate(f.lastSpring)}, first frost {formatDate(f.firstFall)}
             </option>
           );
         })}
@@ -3243,7 +3253,7 @@ function TabBar({ tab, setTab }) {
                   fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
                   textTransform: "uppercase",
                   padding: "2px 6px", borderRadius: 999,
-                  background: active ? "rgba(255,255,255,0.2)" : T.goldBg,
+                  background: active ? T.onPrimaryOverlay : T.goldBg,
                   color: active ? "#FEFCF8" : T.gold,
                 }}>Soon</span>
               )}
@@ -3312,7 +3322,7 @@ function AppFooter() {
               }}>Homestead Harvest Planner</span>
             </div>
             <p style={{
-              margin: "12px 0 0", fontSize: 13, color: T.tx3, lineHeight: 1.55, maxWidth: 280,
+              margin: "12px 0 0", fontSize: 13, color: T.tx3, lineHeight: 1.55,
             }}>
               A homesteading garden planner that you pay for once and keep forever.
             </p>
@@ -3615,7 +3625,13 @@ export default function App() {
     return TABS.find((x) => x.id === tab) || TABS[0];
   }, [tab]);
   useEffect(() => {
-    if (!VALID_TABS.includes(tab)) setTab("home");
+    if (!VALID_TABS.includes(tab)) {
+      setTab("home");
+      // Also normalise the URL so the hash matches the state we just snapped to.
+      if (window.location.hash.slice(1) !== "home") {
+        window.history.replaceState({ tab: "home" }, "", "#home");
+      }
+    }
   }, [tab]);
 
   const calcProps = {

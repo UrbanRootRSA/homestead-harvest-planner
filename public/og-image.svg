@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Source SVG for the Open Graph social-sharing image.
+  Dimensions: 1200 × 630 (the standard OG aspect ratio).
+  Export to PNG before production launch — Facebook, Twitter and LinkedIn
+  do not render SVG in social previews. A free export route is to open this
+  file in a browser and screenshot at 1200×630, or run
+  `rsvg-convert og-image.svg -w 1200 -h 630 -o og-image.png`.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FAF7F2"/>
+      <stop offset="100%" stop-color="#F2EDE4"/>
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2D5A27"/>
+      <stop offset="100%" stop-color="#1E3E1A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Subtle grid (raised-bed grid motif) -->
+  <g stroke="#DDD6C8" stroke-width="1" opacity="0.35">
+    <line x1="0"    y1="150" x2="1200" y2="150"/>
+    <line x1="0"    y1="300" x2="1200" y2="300"/>
+    <line x1="0"    y1="450" x2="1200" y2="450"/>
+    <line x1="200"  y1="0"   x2="200"  y2="630"/>
+    <line x1="400"  y1="0"   x2="400"  y2="630"/>
+    <line x1="600"  y1="0"   x2="600"  y2="630"/>
+    <line x1="800"  y1="0"   x2="800"  y2="630"/>
+    <line x1="1000" y1="0"   x2="1000" y2="630"/>
+  </g>
+
+  <!-- Brand mark -->
+  <g transform="translate(80, 80)">
+    <rect width="96" height="96" rx="20" fill="url(#primaryGrad)"/>
+    <rect x="20" y="14" width="12" height="68" rx="2" fill="#FAF7F2"/>
+    <rect x="64" y="14" width="12" height="68" rx="2" fill="#FAF7F2"/>
+    <rect x="20" y="42" width="56" height="12" rx="2" fill="#FAF7F2"/>
+    <path d="M48 24 C 48 18, 54 14, 60 14 C 54 18, 52 22, 52 30 Z" fill="#B8942C"/>
+  </g>
+
+  <text x="200" y="145" font-family="'DM Serif Display', Georgia, serif"
+        font-size="32" fill="#2C2418">
+    Homestead Harvest Planner
+  </text>
+  <text x="200" y="175" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
+        font-size="18" font-weight="500" fill="#6B5D4F" letter-spacing="2">
+    BY URBAN ROOT
+  </text>
+
+  <!-- Headline -->
+  <text x="80" y="320" font-family="'DM Serif Display', Georgia, serif"
+        font-size="96" fill="#2C2418">
+    Know exactly
+  </text>
+  <text x="80" y="420" font-family="'DM Serif Display', Georgia, serif"
+        font-size="96" fill="#2D5A27">
+    what to grow.
+  </text>
+
+  <!-- Subhead -->
+  <text x="80" y="490" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
+        font-size="28" font-weight="500" fill="#6B5D4F">
+    Plant counts, soil volume, companion planting, and
+  </text>
+  <text x="80" y="525" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
+        font-size="28" font-weight="500" fill="#6B5D4F">
+    planting dates for your family. Pay once, use forever.
+  </text>
+
+  <!-- Price chip -->
+  <g transform="translate(80, 555)">
+    <rect width="160" height="44" rx="22" fill="#C45D3E"/>
+    <text x="80" y="30" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
+          font-size="18" font-weight="700" fill="#FEFCF8" text-anchor="middle">
+      $19.99 one-time
+    </text>
+  </g>
+
+  <!-- Sprout motif on the right -->
+  <g transform="translate(920, 340)" opacity="0.9">
+    <ellipse cx="0" cy="210" rx="180" ry="18" fill="#A67A42" opacity="0.35"/>
+    <path d="M0 210 L0 50" stroke="#2D5A27" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <path d="M0 130 C -40 90, -80 85, -110 70 C -70 100, -30 120, 0 130 Z" fill="#3A7A3A"/>
+    <path d="M0 100 C  40 60,  80 55,  110 40 C  70 70,  30 90, 0 100 Z" fill="#5E8A4E"/>
+    <path d="M0 70  C -30 40, -60 35, -80 20 C -50 50, -20 60, 0 70 Z" fill="#3A7A3A"/>
+    <circle cx="0" cy="50" r="10" fill="#B8942C"/>
+  </g>
+</svg>
