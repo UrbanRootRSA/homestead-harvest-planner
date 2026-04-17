@@ -72,6 +72,17 @@ const LS_HEMISPHERE = "hhp_hemisphere";
 const LS_PRODUCE_TARGET = "hhp_produce_target";
 const LS_PLANTING = "hhp_planting";
 
+// Paywall storage (Session 4). hhp_paid is NOT read on mount — state machine
+// is paid:false / validating:true until the server confirms. See engineering-
+// patterns.md §8. hhp_pending is the Checkout.Success timestamp for the 48-h
+// grace window that covers the delay between payment and key-email delivery.
+const LS_KEY = "hhp_key";
+const LS_INSTANCE = "hhp_instance";
+const LS_PENDING = "hhp_pending";
+const GRACE_WINDOW_MS = 48 * 60 * 60 * 1000;
+const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/ee15261e-d919-4650-9c84-fb6bbf10eca2";
+const PRICE_USD = "19.99";
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Conversion constants + USDA baseline ──
 // ═══════════════════════════════════════════════════════════════════════════
@@ -467,6 +478,34 @@ function loadState(key, fallback) {
     const parsed = JSON.parse(raw);
     return parsed == null ? fallback : parsed;
   } catch { return fallback; }
+}
+function clearLS(key) {
+  try { localStorage.removeItem(key); } catch { /* noop */ }
+}
+
+// POST licence key to our serverless validator. Returns:
+//   { valid: true,  instance_id: string|null }
+//   { valid: false, error: string, retry_activation?: boolean }
+// Never throws — network failures resolve to { valid: false, error: ... } so
+// the caller can simply branch on `valid`.
+async function validateKeyRemote(key, instanceId) {
+  try {
+    const resp = await fetch("/api/validate-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key: String(key || "").trim(),
+        instance_id: instanceId ? String(instanceId) : undefined,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (typeof data !== "object" || data === null) {
+      return { valid: false, error: "Unexpected response from licence server." };
+    }
+    return data;
+  } catch (e) {
+    return { valid: false, error: "Can't reach the licence server. Check your connection and try again." };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3008,6 +3047,264 @@ function FAQSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Paywall overlay + supporting bits (Session 4) ──
+// ═══════════════════════════════════════════════════════════════════════════
+function LockIcon({ size = 48, color }) {
+  const c = color || T.primary;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke={c} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" focusable="false">
+      <rect x="4" y="10.5" width="16" height="10.5" rx="2.2" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+      <circle cx="12" cy="15.5" r="1.1" fill={c} stroke="none" />
+      <path d="M12 16.6v2" />
+    </svg>
+  );
+}
+
+function ValidatingOverlay() {
+  return (
+    <section aria-busy="true" aria-live="polite" style={{
+      padding: "clamp(48px, 8vw, 96px) clamp(16px, 4vw, 48px)",
+      background: T.bg,
+    }}>
+      <div style={{
+        maxWidth: 420, margin: "0 auto", textAlign: "center",
+        padding: 40, borderRadius: T.radiusLg,
+        background: T.card, border: `1.5px solid ${T.border}`,
+        boxShadow: T.shadow.md,
+      }}>
+        <div style={{
+          width: 32, height: 32, margin: "0 auto 16px",
+          border: `3px solid ${T.bg2}`, borderTopColor: T.primary,
+          borderRadius: "50%", animation: "hhpSpin 0.9s linear infinite",
+        }} />
+        <div style={{
+          fontFamily: T.fontBody, fontSize: 15, fontWeight: 600, color: T.tx,
+        }}>
+          Verifying your access…
+        </div>
+        <div style={{
+          marginTop: 6, fontSize: 13, color: T.tx3,
+        }}>
+          One second.
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onClearError }) {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const [keyInputOpen, setKeyInputOpen] = useState(Boolean(prefillKey));
+  const [key, setKey] = useState(prefillKey || "");
+
+  // If the mount effect pre-fills a key (from ?key= that failed), surface the
+  // input immediately so the user sees what was tried.
+  useEffect(() => {
+    if (prefillKey) {
+      setKey(prefillKey);
+      setKeyInputOpen(true);
+    }
+  }, [prefillKey]);
+
+  const features = [
+    "AI-powered growing plan tuned to your family and zone",
+    "Complete crop database — 63 crops, searchable + sortable",
+    "Cost savings calculator with grocery-vs-garden ROI",
+    "Preservation planner for canning, freezing, dehydrating",
+  ];
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (activating) return;
+    await onActivate(key);
+  };
+
+  return (
+    <section style={{
+      padding: "clamp(40px, 6vw, 72px) clamp(16px, 4vw, 48px)",
+      background: T.bg,
+    }}>
+      <div style={{
+        maxWidth: 560, margin: "0 auto", textAlign: "center",
+        padding: isMobile ? 24 : 40,
+        borderRadius: T.radiusLg,
+        background: T.card, border: `1.5px solid ${T.border}`,
+        boxShadow: T.shadow.lg,
+      }}>
+        <div style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 72, height: 72, borderRadius: "50%",
+          background: T.primaryBg, marginBottom: 16,
+        }}>
+          <LockIcon size={36} />
+        </div>
+        <div style={{
+          display: "inline-block",
+          padding: "4px 12px", borderRadius: T.radiusPill,
+          background: T.accentBg, color: T.accent,
+          fontSize: 11, fontWeight: 700, letterSpacing: "0.1em",
+          textTransform: "uppercase", marginBottom: 12,
+        }}>
+          {tab.label}
+        </div>
+        <h2 style={{
+          margin: 0, fontFamily: T.fontDisplay,
+          fontSize: "clamp(1.6rem, 3.2vw, 2.1rem)", fontWeight: 400, color: T.tx,
+          lineHeight: 1.15,
+        }}>
+          Unlock your full growing plan
+        </h2>
+        <p style={{
+          margin: "14px auto 0", maxWidth: 440,
+          fontSize: 15, color: T.tx2, lineHeight: 1.55,
+        }}>
+          One payment. Yours forever. No subscription, no account, no renewals.
+        </p>
+
+        <ul style={{
+          listStyle: "none", padding: 0, margin: "24px auto 0",
+          maxWidth: 440, textAlign: "left",
+          display: "flex", flexDirection: "column", gap: 10,
+        }}>
+          {features.map((f) => (
+            <li key={f} style={{
+              display: "flex", gap: 10, alignItems: "flex-start",
+              fontSize: 14, color: T.tx, lineHeight: 1.5,
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                stroke={T.primary} strokeWidth="2.5" strokeLinecap="round"
+                strokeLinejoin="round" aria-hidden="true"
+                style={{ flexShrink: 0, marginTop: 2 }}>
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+
+        <div style={{
+          margin: "28px 0 4px",
+          fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+          fontSize: 42, fontWeight: 700, color: T.tx, lineHeight: 1,
+        }}>
+          ${PRICE_USD}
+        </div>
+        <div style={{
+          fontSize: 13, color: T.tx3, marginBottom: 22,
+        }}>
+          One-time. Forever yours. 48-hour refund window.
+        </div>
+
+        <a
+          href={CHECKOUT_URL}
+          className="lemonsqueezy-button"
+          style={{
+            display: "inline-block",
+            padding: "14px 28px", borderRadius: T.radiusPill,
+            background: T.accent, color: "#FEFCF8",
+            fontFamily: T.fontBody, fontSize: 16, fontWeight: 700,
+            textDecoration: "none", cursor: "pointer",
+            boxShadow: T.shadow.accent,
+            minHeight: 48, minWidth: 200,
+          }}>
+          Get full access
+        </a>
+
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${T.border}` }}>
+          {!keyInputOpen ? (
+            <button type="button"
+              onClick={() => setKeyInputOpen(true)}
+              style={{
+                background: "transparent", border: "none", cursor: "pointer",
+                fontFamily: T.fontBody, fontSize: 14, fontWeight: 600,
+                color: T.primary, textDecoration: "underline",
+                textUnderlineOffset: 3, padding: "6px 10px",
+                minHeight: 44,
+              }}>
+              Already purchased? Enter your licence key
+            </button>
+          ) : (
+            <form onSubmit={handleSubmit} style={{
+              display: "flex", flexDirection: "column", gap: 10,
+              maxWidth: 420, margin: "0 auto", textAlign: "left",
+            }}>
+              <label style={{
+                fontSize: 13, fontWeight: 600, color: T.tx2,
+              }}>
+                Licence key
+              </label>
+              <input
+                type="text"
+                value={key}
+                onChange={(e) => { setKey(e.target.value); if (keyError) onClearError(); }}
+                placeholder="XXXX-XXXX-XXXX-XXXX"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={activating}
+                aria-invalid={Boolean(keyError)}
+                aria-describedby={keyError ? "hhp-key-error" : undefined}
+                style={{
+                  fontSize: 16, fontFamily: T.fontNum,
+                  fontVariantNumeric: "tabular-nums",
+                  letterSpacing: "0.04em",
+                  background: T.bg2, color: T.tx,
+                  border: `1.5px solid ${keyError ? T.error : T.border}`,
+                  borderRadius: T.radius,
+                  padding: "12px 14px", minHeight: 48,
+                  outline: "none",
+                }}
+              />
+              {keyError && (
+                <div id="hhp-key-error" role="alert" style={{
+                  fontSize: 13, color: T.error, lineHeight: 1.45,
+                }}>
+                  {keyError}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+                <button type="button"
+                  onClick={() => { setKeyInputOpen(false); onClearError(); }}
+                  disabled={activating}
+                  style={{
+                    background: "transparent", border: `1.5px solid ${T.border}`,
+                    borderRadius: T.radiusPill, cursor: "pointer",
+                    padding: "10px 18px", minHeight: 44,
+                    fontFamily: T.fontBody, fontSize: 14, fontWeight: 600,
+                    color: T.tx2,
+                    opacity: activating ? 0.6 : 1,
+                  }}>
+                  Cancel
+                </button>
+                <button type="submit"
+                  disabled={activating || key.trim().length < 8}
+                  style={{
+                    background: T.primary, color: "#FEFCF8", border: "none",
+                    borderRadius: T.radiusPill, cursor: activating ? "wait" : "pointer",
+                    padding: "10px 22px", minHeight: 44,
+                    fontFamily: T.fontBody, fontSize: 14, fontWeight: 700,
+                    opacity: (activating || key.trim().length < 8) ? 0.6 : 1,
+                  }}>
+                  {activating ? "Verifying…" : "Activate"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+
+        <div style={{
+          marginTop: 22, fontSize: 12, color: T.tx3, lineHeight: 1.5,
+        }}>
+          Secure checkout by LemonSqueezy. Your licence covers 3 devices and never expires.
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ── Coming Soon (non-live tabs) ──
 // ═══════════════════════════════════════════════════════════════════════════
 function ComingSoon({ tab }) {
@@ -3186,7 +3483,7 @@ function CurrencySelect({ value, onChange }) {
   );
 }
 
-function TabBar({ tab, setTab }) {
+function TabBar({ tab, setTab, paid, validating }) {
   const tabs = TABS; // show every tab, including Home, so there's always a visible selection
   const btnRefs = useRef([]);
 
@@ -3228,11 +3525,17 @@ function TabBar({ tab, setTab }) {
       }}>
         {tabs.map((t, i) => {
           const active = tab === t.id;
+          // Locked = paid tab + user has not unlocked. Dimmed until unlocked
+          // so the nav visually signals which tabs require purchase. Once
+          // unlocked (or during validation) we drop the dim so paid users
+          // don't keep seeing "you don't have access" signalling.
+          const locked = Boolean(t.paid) && !paid && !validating;
           return (
             <button key={t.id}
               id={`tab-${t.id}`}
               ref={(el) => (btnRefs.current[i] = el)}
               role="tab" aria-selected={active} aria-controls="main-panel"
+              aria-label={locked ? `${t.label} — requires full access` : undefined}
               tabIndex={active ? 0 : -1}
               onClick={() => setTab(t.id)}
               style={{
@@ -3244,18 +3547,19 @@ function TabBar({ tab, setTab }) {
                 borderRadius: T.radiusPill, cursor: "pointer",
                 whiteSpace: "nowrap",
                 display: "inline-flex", alignItems: "center", gap: 6,
-                opacity: t.live || active ? 1 : 0.72,
+                opacity: locked && !active ? 0.7 : 1,
                 transition: "all 0.15s ease",
               }}>
               {t.label}
-              {!t.live && (
-                <span aria-label="coming soon" style={{
-                  fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
-                  textTransform: "uppercase",
-                  padding: "2px 6px", borderRadius: 999,
-                  background: active ? T.onPrimaryOverlay : T.goldBg,
-                  color: active ? "#FEFCF8" : T.gold,
-                }}>Soon</span>
+              {locked && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                  stroke={active ? "#FEFCF8" : T.gold} strokeWidth="2.2"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  aria-hidden="true" focusable="false"
+                  style={{ flexShrink: 0 }}>
+                  <rect x="4" y="10.5" width="16" height="10.5" rx="2.2" />
+                  <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+                </svg>
               )}
             </button>
           );
@@ -3545,6 +3849,16 @@ export default function App() {
     return valid;
   });
 
+  // ── Paywall state ────────────────────────────────────────────────────────
+  // paid starts false. validating starts true. Mount effect resolves both.
+  // Paid tab UI MUST gate on !validating — rendering paid content while
+  // validating === true is the race window that leaks free access.
+  const [paid, setPaid] = useState(false);
+  const [validating, setValidating] = useState(true);
+  const [keyError, setKeyError] = useState("");   // surfaced in paywall overlay after a bad key
+  const [prefillKey, setPrefillKey] = useState(""); // pre-fills the licence input from ?key= URLs
+  const [activating, setActivating] = useState(false); // true while the Activate form is submitting
+
   // Persist settings
   useEffect(() => { persistState(LS_METRIC, metric); }, [metric]);
   useEffect(() => { persistState(LS_CURRENCY, currency); }, [currency]);
@@ -3568,6 +3882,192 @@ export default function App() {
     bumpIfStale();
     document.addEventListener("visibilitychange", bumpIfStale);
     return () => document.removeEventListener("visibilitychange", bumpIfStale);
+  }, []);
+
+  // ── Paywall mount effect ─────────────────────────────────────────────────
+  // One sequential async flow: ?key= → stored key → grace window → deny.
+  // A single useEffect prevents the race where multiple [] effects all call
+  // setPaid/setValidating out of order. The `cancelled` guard prevents
+  // setState on unmount (React StrictMode fires effects twice in dev).
+  useEffect(() => {
+    let cancelled = false;
+
+    const attempt = async (key, existingInstance) => {
+      const r1 = await validateKeyRemote(key, existingInstance || "");
+      if (r1?.valid) return r1;
+      // If LS no longer recognises our cached instance_id (deactivated remotely
+      // from the LS dashboard, etc.), drop it and try a fresh activate.
+      if (r1?.retry_activation) {
+        clearLS(LS_INSTANCE);
+        const r2 = await validateKeyRemote(key, "");
+        if (r2?.valid) return r2;
+        return r2;
+      }
+      return r1;
+    };
+
+    const commitPaid = (key, instanceId) => {
+      if (key) persistState(LS_KEY, key);
+      if (instanceId) persistState(LS_INSTANCE, instanceId);
+      clearLS(LS_PENDING); // grace window no longer needed once we have a key
+      setPaid(true);
+      setValidating(false);
+    };
+
+    const stripKeyFromUrl = () => {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has("key")) {
+          url.searchParams.delete("key");
+          window.history.replaceState(window.history.state, "", url.toString());
+        }
+      } catch { /* noop */ }
+    };
+
+    (async () => {
+      try {
+        // 1. URL ?key= takes precedence (email link, post-checkout redirect).
+        const params = new URLSearchParams(window.location.search);
+        const urlKey = params.get("key");
+        if (urlKey) {
+          const storedInstance = loadState(LS_INSTANCE, "");
+          const r = await attempt(urlKey, storedInstance);
+          if (cancelled) return;
+          stripKeyFromUrl();
+          if (r?.valid) {
+            commitPaid(urlKey, r.instance_id);
+            return;
+          }
+          // Surface the error so the user understands why they're not unlocked.
+          setKeyError(r?.error || "We couldn't verify that licence key.");
+          setPrefillKey(urlKey);
+          setPaid(false);
+          setValidating(false);
+          // Send them to the paywall UI instead of silently dropping on Home.
+          setTab("growing-plan");
+          return;
+        }
+
+        // 2. Stored key from a previous session.
+        const storedKey = loadState(LS_KEY, "");
+        const storedInstance = loadState(LS_INSTANCE, "");
+        if (storedKey) {
+          const r = await attempt(storedKey, storedInstance);
+          if (cancelled) return;
+          if (r?.valid) {
+            commitPaid(storedKey, r.instance_id);
+            return;
+          }
+          // Stored key no longer valid — wipe silently. User sees paywall,
+          // not an error — they didn't just try to enter it.
+          clearLS(LS_KEY);
+          clearLS(LS_INSTANCE);
+        }
+
+        // 3. Grace window: Checkout.Success timestamp within 48 h.
+        // LS's Checkout.Success event fires BEFORE the email with the key
+        // lands. Without this window the customer pays, reloads, and is
+        // locked out until their inbox catches up.
+        const pending = Number(loadState(LS_PENDING, 0));
+        if (Number.isFinite(pending) && pending > 0) {
+          const age = Date.now() - pending;
+          if (age >= 0 && age < GRACE_WINDOW_MS) {
+            setPaid(true);
+            setValidating(false);
+            return;
+          }
+          clearLS(LS_PENDING);
+        }
+
+        // 4. No entry path matched. Not paid.
+        setPaid(false);
+        setValidating(false);
+      } catch (e) {
+        console.error("[hhp] paywall mount failed:", e);
+        if (!cancelled) {
+          setPaid(false);
+          setValidating(false);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── LemonSqueezy SDK + Checkout.Success hook ─────────────────────────────
+  // lemon.js is loaded via a <defer> script tag in index.html. Defer scripts
+  // run after DOMContentLoaded, which is before React's useEffect, so on the
+  // fast path window.createLemonSqueezy exists by the time this runs. On slow
+  // connections we poll for up to 8 s.
+  useEffect(() => {
+    let pollHandle = null;
+    let cancelled = false;
+
+    const setup = () => {
+      if (typeof window.createLemonSqueezy !== "function") return false;
+      try {
+        window.createLemonSqueezy();
+        window.LemonSqueezy?.Setup?.({
+          eventHandler: (event) => {
+            if (event?.event === "Checkout.Success") {
+              // Open the 48-h grace window. The licence-key email hasn't
+              // arrived yet — this is the bridge until the ?key= URL or
+              // manual paste takes over.
+              try { localStorage.setItem(LS_PENDING, String(Date.now())); } catch { /* noop */ }
+              setPaid(true);
+              setValidating(false);
+              try { window.LemonSqueezy?.Url?.Close?.(); } catch { /* noop */ }
+            }
+          },
+        });
+      } catch (e) {
+        console.warn("[hhp] LS Setup failed:", e?.message);
+      }
+      return true;
+    };
+
+    if (!setup()) {
+      pollHandle = setInterval(() => {
+        if (cancelled) return;
+        if (setup()) { clearInterval(pollHandle); pollHandle = null; }
+      }, 250);
+      // Give up after 8 s — lemon.js isn't reachable, CSP is blocking, or
+      // the user is offline. Paywall CTA still works as a plain link.
+      setTimeout(() => { if (pollHandle) { clearInterval(pollHandle); pollHandle = null; } }, 8000);
+    }
+
+    return () => {
+      cancelled = true;
+      if (pollHandle) clearInterval(pollHandle);
+    };
+  }, []);
+
+  // Activate a licence key from the paywall form. Wraps validateKeyRemote +
+  // state updates so the overlay component can stay presentational.
+  const activateKey = useCallback(async (rawKey) => {
+    const key = String(rawKey || "").trim();
+    if (key.length < 8) {
+      setKeyError("Please paste the full licence key from your email.");
+      return false;
+    }
+    setActivating(true);
+    setKeyError("");
+    try {
+      const r = await validateKeyRemote(key, "");
+      if (r?.valid) {
+        persistState(LS_KEY, key);
+        if (r.instance_id) persistState(LS_INSTANCE, r.instance_id);
+        clearLS(LS_PENDING);
+        setPaid(true);
+        setKeyError("");
+        setPrefillKey("");
+        return true;
+      }
+      setKeyError(r?.error || "We couldn't verify that licence key.");
+      return false;
+    } finally {
+      setActivating(false);
+    }
   }, []);
 
   // Hash routing: mount-only init + back/forward + hashchange.
@@ -3653,7 +4153,7 @@ export default function App() {
         currency={currency} setCurrency={setCurrency}
         hemisphere={hemisphere} setHemisphere={setHemisphere} />
 
-      <TabBar tab={tab} setTab={changeTab} />
+      <TabBar tab={tab} setTab={changeTab} paid={paid} validating={validating} />
 
       <main id="main-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
         {tab === "home" && <HomeView {...calcProps} />}
@@ -3689,7 +4189,19 @@ export default function App() {
               hemisphere={hemisphere} />
           </TabPageShell>
         )}
-        {tab !== "home" && tab !== "soil" && tab !== "companion" && tab !== "planting-dates" && (
+        {activeTab.paid && validating && (
+          <ValidatingOverlay />
+        )}
+        {activeTab.paid && !validating && !paid && (
+          <PaywallOverlay
+            tab={activeTab}
+            keyError={keyError}
+            prefillKey={prefillKey}
+            activating={activating}
+            onActivate={activateKey}
+            onClearError={() => setKeyError("")} />
+        )}
+        {activeTab.paid && !validating && paid && (
           <ComingSoon tab={activeTab} />
         )}
       </main>
@@ -3734,6 +4246,11 @@ function GlobalStyles() {
       @keyframes fadeUp {
         from { opacity: 0; transform: translateY(16px); }
         to   { opacity: 1; transform: translateY(0); }
+      }
+
+      @keyframes hhpSpin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
       }
 
       @media (max-width: 640px) {
