@@ -63,6 +63,7 @@ const LS_SOIL = "hhp_soil";
 const LS_COMPANION = "hhp_companion";
 const LS_HEMISPHERE = "hhp_hemisphere";
 const LS_PRODUCE_TARGET = "hhp_produce_target";
+const LS_PLANTING = "hhp_planting";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Conversion constants + USDA baseline ──
@@ -160,7 +161,7 @@ const TABS = [
   { id: "home",             label: "Self-Sufficiency",paid: false, live: true,  blurb: "" },
   { id: "soil",             label: "Soil",            paid: false, live: true,  blurb: "Raised-bed volume, soil mix breakdown, and bag estimates." },
   { id: "companion",        label: "Companion",       paid: false, live: true,  blurb: "Which crops grow well together, which ones fight." },
-  { id: "planting-dates",   label: "Planting Dates",  paid: false, live: false, blurb: "Start indoors, transplant, direct sow, and harvest windows for your zone." },
+  { id: "planting-dates",   label: "Planting Dates",  paid: false, live: true,  blurb: "Start indoors, transplant, direct sow, and harvest windows for your zone." },
   { id: "growing-plan",     label: "Growing Plan",    paid: true,  live: false, blurb: "AI-generated personalized growing plan for your garden." },
   { id: "crops",            label: "Crop Database",   paid: true,  live: false, blurb: "Complete data for every crop, searchable and sortable." },
   { id: "cost-savings",     label: "Cost Savings",    paid: true,  live: false, blurb: "Grocery savings, setup costs, ROI, and break-even timeline." },
@@ -237,6 +238,28 @@ const DEFAULT_BED = () => ({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Planting date tables (USDA zones, Northern hemisphere reference) ──
+// Extension-service midpoints. Southern hemisphere flips all dates by 6 months.
+// User can override per their hyperlocal frost history via manual entry.
+// ═══════════════════════════════════════════════════════════════════════════
+const ZONE_FROST_DATES = {
+  3:  { lastSpring: { m: 5,  d: 15 }, firstFall: { m: 9,  d: 15 } },
+  4:  { lastSpring: { m: 5,  d: 1  }, firstFall: { m: 10, d: 1  } },
+  5:  { lastSpring: { m: 4,  d: 15 }, firstFall: { m: 10, d: 15 } },
+  6:  { lastSpring: { m: 4,  d: 1  }, firstFall: { m: 10, d: 30 } },
+  7:  { lastSpring: { m: 3,  d: 22 }, firstFall: { m: 11, d: 5  } },
+  8:  { lastSpring: { m: 3,  d: 10 }, firstFall: { m: 11, d: 15 } },
+  9:  { lastSpring: { m: 2,  d: 15 }, firstFall: { m: 12, d: 1  } },
+  10: { lastSpring: { m: 2,  d: 1  }, firstFall: { m: 12, d: 15 } },
+  11: { lastSpring: { m: 1,  d: 15 }, firstFall: { m: 12, d: 31 } },
+};
+
+const PLANTING_DATE_DEFAULT_CROPS = [
+  "tomato", "bell_pepper", "cucumber", "lettuce", "kale",
+  "carrot", "potato", "onion", "green_beans_bush", "basil",
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ── Utilities ──
 // ═══════════════════════════════════════════════════════════════════════════
 const clampInt = (v, min, max) => {
@@ -262,6 +285,143 @@ const fmtRange = (arr, unit = "") => {
   if (a === b) return `${a}${unit}`;
   return `${a}${unit}–${b}${unit}`;
 };
+
+// — Planting date helpers —
+// All dates use the numeric Date constructor and setDate for offsets (never
+// epoch-ms arithmetic; that breaks across DST). Single anchor = lastSpring.
+function monthDayToDate(md, year) {
+  return new Date(year, md.m - 1, md.d);
+}
+function addWeeks(date, weeks) {
+  if (!date || weeks == null) return null;
+  const d = new Date(date);
+  d.setDate(d.getDate() + weeks * 7);
+  return d;
+}
+function shiftMonths(date, months) {
+  if (!date) return null;
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+const SHORT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function formatDate(date, refYear) {
+  if (!date || !Number.isFinite(date.getTime())) return "—";
+  const y = date.getFullYear();
+  const base = `${SHORT_MONTHS[date.getMonth()]} ${date.getDate()}`;
+  return refYear && y !== refYear ? `${base}, ${y}` : base;
+}
+function dayOfYear(date, refYear) {
+  if (!date) return null;
+  const jan1 = new Date(refYear, 0, 1);
+  return (date - jan1) / 86400000; // can be negative or > 365 if cross-year
+}
+
+function getFrostDates(mode, zone, hemisphere, manualFrost, referenceYear) {
+  if (mode === "manual") {
+    const ls = parseIsoDate(manualFrost?.lastSpring);
+    const ff = parseIsoDate(manualFrost?.firstFall);
+    if (!ls || !ff) return null;
+    return { lastSpring: ls, firstFall: ff, source: "manual" };
+  }
+  const base = ZONE_FROST_DATES[zone];
+  if (!base) return null;
+  let ls = monthDayToDate(base.lastSpring, referenceYear);
+  let ff = monthDayToDate(base.firstFall, referenceYear);
+  if (hemisphere === "south") {
+    ls = shiftMonths(ls, 6);
+    ff = shiftMonths(ff, 6);
+  }
+  return { lastSpring: ls, firstFall: ff, source: "zone" };
+}
+
+function parseIsoDate(iso) {
+  if (!iso || typeof iso !== "string") return null;
+  const m = iso.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (!Number.isFinite(y) || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return new Date(y, mo - 1, d);
+}
+function toIsoDate(date) {
+  if (!date) return "";
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// Per-crop planting windows. Anchor-picker priority (per engineering-verifier):
+// user's sowMethod choice > crop.sowMethod default > transplant > direct sow.
+// harvestStartWeeks measured from whichever anchor ends up active.
+function computePlantingDates(crop, frostDates, sowMethodOverride = null) {
+  const out = {
+    startIndoors: null, transplant: null, directSow: null,
+    harvestStart: null, harvestEnd: null, anchorMethod: null,
+    frostRiskAtHarvest: false,
+  };
+  if (!crop || !frostDates) return out;
+  const { lastSpring, firstFall } = frostDates;
+
+  if (crop.startIndoorsWeeks != null) out.startIndoors = addWeeks(lastSpring, crop.startIndoorsWeeks);
+  if (crop.transplantWeeks   != null) out.transplant   = addWeeks(lastSpring, crop.transplantWeeks);
+  if (crop.directSowWeeks    != null) out.directSow    = addWeeks(lastSpring, crop.directSowWeeks);
+
+  const method = sowMethodOverride || crop.sowMethod;
+  let anchor = null;
+  if (method === "transplant" && out.transplant) {
+    anchor = out.transplant; out.anchorMethod = "transplant";
+  } else if (method === "direct" && out.directSow) {
+    anchor = out.directSow;  out.anchorMethod = "direct";
+  } else if (method === "either") {
+    if (out.transplant) { anchor = out.transplant; out.anchorMethod = "transplant"; }
+    else if (out.directSow) { anchor = out.directSow; out.anchorMethod = "direct"; }
+  }
+  if (!anchor) {
+    if (out.transplant)   { anchor = out.transplant;   out.anchorMethod = "transplant"; }
+    else if (out.directSow)   { anchor = out.directSow;   out.anchorMethod = "direct"; }
+    else if (out.startIndoors) { anchor = out.startIndoors; out.anchorMethod = "indoors"; }
+  }
+
+  if (anchor && crop.harvestStartWeeks != null) {
+    out.harvestStart = addWeeks(anchor, crop.harvestStartWeeks);
+    if (crop.harvestDurationWeeks != null) {
+      out.harvestEnd = addWeeks(out.harvestStart, crop.harvestDurationWeeks);
+    }
+  }
+
+  // First-frost warning: warm-season crop whose harvest extends past first fall frost
+  if (crop.season === "warm" && out.harvestEnd && firstFall && out.harvestEnd > firstFall) {
+    out.frostRiskAtHarvest = true;
+  }
+
+  return out;
+}
+
+// Split a [start, end] date range into segments relative to a reference year.
+// offYear: -1 = before refYear, 0 = within refYear, +1 = after refYear.
+// Used by the timeline renderer so cross-year phases (garlic, asparagus) split
+// into two edge-bars instead of being silently clipped.
+function splitRange(start, end, refYear) {
+  if (!start || !end || end < start) return [];
+  const yearStart = new Date(refYear, 0, 1);
+  const yearEnd   = new Date(refYear + 1, 0, 1); // exclusive
+  const segments = [];
+  if (end < yearStart) {
+    segments.push({ start, end, offYear: -1 });
+  } else if (start >= yearEnd) {
+    segments.push({ start, end, offYear: +1 });
+  } else if (start < yearStart && end >= yearStart && end < yearEnd) {
+    segments.push({ start, end: new Date(refYear - 1, 11, 31), offYear: -1 });
+    segments.push({ start: yearStart, end, offYear: 0 });
+  } else if (start >= yearStart && start < yearEnd && end >= yearEnd) {
+    segments.push({ start, end: new Date(refYear, 11, 31), offYear: 0 });
+    segments.push({ start: yearStart instanceof Date ? new Date(refYear + 1, 0, 1) : null, end, offYear: +1 });
+  } else {
+    segments.push({ start, end, offYear: 0 });
+  }
+  return segments;
+}
 
 function persistState(key, data) {
   try {
@@ -1687,6 +1847,488 @@ function CompanionList({ title, tone, pairs, empty }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Planting Date Calculator (Tab 4) ──
+// ═══════════════════════════════════════════════════════════════════════════
+const PHASE_COLORS = {
+  indoors: "#B8B0A0",  // warm grey for indoor start
+  grow:    "#8BA888",  // muted green for growing
+  harvest: "#C45D3E",  // terracotta for harvest window
+};
+
+function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere }) {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const { mode, zone, manualFrost, selectedCrops, referenceYear, sowMethodChoice } = plantingState;
+
+  const update = (patch) => setPlantingState({ ...plantingState, ...patch });
+
+  const frostDates = useMemo(
+    () => getFrostDates(mode, zone, hemisphere, manualFrost, referenceYear),
+    [mode, zone, hemisphere, manualFrost, referenceYear]
+  );
+
+  const toggleCrop = (id) => {
+    const next = selectedCrops.includes(id)
+      ? selectedCrops.filter((x) => x !== id)
+      : [...selectedCrops, id];
+    update({ selectedCrops: next });
+  };
+
+  const setCropSowMethod = (cropId, method) => {
+    update({ sowMethodChoice: { ...sowMethodChoice, [cropId]: method } });
+  };
+
+  const cropsByCategory = useMemo(() => {
+    const map = {};
+    for (const [cropId, crop] of Object.entries(CROPS)) {
+      if (!map[crop.category]) map[crop.category] = [];
+      map[crop.category].push({ cropId, ...crop });
+    }
+    return map;
+  }, []);
+
+  // Compute planting dates for each selected crop
+  const perCropDates = useMemo(() => {
+    if (!frostDates) return [];
+    return selectedCrops
+      .filter((id) => CROPS[id])
+      .map((id) => {
+        const crop = CROPS[id];
+        const override = sowMethodChoice[id];
+        const dates = computePlantingDates(crop, frostDates, override);
+        return { cropId: id, crop, dates };
+      });
+  }, [selectedCrops, frostDates, sowMethodChoice]);
+
+  return (
+    <section aria-label="Planting Date Calculator" style={{
+      background: T.card, border: `1.5px solid ${T.border}`,
+      borderRadius: T.radiusLg, padding: isMobile ? 20 : 32, boxShadow: T.shadow.lg,
+    }}>
+      {/* Mode + location */}
+      <label style={labelStyle}>Where will you plant?</label>
+      <PillSelect
+        options={[
+          { id: "zone",   label: "Pick your zone",   sub: "USDA hardiness zone 3-11" },
+          { id: "manual", label: "Enter frost dates",sub: "Hyperlocal or non-US" },
+        ]}
+        value={mode} onChange={(v) => update({ mode: v })}
+        ariaLabel="Location input method" />
+
+      {mode === "zone" && (
+        <div style={{ marginTop: 20 }}>
+          <ZonePicker value={zone} onChange={(v) => update({ zone: v })} hemisphere={hemisphere} />
+          <p style={{ marginTop: 8, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+            Your actual frost dates can vary by ±2 weeks based on elevation, proximity to water,
+            and urban heat. Use the manual option below if you know your local dates.
+          </p>
+        </div>
+      )}
+
+      {mode === "manual" && (
+        <div style={{
+          marginTop: 16, display: "grid", gap: 12,
+          gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+        }}>
+          <ManualDateField
+            label="Last spring frost" value={manualFrost?.lastSpring}
+            onChange={(v) => update({ manualFrost: { ...(manualFrost || {}), lastSpring: v } })}
+            referenceYear={referenceYear} />
+          <ManualDateField
+            label="First fall frost" value={manualFrost?.firstFall}
+            onChange={(v) => update({ manualFrost: { ...(manualFrost || {}), firstFall: v } })}
+            referenceYear={referenceYear} />
+        </div>
+      )}
+
+      {/* Frost date summary */}
+      {frostDates && (
+        <div style={{
+          marginTop: 20, padding: "12px 16px", borderRadius: T.radius,
+          background: T.bg2, border: `1.5px solid ${T.border}`,
+          display: "flex", flexWrap: "wrap", gap: "4px 18px", alignItems: "baseline",
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.tx2 }}>
+            Last spring frost:
+          </span>
+          <span style={{
+            fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+            fontSize: 15, fontWeight: 700, color: T.tx,
+          }}>
+            {formatDate(frostDates.lastSpring, referenceYear)}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.tx2 }}>
+            First fall frost:
+          </span>
+          <span style={{
+            fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+            fontSize: 15, fontWeight: 700, color: T.tx,
+          }}>
+            {formatDate(frostDates.firstFall, referenceYear)}
+          </span>
+          <span style={{ fontSize: 12, color: T.tx3, marginLeft: "auto" }}>
+            {hemisphere === "south" ? "Southern" : "Northern"} hemisphere
+          </span>
+        </div>
+      )}
+
+      {/* Crop selection */}
+      <div style={{ marginTop: 32 }}>
+        <label style={labelStyle}>Which crops are you planting?</label>
+        <div style={{ display: "grid", gap: 14 }}>
+          {CATEGORIES.filter((cat) => cropsByCategory[cat.id]?.length).map((cat) => (
+            <div key={cat.id}>
+              <div style={{
+                fontSize: 12, fontWeight: 700, color: T.tx2,
+                letterSpacing: "0.08em", textTransform: "uppercase",
+                marginBottom: 6, display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: cat.color, display: "inline-block" }} />
+                {cat.label}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {cropsByCategory[cat.id].map(({ cropId, name }) => {
+                  const active = selectedCrops.includes(cropId);
+                  return (
+                    <button key={cropId} type="button"
+                      onClick={() => toggleCrop(cropId)}
+                      aria-pressed={active}
+                      style={{
+                        padding: "8px 14px", minHeight: 40,
+                        fontSize: 13, fontWeight: active ? 700 : 500,
+                        background: active ? T.primary : T.bg,
+                        color: active ? "#FEFCF8" : T.tx,
+                        border: `1.5px solid ${active ? T.primary : T.border}`,
+                        borderRadius: T.radiusPill, cursor: "pointer",
+                      }}>
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Results */}
+      {frostDates && perCropDates.length > 0 && (
+        <div style={{ marginTop: 40 }} aria-live="polite">
+          <div style={eyebrowStyle}>Your planting calendar</div>
+          <div style={{ marginTop: 14 }}>
+            <PlantingTimelineChart
+              rows={perCropDates} referenceYear={referenceYear} />
+          </div>
+
+          <div style={{ ...eyebrowStyle, marginTop: 32 }}>Per crop</div>
+          <div style={{
+            marginTop: 12, display: "grid", gap: 10,
+            gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
+          }}>
+            {perCropDates.map(({ cropId, crop, dates }) => (
+              <CropDatesCard key={cropId}
+                cropId={cropId} crop={crop} dates={dates}
+                sowMethodOverride={sowMethodChoice[cropId]}
+                onSowMethodChange={(m) => setCropSowMethod(cropId, m)}
+                referenceYear={referenceYear} />
+            ))}
+          </div>
+
+          <p style={{ marginTop: 20, fontSize: 13, color: T.tx3, lineHeight: 1.55 }}>
+            Dates are planning estimates from extension-service averages. Soil temperature,
+            microclimate, and variety all shift the actual windows. Watch your local weather
+            and harden off transplants for 5-7 days before they go in the ground.
+          </p>
+        </div>
+      )}
+
+      {!frostDates && (
+        <p role="alert" style={{
+          marginTop: 24, padding: 16, borderRadius: T.radius,
+          background: T.warningBg, color: T.tx,
+          fontSize: 14, lineHeight: 1.5,
+        }}>
+          Enter both frost dates (or pick a zone) to see your planting calendar.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ZonePicker({ value, onChange, hemisphere }) {
+  // Build label text for each zone showing its frost dates in the user's hemisphere.
+  const refYear = new Date().getFullYear();
+  const opts = Object.keys(ZONE_FROST_DATES).map((k) => Number(k));
+  return (
+    <div>
+      <select
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label="USDA hardiness zone"
+        style={{
+          fontSize: 16, fontFamily: T.fontBody,
+          background: T.card, color: T.tx,
+          border: `1.5px solid ${T.border}`,
+          borderRadius: T.radius, padding: "12px 16px",
+          minHeight: 48, width: "100%", maxWidth: 480,
+        }}>
+        {opts.map((z) => {
+          const f = getFrostDates("zone", z, hemisphere, null, refYear);
+          return (
+            <option key={z} value={z}>
+              Zone {z} — last frost {formatDate(f.lastSpring)}, first frost {formatDate(f.firstFall)}
+            </option>
+          );
+        })}
+      </select>
+    </div>
+  );
+}
+
+function ManualDateField({ label, value, onChange, referenceYear }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span style={{ fontSize: 14, fontWeight: 600, color: T.tx2, fontFamily: T.fontBody }}>
+        {label}
+      </span>
+      <input type="date"
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        style={{
+          fontSize: 16, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+          background: T.card, color: T.tx,
+          border: `1.5px solid ${T.border}`,
+          borderRadius: T.radius, padding: "12px 14px",
+          minHeight: 48, width: "100%",
+        }} />
+    </label>
+  );
+}
+
+function PlantingTimelineChart({ rows, referenceYear }) {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const rowHeight = 52;
+  const labelWidth = isMobile ? 96 : 132;
+  const totalDays = 365;
+  const monthLabels = SHORT_MONTHS;
+
+  const phaseFor = (start, end, color) => {
+    const segments = splitRange(start, end, referenceYear);
+    return segments.map((seg, i) => {
+      if (seg.offYear !== 0 || !seg.start || !seg.end) return null;
+      const leftDay = Math.max(0, dayOfYear(seg.start, referenceYear));
+      const rightDay = Math.min(totalDays, dayOfYear(seg.end, referenceYear));
+      const widthDays = Math.max(0, rightDay - leftDay);
+      if (widthDays <= 0) return null;
+      return {
+        leftPct: (leftDay / totalDays) * 100,
+        widthPct: (widthDays / totalDays) * 100,
+        color,
+        key: `${color}-${i}`,
+      };
+    }).filter(Boolean);
+  };
+
+  const edgeIndicators = (dates) => {
+    // Show pills at the left/right edge for out-of-year phases (garlic etc).
+    const results = [];
+    const earliest = [dates.startIndoors, dates.transplant, dates.directSow].filter(Boolean).sort((a, b) => a - b)[0];
+    const latest = dates.harvestEnd;
+    if (earliest && earliest < new Date(referenceYear, 0, 1)) {
+      results.push({ side: "left", label: `${formatDate(earliest, referenceYear)}` });
+    }
+    if (latest && latest >= new Date(referenceYear + 1, 0, 1)) {
+      results.push({ side: "right", label: `${formatDate(latest, referenceYear)}` });
+    }
+    return results;
+  };
+
+  return (
+    <div style={{
+      background: T.bg2, border: `1.5px solid ${T.border}`,
+      borderRadius: T.radiusLg, padding: isMobile ? 14 : 20,
+      overflow: "hidden",
+    }}>
+      {/* Month axis */}
+      <div style={{
+        display: "flex", fontSize: 11, fontWeight: 600, color: T.tx3,
+        textTransform: "uppercase", letterSpacing: "0.06em",
+        paddingLeft: labelWidth, marginBottom: 8,
+      }}>
+        {monthLabels.map((m, i) => (
+          <div key={m} style={{ flex: 1, textAlign: i === 0 ? "left" : "center" }}>
+            {isMobile ? m.charAt(0) : m}
+          </div>
+        ))}
+      </div>
+
+      {/* Rows */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {rows.map(({ cropId, crop, dates }) => {
+          const indoorsBars = dates.startIndoors && dates.transplant
+            ? phaseFor(dates.startIndoors, dates.transplant, PHASE_COLORS.indoors)
+            : [];
+          const sowBase = dates.anchorMethod === "transplant" ? dates.transplant : dates.directSow;
+          const growBars = sowBase && dates.harvestStart
+            ? phaseFor(sowBase, dates.harvestStart, PHASE_COLORS.grow)
+            : [];
+          const harvestBars = dates.harvestStart && dates.harvestEnd
+            ? phaseFor(dates.harvestStart, dates.harvestEnd, PHASE_COLORS.harvest)
+            : [];
+          const edges = edgeIndicators(dates);
+
+          return (
+            <div key={cropId} style={{
+              display: "flex", alignItems: "center", gap: 8,
+              minHeight: rowHeight,
+            }}>
+              <div style={{
+                width: labelWidth, flexShrink: 0,
+                fontSize: isMobile ? 12 : 13, fontWeight: 600, color: T.tx,
+                paddingRight: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>
+                {crop.name}
+              </div>
+              <div style={{
+                position: "relative", flex: 1, height: 28,
+                background: T.card, borderRadius: T.radius,
+                border: `1px solid ${T.border}`,
+                overflow: "hidden",
+              }}>
+                {/* Month gridlines */}
+                {monthLabels.map((_, i) => i > 0 && (
+                  <div key={i} style={{
+                    position: "absolute", top: 0, bottom: 0,
+                    left: `${(i / 12) * 100}%`, width: 1,
+                    background: T.border, opacity: 0.5,
+                  }} />
+                ))}
+                {/* Phase bars */}
+                {[...indoorsBars, ...growBars, ...harvestBars].map((b) => (
+                  <div key={b.key} style={{
+                    position: "absolute", top: 2, bottom: 2,
+                    left: `${b.leftPct}%`, width: `${b.widthPct}%`,
+                    background: b.color, borderRadius: 3,
+                    opacity: 0.92,
+                  }} />
+                ))}
+                {/* Edge indicators */}
+                {edges.map((e, i) => (
+                  <div key={i} title={`${e.label}`} style={{
+                    position: "absolute", top: 2, bottom: 2,
+                    [e.side]: 0, width: 6,
+                    background: e.side === "left" ? PHASE_COLORS.indoors : PHASE_COLORS.harvest,
+                    borderRadius: 2, opacity: 0.7,
+                  }} />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div style={{
+        marginTop: 14, display: "flex", flexWrap: "wrap", gap: "6px 18px",
+        fontSize: 12, color: T.tx2,
+      }}>
+        {[
+          { label: "Start indoors", color: PHASE_COLORS.indoors },
+          { label: "Growing", color: PHASE_COLORS.grow },
+          { label: "Harvest", color: PHASE_COLORS.harvest },
+        ].map((l) => (
+          <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 2, background: l.color }} />
+            <span>{l.label}</span>
+          </div>
+        ))}
+        <span style={{ marginLeft: "auto", color: T.tx3, fontSize: 11 }}>
+          Edge bars indicate dates outside {referenceYear}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChange, referenceYear }) {
+  const method = sowMethodOverride || crop.sowMethod;
+  const showMethodToggle = crop.sowMethod === "either";
+
+  return (
+    <div style={{
+      padding: "14px 16px", borderRadius: T.radius,
+      background: T.card, border: `1.5px solid ${T.border}`,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.tx }}>{crop.name}</div>
+        {dates.frostRiskAtHarvest && (
+          <span style={{
+            fontSize: 11, fontWeight: 700, color: T.error,
+            padding: "2px 8px", borderRadius: T.radiusPill,
+            background: T.errorBg,
+          }} title="Harvest window extends past the first fall frost">
+            Frost risk
+          </span>
+        )}
+      </div>
+
+      {showMethodToggle && (
+        <div style={{ marginTop: 8 }}>
+          <PillSelect
+            size="sm"
+            options={[
+              { id: "transplant", label: "Transplant" },
+              { id: "direct",     label: "Direct sow" },
+            ]}
+            value={method === "transplant" ? "transplant" : "direct"}
+            onChange={onSowMethodChange}
+            ariaLabel={`Sow method for ${crop.name}`} />
+        </div>
+      )}
+
+      <div style={{
+        marginTop: 10, display: "grid", gap: "4px 14px",
+        gridTemplateColumns: "auto 1fr", fontSize: 13, color: T.tx2,
+      }}>
+        {dates.startIndoors && (
+          <>
+            <span style={{ color: T.tx3 }}>Start indoors</span>
+            <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
+              {formatDate(dates.startIndoors, referenceYear)}
+            </span>
+          </>
+        )}
+        {dates.transplant && method !== "direct" && (
+          <>
+            <span style={{ color: T.tx3 }}>Transplant out</span>
+            <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
+              {formatDate(dates.transplant, referenceYear)}
+            </span>
+          </>
+        )}
+        {dates.directSow && method !== "transplant" && (
+          <>
+            <span style={{ color: T.tx3 }}>Direct sow</span>
+            <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
+              {formatDate(dates.directSow, referenceYear)}
+            </span>
+          </>
+        )}
+        {dates.harvestStart && (
+          <>
+            <span style={{ color: T.tx3 }}>Harvest</span>
+            <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
+              {formatDate(dates.harvestStart, referenceYear)}
+              {dates.harvestEnd && ` – ${formatDate(dates.harvestEnd, referenceYear)}`}
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ── Landing hero wrapper + Home tab content ──
 // ═══════════════════════════════════════════════════════════════════════════
 function HomeView(props) {
@@ -1735,15 +2377,12 @@ function HomeView(props) {
         </div>
       </section>
 
-      {/* Placeholder landing sections, fleshed out in later sessions */}
-      <LandingPlaceholder id="features" title="More free calculators"
-        blurb="Soil volume, companion planting, and planting dates. Coming this week." />
-      <LandingPlaceholder id="how-it-works" title="How it works"
-        blurb="Pick your crops. See your plan. Plant with confidence." bg={T.bg2} />
-      <LandingPlaceholder id="pricing" title="Pay once, use forever"
-        blurb="Full growing plan, crop database, cost savings, and preservation planner. $19.99 one-time." />
-      <LandingPlaceholder id="faq" title="FAQ"
-        blurb="Common questions about the planner." bg={T.bg2} />
+      <SocialProofSection />
+      <FeaturesSection />
+      <HowItWorksSection />
+      <ComparisonSection />
+      <PricingSection />
+      <FAQSection />
     </>
   );
 }
@@ -1770,6 +2409,474 @@ function LandingPlaceholder({ id, title, blurb, bg }) {
         </p>
       </div>
     </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── Landing page sections ──
+// ═══════════════════════════════════════════════════════════════════════════
+
+function LandingSection({ id, bg, children, maxWidth = 1100 }) {
+  return (
+    <section id={id} style={{
+      background: bg || T.bg,
+      padding: "clamp(48px, 8vw, 96px) clamp(16px, 4vw, 48px)",
+      scrollMarginTop: 80,
+    }}>
+      <div style={{ maxWidth, margin: "0 auto" }}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SectionHeading({ eyebrow, title, subtitle, align = "center" }) {
+  return (
+    <div style={{
+      textAlign: align, maxWidth: 720,
+      margin: align === "center" ? "0 auto" : 0,
+    }}>
+      {eyebrow && (
+        <div style={{
+          fontSize: 12, fontWeight: 700, color: T.accent,
+          letterSpacing: "0.1em", textTransform: "uppercase",
+          marginBottom: 12,
+        }}>{eyebrow}</div>
+      )}
+      <h2 style={{
+        margin: 0, fontFamily: T.fontDisplay,
+        fontSize: "clamp(1.75rem, 3.5vw, 2.5rem)", fontWeight: 400, color: T.tx,
+        lineHeight: 1.15,
+      }}>
+        {title}
+      </h2>
+      {subtitle && (
+        <p style={{
+          margin: "16px auto 0",
+          fontSize: 17, color: T.tx2, lineHeight: 1.55, maxWidth: 620,
+        }}>
+          {subtitle}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SocialProofSection() {
+  const stats = [
+    { value: "63", label: "crops in the database", sub: "Tomatoes to parsnips. Six regional additions for non-US gardens." },
+    { value: "153", label: "companion pairings", sub: "Sourced from extension-service research, not Pinterest folklore." },
+    { value: "$19.99", label: "one-time purchase", sub: "No subscription. No renewals. Your plan is yours." },
+  ];
+  return (
+    <LandingSection>
+      <div style={{
+        display: "grid", gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+      }}>
+        {stats.map((s) => (
+          <div key={s.label} style={{
+            padding: "24px 20px", borderRadius: T.radiusLg,
+            background: T.card, border: `1.5px solid ${T.border}`,
+            textAlign: "center",
+          }}>
+            <div style={{
+              fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+              fontSize: "clamp(2rem, 4vw, 2.75rem)", fontWeight: 700, color: T.primary,
+              lineHeight: 1,
+            }}>{s.value}</div>
+            <div style={{
+              marginTop: 8, fontSize: 14, fontWeight: 700, color: T.tx,
+              textTransform: "uppercase", letterSpacing: "0.04em",
+            }}>{s.label}</div>
+            <div style={{
+              marginTop: 8, fontSize: 13, color: T.tx2, lineHeight: 1.5,
+            }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+    </LandingSection>
+  );
+}
+
+const FEATURE_CARDS = [
+  {
+    id: "home",
+    title: "Self-Sufficiency Calculator",
+    desc: "Family size in, plant count and garden space out. Tells you what % of a year's produce you'd grow.",
+    cta: "Try the calculator",
+  },
+  {
+    id: "soil",
+    title: "Raised Bed Soil Calculator",
+    desc: "Rectangle, circle, or L-shape beds. Four mix recipes. Bag counts and cost estimate thread through your currency.",
+    cta: "Plan your soil",
+  },
+  {
+    id: "companion",
+    title: "Companion Planting Checker",
+    desc: "Which crops help each other. Which crops fight. Compatibility matrix with reasons, plus eight tested bed recipes.",
+    cta: "Check compatibility",
+  },
+  {
+    id: "planting-dates",
+    title: "Planting Date Calculator",
+    desc: "USDA zones 3-11 or manual frost entry. Hemisphere-aware. Per-crop indoor, transplant, sow, and harvest windows on a 12-month timeline.",
+    cta: "Plan your calendar",
+  },
+];
+
+function FeaturesSection() {
+  return (
+    <LandingSection id="features" bg={T.bg2}>
+      <SectionHeading
+        eyebrow="Four free calculators"
+        title="Every part of a growing plan, worked out"
+        subtitle="No account, no trial, no paywall on the essentials. Each calculator runs in your browser and saves to your device." />
+      <div style={{
+        marginTop: 40, display: "grid", gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+      }}>
+        {FEATURE_CARDS.map((f) => (
+          <a key={f.id} href={`#${f.id}`}
+            onClick={(e) => { e.preventDefault(); window.location.hash = f.id; }}
+            style={{
+              display: "flex", flexDirection: "column",
+              padding: 22, borderRadius: T.radiusLg,
+              background: T.card, border: `1.5px solid ${T.border}`,
+              textDecoration: "none", cursor: "pointer",
+              transition: "transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease",
+              boxShadow: T.shadow.sm,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateY(-2px)";
+              e.currentTarget.style.borderColor = T.primary;
+              e.currentTarget.style.boxShadow = T.shadow.md;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "translateY(0)";
+              e.currentTarget.style.borderColor = T.border;
+              e.currentTarget.style.boxShadow = T.shadow.sm;
+            }}>
+            <h3 style={{
+              margin: 0, fontFamily: T.fontDisplay,
+              fontSize: 22, fontWeight: 400, color: T.tx,
+            }}>{f.title}</h3>
+            <p style={{
+              margin: "10px 0 0", fontSize: 14, color: T.tx2, lineHeight: 1.55,
+            }}>{f.desc}</p>
+            <div style={{
+              marginTop: "auto", paddingTop: 14,
+              fontSize: 13, fontWeight: 700, color: T.primary,
+              display: "inline-flex", alignItems: "center", gap: 4,
+            }}>{f.cta} <span aria-hidden="true">→</span></div>
+          </a>
+        ))}
+      </div>
+    </LandingSection>
+  );
+}
+
+function HowItWorksSection() {
+  const steps = [
+    { n: "1", title: "Tell us about your family",
+      body: "Family size, what you like to eat, the crops you're willing to grow. Set your hemisphere and zone or enter your own frost dates." },
+    { n: "2", title: "See the math worked out",
+      body: "Plant counts, bed space, soil volume, companion matrix, and a 12-month planting timeline. Everything updates live as you change inputs." },
+    { n: "3", title: "(Later) Unlock the full growing plan",
+      body: "Paid tier adds an AI-generated personalised plan, a searchable crop database, cost savings tracking, and a preservation planner. Pay once, keep it." },
+  ];
+  return (
+    <LandingSection id="how-it-works">
+      <SectionHeading
+        eyebrow="How it works"
+        title="A plan, not a subscription" />
+      <div style={{
+        marginTop: 40, display: "grid", gap: 20,
+        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+      }}>
+        {steps.map((s) => (
+          <div key={s.n} style={{
+            position: "relative",
+            padding: "28px 24px 24px", borderRadius: T.radiusLg,
+            background: T.card, border: `1.5px solid ${T.border}`,
+          }}>
+            <div style={{
+              position: "absolute", top: -18, left: 22,
+              width: 40, height: 40, borderRadius: 999,
+              background: T.primary, color: "#FEFCF8",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: T.fontNum, fontSize: 20, fontWeight: 700,
+              border: `3px solid ${T.bg}`,
+            }}>{s.n}</div>
+            <h3 style={{
+              margin: "6px 0 0", fontFamily: T.fontBody,
+              fontSize: 17, fontWeight: 700, color: T.tx,
+            }}>{s.title}</h3>
+            <p style={{
+              margin: "10px 0 0", fontSize: 14, color: T.tx2, lineHeight: 1.55,
+            }}>{s.body}</p>
+          </div>
+        ))}
+      </div>
+    </LandingSection>
+  );
+}
+
+function ComparisonSection() {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const rows = [
+    { tool: "Homestead Harvest Planner", cost: "$19.99 once", fiveYears: "$19.99", afterStop: "Keep everything", ours: true },
+    { tool: "GrowVeg", cost: "$29 / year", fiveYears: "$145", afterStop: "Plans locked" },
+    { tool: "Old Farmer's Almanac Planner", cost: "$29 / year", fiveYears: "$145", afterStop: "Plans locked" },
+    { tool: "Seedtime (paid tier)", cost: "from ~$10 / month", fiveYears: "~$420+", afterStop: "Plans locked" },
+  ];
+  const cell = (r, text, isFirst) => ({
+    padding: isMobile ? "12px 10px" : "14px 16px",
+    fontSize: isMobile ? 13 : 14,
+    color: r.ours ? T.tx : T.tx2,
+    fontWeight: r.ours ? 700 : 500,
+    background: r.ours ? T.primaryBg : "transparent",
+    borderTop: isFirst ? "none" : `1px solid ${T.border}`,
+    textAlign: "left",
+    whiteSpace: isMobile ? "normal" : "nowrap",
+    verticalAlign: "top",
+  });
+  return (
+    <LandingSection id="comparison" bg={T.bg2}>
+      <SectionHeading
+        eyebrow="Why not a subscription?"
+        title="Five years of garden plans for less than one year of the others"
+        subtitle="The other tools lock your plans when you stop paying. We don't. The product is yours once you buy it." />
+      <div style={{
+        marginTop: 36, overflowX: "auto",
+        borderRadius: T.radiusLg, border: `1.5px solid ${T.border}`,
+        background: T.card,
+      }}>
+        <table style={{ width: "100%", minWidth: isMobile ? 480 : "auto", borderCollapse: "collapse", fontFamily: T.fontBody }}>
+          <thead>
+            <tr>
+              {["Tool", "Cost", "5-year total", "If you stop paying"].map((h, i) => (
+                <th key={h} style={{
+                  padding: isMobile ? "12px 10px" : "14px 16px",
+                  fontSize: 12, fontWeight: 700, color: T.tx2,
+                  letterSpacing: "0.06em", textTransform: "uppercase",
+                  textAlign: "left", background: T.bg2,
+                  borderBottom: `1.5px solid ${T.border}`,
+                  whiteSpace: isMobile && i === 3 ? "normal" : "nowrap",
+                }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.tool}>
+                <td style={cell(r, r.tool, i === 0)}>
+                  {r.ours && (
+                    <div style={{
+                      display: "inline-block", padding: "2px 8px", borderRadius: 999,
+                      background: T.primary, color: "#FEFCF8",
+                      fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
+                      textTransform: "uppercase", marginRight: 8,
+                    }}>Us</div>
+                  )}
+                  {r.tool}
+                </td>
+                <td style={{ ...cell(r, r.cost, i === 0), fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
+                  {r.cost}
+                </td>
+                <td style={{ ...cell(r, r.fiveYears, i === 0), fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
+                  {r.fiveYears}
+                </td>
+                <td style={cell(r, r.afterStop, i === 0)}>{r.afterStop}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p style={{
+        marginTop: 16, fontSize: 12, color: T.tx3, lineHeight: 1.55, textAlign: "center",
+      }}>
+        Prices verified on vendor pages early 2026. Seedtime's paid tier varies by feature level.
+        GrowVeg and Old Farmer's Almanac use the same underlying planner (Growing Interactive).
+      </p>
+    </LandingSection>
+  );
+}
+
+function PricingSection() {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const features = [
+    "AI-generated personalised growing plan",
+    "Complete crop database with 60+ vegetables and varieties",
+    "Cost savings calculator with ROI and break-even timeline",
+    "Preservation planner (can, freeze, dehydrate, root cellar)",
+    "Self-contained HTML report you can save, print, or email",
+    "Works on your phone in the garden, mobile-first",
+    "3-device license, never expires",
+  ];
+  return (
+    <LandingSection id="pricing">
+      <SectionHeading
+        eyebrow="Pricing"
+        title="Pay once. Use forever."
+        subtitle="The four free calculators above stay free. The paid tier unlocks the full growing plan plus the rest." />
+      <div style={{
+        marginTop: 36,
+        maxWidth: 520, marginLeft: "auto", marginRight: "auto",
+        padding: isMobile ? "28px 24px" : "40px 36px",
+        borderRadius: T.radiusLg,
+        background: T.card,
+        border: `1.5px solid ${T.border}`,
+        boxShadow: T.shadow.lg,
+        textAlign: "center",
+      }}>
+        <div style={{
+          display: "inline-block", padding: "6px 14px", borderRadius: T.radiusPill,
+          background: T.accentBg, color: T.accent,
+          fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+          marginBottom: 16,
+        }}>
+          Full Growing Plan
+        </div>
+        <div style={{
+          fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+          fontSize: "clamp(3rem, 7vw, 4.5rem)", fontWeight: 700, color: T.tx,
+          lineHeight: 1,
+        }}>
+          $19.99
+        </div>
+        <div style={{
+          marginTop: 8, fontSize: 14, color: T.tx2, fontWeight: 600,
+        }}>One-time purchase. No renewal.</div>
+
+        <ul style={{
+          listStyle: "none", padding: 0, margin: "28px 0 0",
+          textAlign: "left", display: "grid", gap: 10,
+        }}>
+          {features.map((f) => (
+            <li key={f} style={{
+              display: "flex", alignItems: "flex-start", gap: 10,
+              fontSize: 15, color: T.tx, lineHeight: 1.5,
+            }}>
+              <span aria-hidden="true" style={{
+                flexShrink: 0, width: 20, height: 20, borderRadius: 999,
+                background: T.primaryBg, color: T.primary,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                fontWeight: 700, fontSize: 12, marginTop: 2,
+              }}>✓</span>
+              {f}
+            </li>
+          ))}
+        </ul>
+
+        <button type="button" disabled
+          style={{
+            marginTop: 28, width: "100%",
+            padding: "16px 24px", minHeight: 56,
+            background: T.tx3, color: "#FEFCF8",
+            border: "none", borderRadius: T.radiusPill,
+            fontFamily: T.fontBody, fontSize: 16, fontWeight: 700,
+            cursor: "not-allowed", opacity: 0.65,
+          }}>
+          Coming soon
+        </button>
+        <p style={{
+          margin: "14px 0 0", fontSize: 12, color: T.tx3, lineHeight: 1.5,
+        }}>
+          Paid tier launches with Session 4. All four calculators above stay free.
+        </p>
+      </div>
+    </LandingSection>
+  );
+}
+
+const FAQ_ITEMS = [
+  {
+    q: "Does this work for my zone? I'm in zone 4b, or UK, or Australia.",
+    a: "The Planting Dates tab covers USDA zones 3 through 11 with frost dates pre-loaded. For the UK, EU, Australia, South Africa or anywhere else, you enter your own last-frost and first-frost dates and the calculator works the same way. No region lock. Hemisphere toggle flips all dates for southern-hemisphere users.",
+  },
+  {
+    q: "Do I need to create an account?",
+    a: "No. You buy once, you get a license key, your data lives in your browser. No email verification loops, no password resets. If you want to back up your plan, use the export button and save the file somewhere you trust.",
+  },
+  {
+    q: "What happens to my garden plan if I stop paying?",
+    a: "Nothing. You don't keep paying. One payment, lifetime access. Your plan is yours. Contrast that with GrowVeg and the Almanac planner, where skipping a renewal locks your layouts.",
+  },
+  {
+    q: "Does it work on my phone? I'm usually outside when I'm planning.",
+    a: "Yes. The interface is mobile-first. 16 px inputs so iPhone doesn't auto-zoom. 44 px touch targets so you can tap with muddy fingers. No app store install, no 200 MB download. Open the link and bookmark it.",
+  },
+  {
+    q: "Are the yield estimates accurate?",
+    a: "They're estimates based on extension-service averages (Maryland, Cornell, Utah State, Texas A&M), not magic. Actual yield depends on your soil, water, weather, pests, and luck. The tool gives you a realistic planning number so you don't over-plant or under-plant. Track your real numbers each year and the plan gets more useful.",
+  },
+  {
+    q: "Is companion planting in here? I've read some of it is folklore.",
+    a: "Good instinct. Our 153 pairings are sourced from university extensions and peer-reviewed allelopathy studies, with a short mechanism note on every entry. We skip \"basil makes tomatoes taste better\" style claims that don't have evidence.",
+  },
+  {
+    q: "Does it use AI?",
+    a: "The four free calculators are plain math. The paid growing-plan tab uses Claude (by Anthropic) to generate a personalised monthly schedule from your inputs. Everything is clearly labelled so you know where the math ends and the AI begins.",
+  },
+  {
+    q: "What's the refund policy?",
+    a: "48 hours after purchase, no questions asked, for technical failure or accidental duplicate purchases. The checkout runs through LemonSqueezy, who process the refund within a few business days.",
+  },
+];
+
+function FAQSection() {
+  const [openIdx, setOpenIdx] = useState(0);
+  return (
+    <LandingSection id="faq" bg={T.bg2} maxWidth={820}>
+      <SectionHeading
+        eyebrow="Questions"
+        title="Everything a homesteader asks before buying a planning tool" />
+      <div style={{
+        marginTop: 32, display: "flex", flexDirection: "column", gap: 10,
+      }}>
+        {FAQ_ITEMS.map((item, i) => {
+          const open = openIdx === i;
+          return (
+            <div key={item.q} style={{
+              borderRadius: T.radius,
+              background: T.card, border: `1.5px solid ${open ? T.primary : T.border}`,
+              overflow: "hidden",
+              transition: "border-color 0.18s ease",
+            }}>
+              <button type="button"
+                onClick={() => setOpenIdx(open ? -1 : i)}
+                aria-expanded={open}
+                style={{
+                  width: "100%", padding: "16px 20px", minHeight: 56,
+                  background: "transparent", border: "none", cursor: "pointer",
+                  fontFamily: T.fontBody, textAlign: "left",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  gap: 12, fontSize: 15, fontWeight: 700, color: T.tx,
+                }}>
+                <span>{item.q}</span>
+                <span aria-hidden="true" style={{
+                  flexShrink: 0, width: 24, height: 24,
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 20, color: T.primary, fontWeight: 400,
+                  transform: open ? "rotate(45deg)" : "none",
+                  transition: "transform 0.2s ease",
+                }}>+</span>
+              </button>
+              {open && (
+                <div style={{
+                  padding: "0 20px 18px", fontSize: 14,
+                  color: T.tx2, lineHeight: 1.6,
+                }}>
+                  {item.a}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </LandingSection>
   );
 }
 
@@ -2011,18 +3118,99 @@ function TabPageShell({ title, blurb, children }) {
 }
 
 function AppFooter() {
+  const year = new Date().getFullYear();
+  const linkStyle = {
+    color: T.tx2, textDecoration: "none", fontSize: 13,
+    fontWeight: 500, padding: "4px 0",
+  };
   return (
     <footer style={{
       background: T.bg2, borderTop: `1px solid ${T.border}`,
-      padding: "32px clamp(16px, 4vw, 48px)",
-      color: T.tx2, fontSize: 13, textAlign: "center",
+      padding: "40px clamp(16px, 4vw, 48px) 28px",
+      color: T.tx2, fontSize: 13,
     }}>
-      <div>
-        Homestead Harvest Planner · by{" "}
-        <a href="#home" style={{ color: T.primary, textDecoration: "none", fontWeight: 600 }}>Urban Root</a>
-      </div>
-      <div style={{ marginTop: 6, color: T.tx3 }}>
-        Session 1 preview. Soil calculator, companion checker, and planting dates coming soon.
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{
+          display: "grid", gap: 28,
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+          alignItems: "start",
+        }}>
+          {/* Brand */}
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{
+                width: 32, height: 32, borderRadius: 8,
+                background: T.primary, color: T.bg,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: T.fontDisplay, fontSize: 20, fontWeight: 400,
+              }}>H</span>
+              <span style={{
+                fontFamily: T.fontDisplay, fontSize: 17, color: T.tx, fontWeight: 400,
+              }}>Homestead Harvest Planner</span>
+            </div>
+            <p style={{
+              margin: "12px 0 0", fontSize: 13, color: T.tx3, lineHeight: 1.55, maxWidth: 280,
+            }}>
+              A homesteading garden planner that you pay for once and keep forever.
+            </p>
+          </div>
+
+          {/* Calculators */}
+          <div>
+            <div style={{
+              fontSize: 12, fontWeight: 700, color: T.tx, textTransform: "uppercase",
+              letterSpacing: "0.08em", marginBottom: 10,
+            }}>Calculators</div>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <a href="#home" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}>Self-Sufficiency</a>
+              <a href="#soil" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "soil"; }}>Soil</a>
+              <a href="#companion" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "companion"; }}>Companion Planting</a>
+              <a href="#planting-dates" style={linkStyle}
+                onClick={(e) => { e.preventDefault(); window.location.hash = "planting-dates"; }}>Planting Dates</a>
+            </div>
+          </div>
+
+          {/* Learn */}
+          <div>
+            <div style={{
+              fontSize: 12, fontWeight: 700, color: T.tx, textTransform: "uppercase",
+              letterSpacing: "0.08em", marginBottom: 10,
+            }}>Learn</div>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <a href="#features" style={linkStyle}>Features</a>
+              <a href="#how-it-works" style={linkStyle}>How it works</a>
+              <a href="#pricing" style={linkStyle}>Pricing</a>
+              <a href="#faq" style={linkStyle}>FAQ</a>
+            </div>
+          </div>
+
+          {/* Legal + Contact */}
+          <div>
+            <div style={{
+              fontSize: 12, fontWeight: 700, color: T.tx, textTransform: "uppercase",
+              letterSpacing: "0.08em", marginBottom: 10,
+            }}>Support</div>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <a href="mailto:urbanroot.contact@gmail.com" style={linkStyle}>Contact</a>
+              <a href="/privacy.html" style={linkStyle}>Privacy</a>
+              <a href="/terms.html" style={linkStyle}>Terms</a>
+              <a href="/refund.html" style={linkStyle}>Refund policy</a>
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          marginTop: 32, paddingTop: 20, borderTop: `1px solid ${T.border}`,
+          display: "flex", flexWrap: "wrap", gap: 12,
+          alignItems: "center", justifyContent: "space-between",
+          fontSize: 12, color: T.tx3,
+        }}>
+          <div>© {year} Urban Root. Pay once, use forever.</div>
+          <div>Built for homesteaders who read extension-service PDFs for fun.</div>
+        </div>
       </div>
     </footer>
   );
@@ -2108,6 +3296,41 @@ export default function App() {
   const setCompanionBed = (ids) => setCompanionSelection((s) => ({ ...s, bed: ids }));
   const setCompanionFocus = (id) => setCompanionSelection((s) => ({ ...s, focus: id }));
 
+  // Planting Date Calculator state
+  const [plantingState, setPlantingState] = useState(() => {
+    const saved = loadState(LS_PLANTING, null);
+    const thisYear = new Date().getFullYear();
+    const defaults = {
+      mode: "zone",
+      zone: 7,
+      manualFrost: { lastSpring: "", firstFall: "" },
+      selectedCrops: [...PLANTING_DATE_DEFAULT_CROPS],
+      referenceYear: thisYear,
+      sowMethodChoice: {},
+    };
+    if (!saved || typeof saved !== "object") return defaults;
+    const valid = {
+      mode: saved.mode === "manual" ? "manual" : "zone",
+      zone: ZONE_FROST_DATES[saved.zone] ? saved.zone : 7,
+      manualFrost: typeof saved.manualFrost === "object" && saved.manualFrost
+        ? { lastSpring: saved.manualFrost.lastSpring || "", firstFall: saved.manualFrost.firstFall || "" }
+        : defaults.manualFrost,
+      selectedCrops: Array.isArray(saved.selectedCrops)
+        ? saved.selectedCrops.filter((id) => CROPS[id])
+        : defaults.selectedCrops,
+      referenceYear: Number.isFinite(Number(saved.referenceYear))
+        ? clampInt(Number(saved.referenceYear), thisYear - 1, thisYear + 2)
+        : thisYear,
+      sowMethodChoice: typeof saved.sowMethodChoice === "object" && saved.sowMethodChoice
+        ? Object.fromEntries(Object.entries(saved.sowMethodChoice).filter(
+            ([id, m]) => CROPS[id] && (m === "transplant" || m === "direct")
+          ))
+        : {},
+    };
+    if (valid.selectedCrops.length === 0) valid.selectedCrops = defaults.selectedCrops;
+    return valid;
+  });
+
   // Persist settings
   useEffect(() => { persistState(LS_METRIC, metric); }, [metric]);
   useEffect(() => { persistState(LS_CURRENCY, currency); }, [currency]);
@@ -2118,8 +3341,11 @@ export default function App() {
   useEffect(() => { persistState(LS_COMPANION, companionSelection); }, [companionSelection]);
   useEffect(() => { persistState(LS_HEMISPHERE, hemisphere); }, [hemisphere]);
   useEffect(() => { persistState(LS_PRODUCE_TARGET, producePerPerson); }, [producePerPerson]);
+  useEffect(() => { persistState(LS_PLANTING, plantingState); }, [plantingState]);
 
-  // Hash routing: mount-only init + back/forward
+  // Hash routing: mount-only init + back/forward + hashchange.
+  // hashchange covers footer links like #features that are landing-section
+  // anchors, not tab ids — we route those to Home and scroll to the anchor.
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     const resolvedInit = resolveHash(hash);
@@ -2132,8 +3358,27 @@ export default function App() {
         : (VALID_TABS.includes(hashTab) ? hashTab : "home");
       setTab(next);
     };
+    const onHashChange = () => {
+      const h = window.location.hash.slice(1);
+      if (!h) return;
+      const resolved = resolveHash(h);
+      if (VALID_TABS.includes(resolved)) {
+        setTab(resolved);
+      } else {
+        // Landing-section anchor: ensure we're on Home, then scroll to it.
+        setTab("home");
+        setTimeout(() => {
+          const el = document.getElementById(h);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 60);
+      }
+    };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("hashchange", onHashChange);
+    };
   }, []);
 
   // Tab change: update hash + scroll to top
@@ -2201,7 +3446,17 @@ export default function App() {
               setFocusCropId={setCompanionFocus} />
           </TabPageShell>
         )}
-        {tab !== "home" && tab !== "soil" && tab !== "companion" && (
+        {tab === "planting-dates" && (
+          <TabPageShell
+            title="Planting Date Calculator"
+            blurb="Pick a hardiness zone or enter your own frost dates. Get per-crop indoor, transplant, direct-sow and harvest windows laid out on a 12-month timeline.">
+            <PlantingDateCalculator
+              plantingState={plantingState}
+              setPlantingState={setPlantingState}
+              hemisphere={hemisphere} />
+          </TabPageShell>
+        )}
+        {tab !== "home" && tab !== "soil" && tab !== "companion" && tab !== "planting-dates" && (
           <ComingSoon tab={activeTab} />
         )}
       </main>
