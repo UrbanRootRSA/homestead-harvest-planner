@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Homestead Harvest Planner - Companion Planting database
+// The Homestead Plan - Companion Planting database
 // ═══════════════════════════════════════════════════════════════════════════
 // Pairwise relationships documented by university extensions (WVU, UMN,
 // Cornell, NC State, UC IPM, Maryland, Utah State), Louise Riotte's

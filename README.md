@@ -1,4 +1,4 @@
-# Homestead Harvest Planner
+# The Homestead Plan
 
 Urban Root's flagship soil-growing calculator and planning tool for homesteaders.
 

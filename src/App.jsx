@@ -4,7 +4,7 @@ import { COMPANIONS, COMPANION_GROUPINGS, getCompanion } from "./data/companions
 // COMPANIONS kept in the import surface for the future Crop Database tab.
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Theme (T) - Homestead Harvest Planner: Forest & Terracotta ──
+// ── Theme (T) - The Homestead Plan: Forest & Terracotta ──
 // ═══════════════════════════════════════════════════════════════════════════
 const T = {
   bg: "#FAF7F2",
@@ -771,7 +771,7 @@ function BrandMark({ size = 32 }) {
       flexShrink: 0,
     }}>
       <svg viewBox="0 0 32 32" width={size * 0.62} height={size * 0.62}
-        role="img" aria-label="Homestead Harvest Planner logo">
+        role="img" aria-label="The Homestead Plan logo">
         {/* Stylised "H" - two verticals and a crossbar, evoking raised beds */}
         <rect x="7"  y="5"  width="3.5" height="22" rx="1" fill={T.bg} />
         <rect x="21.5" y="5" width="3.5" height="22" rx="1" fill={T.bg} />
@@ -2942,7 +2942,7 @@ function HowItWorksSection() {
 function ComparisonSection() {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const rows = [
-    { tool: "Homestead Harvest Planner", cost: "$19.99 once", fiveYears: "$19.99", afterStop: "Keep everything", ours: true },
+    { tool: "The Homestead Plan", cost: "$19.99 once", fiveYears: "$19.99", afterStop: "Keep everything", ours: true },
     { tool: "GrowVeg", cost: "$29 / year", fiveYears: "$145", afterStop: "Plans locked" },
     { tool: "Old Farmer's Almanac Planner", cost: "$29 / year", fiveYears: "$145", afterStop: "Plans locked" },
     { tool: "Seedtime (paid tier)", cost: "from ~$10 / month", fiveYears: "~$420+", afterStop: "Plans locked" },
@@ -3898,7 +3898,7 @@ function GrowingPlanTab({
     const a = downloadAnchorRef.current;
     if (!a) return;
     a.href = url;
-    a.download = `Homestead-Harvest-Plan-${new Date().toISOString().slice(0, 10)}.html`;
+    a.download = `The-Homestead-Plan-${new Date().toISOString().slice(0, 10)}.html`;
     a.click();
   };
 
@@ -4588,7 +4588,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Homestead Harvest Plan - ${escapeHtml(dateStr)}</title>
+<title>The Homestead Plan - ${escapeHtml(dateStr)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Plus+Jakarta+Sans:wght@400;600;700&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
@@ -4598,7 +4598,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   <div class="wrap">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
       <div>
-        <h1>Your Homestead Harvest Plan</h1>
+        <h1>Your Personalised Growing Plan</h1>
         <div class="muted">by Urban Root &middot; generated ${escapeHtml(dateStr)}</div>
       </div>
       <button class="print-btn" type="button" onclick="window.print()">Save as PDF</button>
@@ -4635,7 +4635,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
 
     <footer>
       <p style="margin:0 0 6px;"><strong>Disclaimer.</strong> This plan was generated automatically from your inputs. Generated plans are advisory, not authoritative; cross-check with local extension-service guidance before acting on anything irreversible.</p>
-      <p style="margin:0;">Homestead Harvest Planner by Urban Root &middot; thehomesteadplan.com</p>
+      <p style="margin:0;">The Homestead Plan by Urban Root &middot; thehomesteadplan.com</p>
     </footer>
   </div>
 </body>
@@ -5985,14 +5985,14 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
             a premium print journal instead of a calculator widget. */}
         <a href="#home"
           onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
-          style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 14, textDecoration: "none" }}>
-          <BrandMark size={isMobile ? 36 : 48} />
+          style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 16, textDecoration: "none" }}>
+          <BrandMark size={isMobile ? 42 : 56} />
           <span style={{
-            fontFamily: T.fontDisplay, fontSize: isMobile ? 20 : 28,
-            color: T.tx, fontWeight: 400, letterSpacing: "-0.01em",
+            fontFamily: T.fontDisplay, fontSize: isMobile ? 22 : 34,
+            color: T.tx, fontWeight: 400, letterSpacing: "-0.015em",
             lineHeight: 1.05,
           }}>
-            {isMobile ? "Homestead" : "Homestead Harvest Planner"}
+            {isMobile ? "The Homestead Plan" : "The Homestead Plan"}
           </span>
         </a>
 
@@ -6330,7 +6330,7 @@ function AppFooter() {
               <BrandMark size={32} />
               <span style={{
                 fontFamily: T.fontDisplay, fontSize: 17, color: T.tx, fontWeight: 400,
-              }}>Homestead Harvest Planner</span>
+              }}>The Homestead Plan</span>
             </div>
             <p style={{
               margin: "12px 0 0", fontSize: 13, color: T.tx3, lineHeight: 1.55,

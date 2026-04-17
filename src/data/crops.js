@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Homestead Harvest Planner - Crop database
+// The Homestead Plan - Crop database
 // ═══════════════════════════════════════════════════════════════════════════
 // Single source of truth for every crop the planner knows about. Split out of
 // App.jsx so the database can scale past ~100 entries without making the UI
