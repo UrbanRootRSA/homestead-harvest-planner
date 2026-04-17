@@ -2,7 +2,7 @@
 //
 // Security layers (cheapest-first rejection):
 //   1. Method check (POST only)
-//   2. Origin / Referer allowlist (production + localhost only — no preview deploys
+//   2. Origin / Referer allowlist (production + localhost only - no preview deploys
 //      because this endpoint costs Anthropic credits)
 //   3. Licence-key gate: validated against Upstash cache or LemonSqueezy API
 //   4. Per-licence rate limit (falls back to per-IP if licence isn't present)
@@ -11,7 +11,7 @@
 //   7. Schema-shape sanitisation on the way back out
 //
 // The system prompt is large (~3 KB) and stable, so it's a `cache_control`
-// breakpoint — repeat callers pay the cache-read price (~10% of input) on
+// breakpoint - repeat callers pay the cache-read price (~10% of input) on
 // every prompt token after the first request inside the 5-minute TTL window.
 //
 // Sonnet 4.6 chosen (not Opus) because this is a paywall-gated feature on a
@@ -36,17 +36,17 @@ const ALLOWED_ORIGINS = [
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 // Model alias per Anthropic skill cached 2026-04-15. Do NOT switch to a
-// dated suffix — the alias is the source of truth and tracks model upgrades.
+// dated suffix - the alias is the source of truth and tracks model upgrades.
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4096;
 
-// Per-licence rate limit. 20 generations per hour per key — generous enough
+// Per-licence rate limit. 20 generations per hour per key - generous enough
 // for legitimate iteration, tight enough to bound a stolen-key abuse blast.
 const RL_MAX = 20;
 const RL_WINDOW_SEC = 3600; // 1 hour
 
 // Anthropic API requires absolute upper bounds on inputs we'll later reflect
-// in the prompt — guards against an attacker crafting a 200 KB payload that
+// in the prompt - guards against an attacker crafting a 200 KB payload that
 // inflates billable tokens.
 const MAX_CROPS = 64;
 const MAX_GOALS = 8;
@@ -72,7 +72,7 @@ function isAllowedOrigin(req) {
     if (referer.startsWith(allowed + "/") || referer === allowed) return true;
   }
   // Vercel-assigned URLs for this project (matches validate-key.js).
-  // Licence-key gate still protects Anthropic spend — origin check is defence-in-depth.
+  // Licence-key gate still protects Anthropic spend - origin check is defence-in-depth.
   if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
   if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
   return false;
@@ -141,13 +141,13 @@ async function validateLicence(key, instanceId) {
     if (instanceId && typeof instanceId === "string" && instanceId.length <= 64) {
       ls = await callLs(LS_VALIDATE, { license_key: key, instance_id: instanceId });
     } else {
-      // No instance — fall back to validate-only (will return active=true if the
+      // No instance - fall back to validate-only (will return active=true if the
       // key exists at all, even with no activation). This matches the cached-key
       // grace path used in the client.
       ls = await callLs(LS_VALIDATE, { license_key: key });
     }
     if (ls.status >= 500) {
-      // LS unreachable — fail closed for paid endpoints.
+      // LS unreachable - fail closed for paid endpoints.
       console.error("[generate] LS unreachable during validation:", ls.status);
       return false;
     }
@@ -204,7 +204,7 @@ function sanitiseInput(body) {
   const lastSpringFrost = clampStr(body.lastSpringFrost, 32);
   const firstFallFrost = clampStr(body.firstFallFrost, 32);
   const hemisphere = body.hemisphere === "south" ? "south" : "north";
-  // gardenSqFt is ALWAYS in sq ft — the client converts before posting.
+  // gardenSqFt is ALWAYS in sq ft - the client converts before posting.
   const gardenSqFt = clampNum(body.gardenSqFt, 1, 50000, 200);
   const sunExposure = clampStr(body.sunExposure, 32);
   const soilType = clampStr(body.soilType, 32);
@@ -213,11 +213,11 @@ function sanitiseInput(body) {
   const goals = clampStrArray(body.goals, MAX_GOALS, 32);
   const crops = clampStrArray(body.crops, MAX_CROPS, MAX_STR);
   // displayUnits controls what units the LLM uses in OUTPUT yields/savings.
-  // Inputs are always in lb and sq ft — see #11/#12 audit fix.
+  // Inputs are always in lb and sq ft - see #11/#12 audit fix.
   const displayUnits = body.displayUnits === "metric" || body.metric === true
     ? "metric" : "imperial";
   const currency = clampStr(body.currency, 3) || "$";
-  // producePerPersonLbs is ALWAYS in lb — the client never converts this.
+  // producePerPersonLbs is ALWAYS in lb - the client never converts this.
   const producePerPersonLbs = clampNum(body.producePerPersonLbs, 50, 800, 300);
   return {
     familySize, zone, lastSpringFrost, firstFallFrost, hemisphere,
@@ -228,7 +228,7 @@ function sanitiseInput(body) {
 
 // ── Prompt construction ─────────────────────────────────────────────────────
 // SYSTEM_PROMPT is frozen. Any byte change here invalidates prompt cache for
-// every prior request — keep edits rare and intentional. New per-request
+// every prior request - keep edits rare and intentional. New per-request
 // context (the user's inputs) goes in the user message, NOT here.
 const SYSTEM_PROMPT = `You are a master gardener and homestead planner. You create personalised, practical growing plans for home gardeners. Your advice is grounded in USDA hardiness zones, companion-planting science, and decades of gardening wisdom.
 
@@ -511,7 +511,7 @@ export default async function handler(req, res) {
   }
 
   // ── Licence gate ──────────────────────────────────────────────────────────
-  // Required for all generate calls — this is a paid feature. instance_id is
+  // Required for all generate calls - this is a paid feature. instance_id is
   // optional (the cached-key grace path).
   const licenseKey = typeof body.licenseKey === "string" ? body.licenseKey.trim() : "";
   const instanceId = typeof body.instanceId === "string" ? body.instanceId.trim() : "";
@@ -525,7 +525,7 @@ export default async function handler(req, res) {
 
   // ── Per-licence rate limit ────────────────────────────────────────────────
   // Hashed for privacy; we never use the raw key as a Redis key. This is the
-  // primary cost-control gate — limits an authenticated attacker to RL_MAX
+  // primary cost-control gate - limits an authenticated attacker to RL_MAX
   // generations per RL_WINDOW_SEC even if they hold a valid key.
   if (!(await rateLimitOK(`lk:${hashKey(licenseKey)}`))) {
     return res.status(429).json({
@@ -550,7 +550,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_TOKENS,
-        // Cache the system prompt — it's stable across all requests, so the
+        // Cache the system prompt - it's stable across all requests, so the
         // first call writes the cache and every later call inside the 5-min
         // TTL pays ~10% of the input price for those tokens.
         system: [
@@ -587,14 +587,14 @@ export default async function handler(req, res) {
     if (!apiResp.ok) {
       const apiErr = data?.error?.message || `Anthropic returned ${apiResp.status}`;
       console.error("[generate] anthropic error:", apiResp.status, apiErr);
-      // Auth misconfiguration — alert via console.error and surface a generic
+      // Auth misconfiguration - alert via console.error and surface a generic
       // user message. 401/403 from Anthropic almost always means an invalid
       // API key, exhausted credits, or a region block.
       if (apiResp.status === 401 || apiResp.status === 403) {
-        console.error("[generate] anthropic auth failure — check ANTHROPIC_API_KEY");
+        console.error("[generate] anthropic auth failure - check ANTHROPIC_API_KEY");
         return res.status(502).json({ ok: false, error: "The plan generator is temporarily unavailable. Please try again later." });
       }
-      // Don't leak the upstream error verbatim — could include API key info
+      // Don't leak the upstream error verbatim - could include API key info
       // in pathological cases. Map to a friendly message by status family.
       const userMsg = apiResp.status === 429
         ? "The plan generator is busy right now. Please try again in a minute."
@@ -633,7 +633,7 @@ export default async function handler(req, res) {
       },
     });
   } catch (e) {
-    // Don't log the full exception object — could include request payload or
+    // Don't log the full exception object - could include request payload or
     // header data. Just message + code for actionable triage.
     console.error("[generate] handler error:", e?.message, e?.code);
     return res.status(500).json({ ok: false, error: "Server error while generating the plan. Please try again." });

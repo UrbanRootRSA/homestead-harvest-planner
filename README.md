@@ -16,4 +16,4 @@ Opens at `http://localhost:5173/`.
 
 ## Status
 
-Session 1 — scaffold + Self-Sufficiency Calculator (Tab 1 of 8).
+Session 1 - scaffold + Self-Sufficiency Calculator (Tab 1 of 8).

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Homestead Harvest Planner — Crop database
+// Homestead Harvest Planner - Crop database
 // ═══════════════════════════════════════════════════════════════════════════
 // Single source of truth for every crop the planner knows about. Split out of
 // App.jsx so the database can scale past ~100 entries without making the UI
@@ -69,7 +69,7 @@ export const CROPS = {
   },
   tomato_paste: {
     name: "Tomatoes (Paste)", category: "fruiting", season: "warm", sowMethod: "transplant",
-    // Meaty, low-water — preservation/sauce workhorses. Mostly determinate.
+    // Meaty, low-water - preservation/sauce workhorses. Mostly determinate.
     daysToMaturity: [70, 85], spacingSqFt: 4, yieldPerPlantLbs: [5, 8],
     sunHours: 8, waterNeeds: "moderate", difficulty: 2,
     avgConsumptionLbsPerPersonYear: 12, groceryPricePerLb: 2.25, caloriesPer100g: 18,
@@ -333,7 +333,7 @@ export const CROPS = {
   },
   mizuna: {
     name: "Mizuna", category: "leafy", season: "cool", sowMethod: "either",
-    // Japanese mustard — feather-cut leaves, cut-and-come-again. Penn State.
+    // Japanese mustard - feather-cut leaves, cut-and-come-again. Penn State.
     daysToMaturity: [35, 50], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 4, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 8.00, caloriesPer100g: 21,
@@ -366,7 +366,7 @@ export const CROPS = {
   },
   sorrel: {
     name: "Sorrel", category: "leafy", season: "perennial", sowMethod: "either",
-    // Rumex acetosa — lemony perennial green, 5-year stand. UMN Extension.
+    // Rumex acetosa - lemony perennial green, 5-year stand. UMN Extension.
     daysToMaturity: [55, 70], spacingSqFt: 1, yieldPerPlantLbs: [0.5, 1],
     sunHours: 4, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 0.5, groceryPricePerLb: 10.00, caloriesPer100g: 22,
@@ -377,7 +377,7 @@ export const CROPS = {
   },
   malabar_spinach: {
     name: "Malabar Spinach", category: "leafy", season: "warm", sowMethod: "transplant",
-    // Basella alba — tropical vining heat-lover, 27°C+ for growth. UF IFAS + Wisconsin Hort.
+    // Basella alba - tropical vining heat-lover, 27°C+ for growth. UF IFAS + Wisconsin Hort.
     daysToMaturity: [65, 85], spacingSqFt: 1, yieldPerPlantLbs: [1, 2],
     sunHours: 6, waterNeeds: "high", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 5.00, caloriesPer100g: 19,
@@ -472,7 +472,7 @@ export const CROPS = {
   },
   parsnip: {
     name: "Parsnips", category: "root", season: "cool", sowMethod: "direct",
-    // Taproot — transplants poorly. Slow to germinate (2-3 weeks). Flavor
+    // Taproot - transplants poorly. Slow to germinate (2-3 weeks). Flavor
     // sweetens after first frost. UK / Northern-European staple.
     daysToMaturity: [100, 130], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
@@ -496,7 +496,7 @@ export const CROPS = {
   },
   horseradish: {
     name: "Horseradish", category: "root", season: "perennial", sowMethod: "transplant",
-    // Armoracia rusticana — dig roots year 1+, spreads aggressively. USU + UMN + Penn State.
+    // Armoracia rusticana - dig roots year 1+, spreads aggressively. USU + UMN + Penn State.
     // Use a buried-bucket bed or expect it to naturalise.
     daysToMaturity: [140, 180], spacingSqFt: 1, yieldPerPlantLbs: [1, 3],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
@@ -508,8 +508,8 @@ export const CROPS = {
   },
   jerusalem_artichoke: {
     name: "Jerusalem Artichoke (Sunchoke)", category: "root", season: "perennial", sowMethod: "direct",
-    // Helianthus tuberosus — plant tubers spring, harvest after frost. NCSU + OSU.
-    // Allelopathic and invasive — isolate to its own bed.
+    // Helianthus tuberosus - plant tubers spring, harvest after frost. NCSU + OSU.
+    // Allelopathic and invasive - isolate to its own bed.
     daysToMaturity: [110, 150], spacingSqFt: 1, yieldPerPlantLbs: [1, 2.5],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 4.50, caloriesPer100g: 73,
@@ -520,7 +520,7 @@ export const CROPS = {
   },
   ginger: {
     name: "Ginger", category: "root", season: "warm", sowMethod: "direct",
-    // Zingiber officinale — tropical rhizome, 8-10 month cycle. Container crop below zone 9.
+    // Zingiber officinale - tropical rhizome, 8-10 month cycle. Container crop below zone 9.
     // Use 5-gal+ pots. Texas A&M + VCE + CTAHR Hawaii.
     daysToMaturity: [240, 300], spacingSqFt: 1, yieldPerPlantLbs: [1, 2],
     sunHours: 5, waterNeeds: "high", difficulty: 3,
@@ -770,7 +770,7 @@ export const CROPS = {
   },
   tarragon: {
     name: "French Tarragon", category: "herb", season: "perennial", sowMethod: "transplant",
-    // True French (Artemisia dracunculus 'Sativa') propagates only by division/cuttings —
+    // True French (Artemisia dracunculus 'Sativa') propagates only by division/cuttings -
     // no seed. Russian tarragon is seed-grown but tasteless. USU + Illinois Extension.
     daysToMaturity: [75, 95], spacingSqFt: 2.25, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 6, waterNeeds: "low", difficulty: 2,
@@ -778,11 +778,11 @@ export const CROPS = {
     preservation: ["dehydrate", "freeze"],
     startIndoorsWeeks: null, transplantWeeks: 2, directSowWeeks: null,
     harvestStartWeeks: 14, harvestDurationWeeks: 18,
-    varieties: "French (Sativa — true flavour, division only), Russian (seed-grown, mild)",
+    varieties: "French (Sativa - true flavour, division only), Russian (seed-grown, mild)",
   },
   marjoram: {
     name: "Sweet Marjoram", category: "herb", season: "perennial", sowMethod: "transplant",
-    // Origanum majorana — tender perennial zone 9+; annual elsewhere. Illinois Extension.
+    // Origanum majorana - tender perennial zone 9+; annual elsewhere. Illinois Extension.
     daysToMaturity: [60, 90], spacingSqFt: 1, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 6, waterNeeds: "low", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 0.15, groceryPricePerLb: 20.00, caloriesPer100g: 271,
@@ -857,7 +857,7 @@ export const CROPS = {
   },
   fennel: {
     name: "Florence Fennel (Bulb)", category: "other", season: "cool", sowMethod: "either",
-    // Foeniculum vulgare var. azoricum — bolt-prone in heat. UNH + Wisconsin Hort.
+    // Foeniculum vulgare var. azoricum - bolt-prone in heat. UNH + Wisconsin Hort.
     // Allelopathic: isolate from beans, tomato, coriander.
     daysToMaturity: [65, 100], spacingSqFt: 0.25, yieldPerPlantLbs: [0.5, 1],
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
@@ -881,7 +881,7 @@ export const CROPS = {
   },
   globe_artichoke: {
     name: "Globe Artichoke", category: "other", season: "perennial", sowMethod: "transplant",
-    // Cynara cardunculus var. scolymus — perennial zones 7+, annual strategy elsewhere.
+    // Cynara cardunculus var. scolymus - perennial zones 7+, annual strategy elsewhere.
     // UMass Amherst + Cornell + Texas A&M. ~0.4 lb/head × 6 heads = 2-3 lb/plant.
     daysToMaturity: [90, 180], spacingSqFt: 9, yieldPerPlantLbs: [1.5, 3],
     sunHours: 7, waterNeeds: "moderate", difficulty: 3,

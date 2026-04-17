@@ -22,7 +22,7 @@ function rasterise({ inputSvg, outputPng, width, height, label }) {
     // fallback chain so "DM Serif Display" / "Plus Jakarta Sans" degrade
     // gracefully to whatever the host has rather than rendering as blank
     // rectangles. For production-grade social previews you'd embed the
-    // font files explicitly — the current fallback is good enough for a
+    // font files explicitly - the current fallback is good enough for a
     // legible OG card.
     font: { loadSystemFonts: true, defaultFontFamily: "Georgia" },
   });

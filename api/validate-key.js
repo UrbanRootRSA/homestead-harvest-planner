@@ -1,12 +1,12 @@
 // Serverless validator for LemonSqueezy license keys.
 //
-// Security layers (ordered by rejection cost — cheapest first):
+// Security layers (ordered by rejection cost - cheapest first):
 //   1. Method check (POST only)
-//   2. Origin / Referer allowlist — stops this endpoint from being a public oracle
+//   2. Origin / Referer allowlist - stops this endpoint from being a public oracle
 //   3. Upstash Redis rate limit per IP (fails open if Upstash env is missing)
 //   4. Payload shape validation
 //   5. LemonSqueezy activate/validate call
-//   6. Store-ID check (optional env var LEMONSQUEEZY_STORE_ID) — rejects keys from
+//   6. Store-ID check (optional env var LEMONSQUEEZY_STORE_ID) - rejects keys from
 //      other LS stores that happened to hit our endpoint.
 //
 // The LS license endpoints (/activate, /validate) are public and do NOT require
@@ -90,7 +90,7 @@ async function callLs(endpoint, params) {
 }
 
 export default async function handler(req, res) {
-  // Lock down CORS — same-origin only via the allowlist check.
+  // Lock down CORS - same-origin only via the allowlist check.
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "POST") {

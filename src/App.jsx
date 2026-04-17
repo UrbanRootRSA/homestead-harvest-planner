@@ -4,7 +4,7 @@ import { COMPANIONS, COMPANION_GROUPINGS, getCompanion } from "./data/companions
 // COMPANIONS kept in the import surface for the future Crop Database tab.
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Theme (T) — Homestead Harvest Planner: Forest & Terracotta ──
+// ── Theme (T) - Homestead Harvest Planner: Forest & Terracotta ──
 // ═══════════════════════════════════════════════════════════════════════════
 const T = {
   bg: "#FAF7F2",
@@ -15,7 +15,7 @@ const T = {
 
   tx: "#2C2418",
   tx2: "#6B5D4F",
-  // tx3 was #9A8E80 — measured ~2.6:1 on bg2 and ~3.2:1 on card, sub-AA for
+  // tx3 was #9A8E80 - measured ~2.6:1 on bg2 and ~3.2:1 on card, sub-AA for
   // 12-13px secondary text. Darkened to #7A6E5F to clear 4.5:1 on both
   // surfaces while staying clearly subordinate to tx2. Audit #79.
   tx3: "#7A6E5F",
@@ -79,7 +79,7 @@ const LS_COST_SAVINGS = "hhp_cost_savings";
 const LS_PRESERVATION = "hhp_preservation";
 const LS_PLAN = "hhp_plan";
 
-// Paywall storage (Session 4). hhp_paid is NOT read on mount — state machine
+// Paywall storage (Session 4). hhp_paid is NOT read on mount - state machine
 // is paid:false / validating:true until the server confirms. See engineering-
 // patterns.md §8. hhp_pending is the Checkout.Success timestamp for the 48-h
 // grace window that covers the delay between payment and key-email delivery.
@@ -299,7 +299,7 @@ const clampInt = (v, min, max) => {
 
 // Sanitise any numeric field loaded from localStorage / import. Returns the
 // fallback when the value isn't a finite number, otherwise clamps to [min, max].
-// Use this for every numeric field in every schema loader — a single corrupt
+// Use this for every numeric field in every schema loader - a single corrupt
 // entry spread into a defaults object otherwise cascades NaN through every
 // downstream calculation.
 const sanitizeNum = (v, fallback, min = -Infinity, max = Infinity) => {
@@ -309,17 +309,17 @@ const sanitizeNum = (v, fallback, min = -Infinity, max = Infinity) => {
 };
 
 const fmtInt = (n) => {
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "-";
   return Math.round(n).toLocaleString();
 };
 
 const fmtDecimal = (n, d = 1) => {
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "-";
   return n.toFixed(d);
 };
 
 // Lightly tints a hex color to use as a card background. Keeps the crop
-// selector legible across 8 category colours — pure primary tint worked
+// selector legible across 8 category colours - pure primary tint worked
 // for one green theme; per-category tints need a consistent ~12% alpha.
 const hexToRgba = (hex, alpha = 0.12) => {
   if (typeof hex !== "string") return `rgba(0,0,0,${alpha})`;
@@ -334,16 +334,16 @@ const hexToRgba = (hex, alpha = 0.12) => {
 };
 
 const fmtRange = (arr, unit = "") => {
-  if (!Array.isArray(arr) || arr.length !== 2) return "—";
+  if (!Array.isArray(arr) || arr.length !== 2) return "-";
   const [a, b] = arr;
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return "—";
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return "-";
   if (a === b) return `${a}${unit}`;
   return `${a}${unit}–${b}${unit}`;
 };
 
 // Maturity formatter that knows about perennials. Berry / rhubarb /
 // artichoke crops carry `daysToMaturity: [730, 1095]` meaning 2-3 years
-// to first productive harvest — rendering that as "730-1095 days"
+// to first productive harvest - rendering that as "730-1095 days"
 // alongside annual rows like "60-90 days" reads as broken. For perennials,
 // convert to integer-year ranges (round half-up) so the UI stays readable.
 // Annuals pass through to fmtRange unchanged.
@@ -358,7 +358,7 @@ const fmtMaturity = (daysRange, season) => {
   return `Year ${yrLo}–${yrHi}+`;
 };
 
-// — Planting date helpers —
+// - Planting date helpers -
 // All dates use the numeric Date constructor and setDate for offsets (never
 // epoch-ms arithmetic; that breaks across DST). Single anchor = lastSpring.
 function monthDayToDate(md, year) {
@@ -378,7 +378,7 @@ function shiftMonths(date, months) {
 }
 const SHORT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function formatDate(date, refYear) {
-  if (!date || !Number.isFinite(date.getTime())) return "—";
+  if (!date || !Number.isFinite(date.getTime())) return "-";
   const y = date.getFullYear();
   const base = `${SHORT_MONTHS[date.getMonth()]} ${date.getDate()}`;
   return refYear && y !== refYear ? `${base}, ${y}` : base;
@@ -526,7 +526,7 @@ function clearLS(key) {
 // POST licence key to our serverless validator. Returns:
 //   { valid: true,  instance_id: string|null }
 //   { valid: false, error: string, retry_activation?: boolean }
-// Never throws — network failures resolve to { valid: false, error: ... } so
+// Never throws - network failures resolve to { valid: false, error: ... } so
 // the caller can simply branch on `valid`.
 async function validateKeyRemote(key, instanceId) {
   try {
@@ -594,7 +594,7 @@ function useCountUp(target, duration = 800) {
 // ── Shared components ──
 // ═══════════════════════════════════════════════════════════════════════════
 
-// — Counter —
+// - Counter -
 function Counter({ value, onChange, min = 0, max, label }) {
   const safe = Number.isFinite(value) ? value : min;
   const atMin = safe <= min;
@@ -616,7 +616,7 @@ function Counter({ value, onChange, min = 0, max, label }) {
       <span style={{
         fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
         fontSize: 24, fontWeight: 700, minWidth: 40, textAlign: "center", color: T.tx,
-      }}>{Number.isFinite(value) ? value : "—"}</span>
+      }}>{Number.isFinite(value) ? value : "-"}</span>
       <button type="button" disabled={atMax}
         onClick={() => onChange(Math.min(max ?? Infinity, safe + 1))}
         style={btnStyle(atMax)} aria-label={`Increase ${label}`}>+</button>
@@ -624,7 +624,7 @@ function Counter({ value, onChange, min = 0, max, label }) {
   );
 }
 
-// — Field (decimal-friendly numeric input) —
+// - Field (decimal-friendly numeric input) -
 // Local string state lets the user type "0", ".", "5" naturally. We only commit
 // on blur / Enter, and we clamp to [min, max] there. Never use `parseFloat||0`.
 function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, disabled, placeholder }) {
@@ -683,7 +683,7 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
           minHeight: 48,
           width: "100%",
           opacity: disabled ? 0.7 : 1,
-          // Intentionally no outline override — let the global :focus-visible
+          // Intentionally no outline override - let the global :focus-visible
           // rule render the Urban Root accent ring. Inline outline:none here
           // broke keyboard navigation (WCAG 2.4.7).
         }}
@@ -692,7 +692,7 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
   );
 }
 
-// — PillSelect (for goal, frequency; segmented control) —
+// - PillSelect (for goal, frequency; segmented control) -
 // activeColor: optional override for the active-pill background. Used by
 // the crop-selector frequency controls to tint each pill to its category
 // (leafy green, root amber, etc.) instead of the default primary green.
@@ -761,7 +761,7 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel, activeCo
   );
 }
 
-// — BrandMark (inline SVG so the logo doesn't fall back to system font) —
+// - BrandMark (inline SVG so the logo doesn't fall back to system font) -
 function BrandMark({ size = 32 }) {
   return (
     <span aria-hidden="true" style={{
@@ -772,7 +772,7 @@ function BrandMark({ size = 32 }) {
     }}>
       <svg viewBox="0 0 32 32" width={size * 0.62} height={size * 0.62}
         role="img" aria-label="Homestead Harvest Planner logo">
-        {/* Stylised "H" — two verticals and a crossbar, evoking raised beds */}
+        {/* Stylised "H" - two verticals and a crossbar, evoking raised beds */}
         <rect x="7"  y="5"  width="3.5" height="22" rx="1" fill={T.bg} />
         <rect x="21.5" y="5" width="3.5" height="22" rx="1" fill={T.bg} />
         <rect x="7"  y="14.5" width="18" height="3" rx="1" fill={T.bg} />
@@ -784,12 +784,12 @@ function BrandMark({ size = 32 }) {
   );
 }
 
-// — CountUpNumber —
+// - CountUpNumber -
 // Shared text formatter for animated count-up displays. Used by CountUpNumber
-// and MiniStat — extracts the "NaN → em-dash, else format" rule so the two
+// and MiniStat - extracts the "NaN → em-dash, else format" rule so the two
 // components can't drift apart.
 function formatCountUp(display, value, decimals = 0) {
-  if (!Number.isFinite(value)) return "—";
+  if (!Number.isFinite(value)) return "-";
   return decimals > 0
     ? display.toFixed(decimals)
     : Math.round(display).toLocaleString();
@@ -808,7 +808,7 @@ function CountUpNumber({ value, decimals = 0, size = 64, color = T.primary, unit
   );
 }
 
-// — CategoryBar (horizontal stacked bar of space per category) —
+// - CategoryBar (horizontal stacked bar of space per category) -
 function CategoryBar({ categorySpaceMap, totalSpaceSqft, metric }) {
   const entries = CATEGORIES
     .map((c) => ({ ...c, space: categorySpaceMap[c.id] || 0 }))
@@ -914,9 +914,9 @@ function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = 
   };
 }
 
-// — ProduceTargetField (editable household produce-per-person baseline) —
+// - ProduceTargetField (editable household produce-per-person baseline) -
 // The denominator of the self-sufficiency %. 300 lb/person/year is US-centric
-// (USDA ERS) — UK households eat closer to 180 lb, ZA subsistence diets vary
+// (USDA ERS) - UK households eat closer to 180 lb, ZA subsistence diets vary
 // widely. Letting the user override keeps the KPI honest across regions.
 function ProduceTargetField({ value, onChange, metric, isMobile }) {
   const displayUnit = metric ? "kg" : "lb";
@@ -1646,7 +1646,7 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
 }
 
 function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
-  // Display-side unit conversion — internal storage stays imperial.
+  // Display-side unit conversion - internal storage stays imperial.
   const dLen = metric ? FT_TO_M : 1;
   const dDepth = metric ? IN_TO_CM : 1;
   const unitLen = metric ? "m" : "ft";
@@ -1781,7 +1781,7 @@ function CompanionChecker({ selectedIds, setSelectedIds, focusCropId, setFocusCr
     );
   };
 
-  // Mode "crop" — a single focus crop, show all its good/bad companions in the full DB
+  // Mode "crop" - a single focus crop, show all its good/bad companions in the full DB
   const focusCrop = focusCropId && CROPS[focusCropId] ? focusCropId : "tomato";
   const focusGood = useMemo(() => {
     const out = [];
@@ -1802,7 +1802,7 @@ function CompanionChecker({ selectedIds, setSelectedIds, focusCropId, setFocusCr
     return out.sort((a, b) => CROPS[a.id].name.localeCompare(CROPS[b.id].name));
   }, [focusCrop]);
 
-  // Mode "bed" — matrix + conflicts among selected
+  // Mode "bed" - matrix + conflicts among selected
   const conflicts = useMemo(() => {
     const pairs = [];
     for (let i = 0; i < selectedIds.length; i++) {
@@ -1977,7 +1977,7 @@ function CompanionChecker({ selectedIds, setSelectedIds, focusCropId, setFocusCr
 
 function CompatibilityMatrix({ ids }) {
   // Render as a square grid. Rotated column headers need vertical headroom on
-  // narrow viewports — we reserve 108 px and let long labels clip via
+  // narrow viewports - we reserve 108 px and let long labels clip via
   // overflow:hidden rather than bleed into the previous section.
   const cellSize = 44;
   const headerHeight = 108;
@@ -2440,7 +2440,7 @@ function PlantingTimelineChart({ rows, referenceYear }) {
         {rows.map(({ cropId, crop, dates }) => {
           // Perennials (berries, rhubarb, asparagus, artichoke, sunchoke,
           // horseradish, sorrel, tarragon, marjoram) don't fit a one-year
-          // timeline — harvest lags planting by 12-36 months. Render a
+          // timeline - harvest lags planting by 12-36 months. Render a
           // distinct "plant once" row instead of a confusing year-1 green
           // bar with no harvest. Audit #4 (795c2ae).
           const isPerennial = crop.season === "perennial";
@@ -2482,7 +2482,7 @@ function PlantingTimelineChart({ rows, referenceYear }) {
                     fontSize: isMobile ? 11 : 12, fontWeight: 600, color: T.gold,
                     letterSpacing: "0.02em", whiteSpace: "nowrap", padding: "0 8px",
                   }}>
-                    {isMobile ? "Perennial — year 2+" : "Perennial — plant once, harvests year 2+"}
+                    {isMobile ? "Perennial - year 2+" : "Perennial - plant once, harvests year 2+"}
                   </span>
                 ) : (
                   <>
@@ -2544,7 +2544,7 @@ function PlantingTimelineChart({ rows, referenceYear }) {
 }
 
 function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChange, referenceYear }) {
-  // Resolve to an actual sow method for display — never leave the toggle
+  // Resolve to an actual sow method for display - never leave the toggle
   // showing "direct" while the calculator quietly anchors on "transplant"
   // (which is what computePlantingDates does for "either" crops without an
   // override). Priority: user's explicit override > crop default > transplant
@@ -2631,8 +2631,8 @@ function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChan
 // ── Landing hero wrapper + Home tab content ──
 // ═══════════════════════════════════════════════════════════════════════════
 // HomeView is now marketing-first. The calculator lives on its own tab
-// (#self-sufficiency) so first-time visitors see the product pitch — stats
-// cards, feature grid, pricing — above the fold instead of having to
+// (#self-sufficiency) so first-time visitors see the product pitch - stats
+// cards, feature grid, pricing - above the fold instead of having to
 // scroll past a 1400-px calculator to learn what the tool does.
 function HomeView({ setTab }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
@@ -3023,16 +3023,16 @@ function ComparisonSection() {
 function PricingSection() {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const freeFeatures = [
-    "Self-sufficiency calculator — plant counts, garden space, annual yield",
-    "Raised-bed soil calculator — 3 shapes, 4 mix presets, bag counts",
-    "Companion planting checker — 82 crops, 164 extension-sourced pairings",
-    "Planting dates — USDA zones 3-11 or manual frost, hemisphere-aware",
+    "Self-sufficiency calculator - plant counts, garden space, annual yield",
+    "Raised-bed soil calculator - 3 shapes, 4 mix presets, bag counts",
+    "Companion planting checker - 82 crops, 164 extension-sourced pairings",
+    "Planting dates - USDA zones 3-11 or manual frost, hemisphere-aware",
     "Works on phone in the garden, data saves to your browser",
     "No account, no email, no trial countdown",
   ];
   const paidFeatures = [
     "Personalised month-by-month growing plan tuned to your family and zone",
-    "Complete crop database — 82 vegetables with yields, spacing, preservation",
+    "Complete crop database - 82 vegetables with yields, spacing, preservation",
     "Cost savings calculator with ROI and break-even timeline",
     "Preservation planner (can, freeze, dehydrate, root cellar)",
     "Self-contained HTML report you can save, print, or email",
@@ -3123,7 +3123,7 @@ function PricingSection() {
           border: `1.5px solid ${T.accent}`,
           position: "relative",
         }}>
-          {/* Subtle "recommended" flag — terracotta to match the accent border */}
+          {/* Subtle "recommended" flag - terracotta to match the accent border */}
           <div aria-hidden="true" style={{
             position: "absolute", top: -12, right: 20,
             padding: "4px 12px", borderRadius: T.radiusPill,
@@ -3343,7 +3343,7 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
 
   const features = [
     "Personalised month-by-month growing plan tuned to your family and zone",
-    "Complete crop database — 82 crops, searchable + sortable",
+    "Complete crop database - 82 crops, searchable + sortable",
     "Cost savings calculator with grocery-vs-garden ROI",
     "Preservation planner for canning, freezing, dehydrating",
   ];
@@ -3685,7 +3685,7 @@ function GrowingPlanTab({
   const downloadAnchorRef = useRef(null);
   // Track the current in-flight request so we can abort on unmount or on a
   // 90-second timeout. Also revoke any prior blob URL before we create a new
-  // one — see #22, #23, #26.
+  // one - see #22, #23, #26.
   const abortControllerRef = useRef(null);
   const blobUrlRef = useRef(null);
 
@@ -3724,7 +3724,7 @@ function GrowingPlanTab({
   const cropIds = baseResults.perCrop.map((r) => r.cropId);
   const cropNames = baseResults.perCrop.map((r) => r.crop.name);
 
-  // Sorted-IDs fingerprint — used to detect when the user has changed crop
+  // Sorted-IDs fingerprint - used to detect when the user has changed crop
   // selection since the cached plan was generated (#15).
   const currentFingerprint = useMemo(
     () => cropIds.slice().sort().join(","),
@@ -3791,7 +3791,7 @@ function GrowingPlanTab({
       setError("Manual frost mode is selected but the dates are blank. Open Planting Dates and set both.");
       return;
     }
-    // Clear any prior server error BEFORE the confirm dialog — a user who
+    // Clear any prior server error BEFORE the confirm dialog - a user who
     // cancels should not stay staring at the last run's error message.
     setError("");
     // Confirm before regenerating when the current plan still matches the
@@ -3886,7 +3886,7 @@ function GrowingPlanTab({
       gardenSqFt, metric, currency, cropNames, generatedAt: planState.generatedAt,
     });
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    // Revoke the previous URL before creating a new one — every additional
+    // Revoke the previous URL before creating a new one - every additional
     // download otherwise leaks an object URL until the page unloads (#26).
     if (blobUrlRef.current) {
       try { URL.revokeObjectURL(blobUrlRef.current); } catch { /* noop */ }
@@ -4015,7 +4015,7 @@ function GrowingPlanTab({
             marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center", lineHeight: 1.5,
           }}>
             {longRun
-              ? "Still working — large plans take longer than usual. Please don't close the tab."
+              ? "Still working - large plans take longer than usual. Please don't close the tab."
               : "This usually takes 20-40 seconds. Please don't close the tab."}
           </p>
         )}
@@ -4083,7 +4083,7 @@ function GrowingPlanTab({
 const MONTH_ORDER = ["January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December"];
 // Returns -1 for unknown month names. Callers that build timelines or sort
-// rows MUST filter on `>= 0` rather than coerce silently — otherwise an
+// rows MUST filter on `>= 0` rather than coerce silently - otherwise an
 // unknown month sorts as January and renders a phantom bar.
 function monthIndex(name) {
   return MONTH_ORDER.indexOf(name);
@@ -4353,7 +4353,7 @@ function PlanSection({ title, children }) {
 // runs from startMonth to endMonth across a 12-column grid. Wraps year-end
 // (e.g. tomatoes Sep–Mar) by drawing two segments.
 function PlanHarvestChart({ rows }) {
-  // Drop rows the LLM produced with non-canonical month names — the grid
+  // Drop rows the LLM produced with non-canonical month names - the grid
   // requires a valid startIdx; without filtering, a bad row would render
   // a phantom January bar (#13).
   const filtered = rows
@@ -4682,7 +4682,7 @@ const CROP_DB_SORTS = [
 function CropDatabaseTab({ metric, dbState, setDbState }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const { search, categoryFilter, sort, expandedId } = dbState;
-  // Functional setters everywhere — see audit #82.
+  // Functional setters everywhere - see audit #82.
   const setSearch     = (v) => setDbState((p) => ({ ...p, search: v, expandedId: null }));
   const setSort       = (v) => setDbState((p) => ({ ...p, sort: v }));
   const setExpandedId = (v) => setDbState((p) => ({ ...p, expandedId: v }));
@@ -4691,7 +4691,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
       const next = p.categoryFilter.includes(id)
         ? p.categoryFilter.filter((c) => c !== id)
         : [...p.categoryFilter, id];
-      // Drop expandedId on filter change — otherwise a row that the user
+      // Drop expandedId on filter change - otherwise a row that the user
       // closed by filtering it out will silently re-open if the filter is
       // widened again. Audit #13/#44.
       return { ...p, categoryFilter: next, expandedId: null };
@@ -4718,7 +4718,7 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
       })
       .map(([id, c]) => ({ id, ...c }));
     const dir = sort.endsWith("_desc") ? -1 : 1;
-    // Defensive readers — a malformed range field on a future crop would
+    // Defensive readers - a malformed range field on a future crop would
     // otherwise produce NaN comparators and a non-deterministic sort order.
     // Audit #38, #39.
     const lowOf  = (range, fb) => Array.isArray(range) && Number.isFinite(range[0]) ? range[0] : fb;
@@ -5067,7 +5067,7 @@ function CropDbDetail({ row }) {
               <li key={m} style={{ fontSize: 13, color: T.tx2, display: "flex", justifyContent: "space-between", gap: 12 }}>
                 <span style={{ color: T.tx, fontWeight: 600 }}>{PRESERVATION_LABELS[m] || m}</span>
                 <span style={{ fontFamily: T.fontNum, color: T.tx3 }}>
-                  ~{PRESERVATION_SHELF_MONTHS[m] ?? "—"} mo
+                  ~{PRESERVATION_SHELF_MONTHS[m] ?? "-"} mo
                 </span>
               </li>
             ))}
@@ -5125,7 +5125,7 @@ function CropDbDetail({ row }) {
 // Pulls plant counts and yields from the Self-Sufficiency selection so the
 // user doesn't re-enter anything. Per-crop grocery prices are editable. Setup
 // costs cover the typical first-year capital outlay. Currency symbol is
-// passed-through display only — no FX conversion is performed (matches the
+// passed-through display only - no FX conversion is performed (matches the
 // rest of the app's currency model).
 // ═══════════════════════════════════════════════════════════════════════════
 const COST_SAVINGS_FIELDS = [
@@ -5144,7 +5144,7 @@ const DEFAULT_SETUP_COSTS = {
 // Self-Sufficiency crop selection. Rendered when baseResults.perCrop is
 // empty so the user gets a clear "do this first" instead of a page of
 // zeros and em-dashes. Uses href="#self-sufficiency" so the existing
-// hashchange listener does the routing — no setTab prop needed.
+// hashchange listener does the routing - no setTab prop needed.
 function NoCropsBanner({ cta = "Go to Self-Sufficiency" }) {
   return (
     <section aria-label="Pick crops first" style={{
@@ -5207,7 +5207,7 @@ function CostSavingsCalculator({
   // Empty-state guard: the whole tab is a Self-Sufficiency passthrough.
   // Without crops selected every number collapses to zero. Computed here
   // but applied AFTER all hooks run (below) to keep hook order stable
-  // across renders — React's Rules of Hooks forbid an early return that
+  // across renders - React's Rules of Hooks forbid an early return that
   // skips subsequent useMemo calls.
   const noCrops = !baseResults.perCrop.length;
 
@@ -5218,7 +5218,7 @@ function CostSavingsCalculator({
   // Mirrors SoilCalculator's effectiveMix derivation so this number ALWAYS
   // matches what the user sees on the Soil tab. Reads BOTH price overrides
   // (every mix) and pct overrides (Custom mix only). Skipping pcts here was
-  // the audit's HIGH finding — the button label promises "Soil Calculator
+  // the audit's HIGH finding - the button label promises "Soil Calculator
   // total" so it has to actually be that.
   const soilCostEstimate = useMemo(() => {
     const mix = SOIL_MIXES.find((m) => m.id === soilState.mixId) || SOIL_MIXES[0];
@@ -5314,7 +5314,7 @@ function CostSavingsCalculator({
   // surface the caveat whenever the user's selection includes any.
   const hasPerennials = baseResults.perCrop.some((r) => r.crop.season === "perennial");
 
-  // Apply the empty-state branch AFTER all hooks have run — see comment
+  // Apply the empty-state branch AFTER all hooks have run - see comment
   // at the top of this component for the Rules-of-Hooks rationale.
   if (noCrops) return <NoCropsBanner />;
 
@@ -5370,7 +5370,7 @@ function CostSavingsCalculator({
       )}
 
       {/* ── KPI row ── */}
-      {/* Break-even and ROI are rendered as bare "—" via MiniStat's
+      {/* Break-even and ROI are rendered as bare "-" via MiniStat's
           formatCountUp non-finite path when no crops are picked or there's
           nothing to amortize. Showing "0 mo" or "-100%" reads as broken.
           Audit #5, #6. */}
@@ -5540,7 +5540,7 @@ function CostSavingsCalculator({
 // of thumb (NCHFP, Ball Blue Book, USDA storage tables).
 // ═══════════════════════════════════════════════════════════════════════════
 // Conversion rates from prepared lbs to container counts. These are
-// crop-agnostic averages anchored to the NCHFP "How Much" tables — high-
+// crop-agnostic averages anchored to the NCHFP "How Much" tables - high-
 // density packs (corn, peas, sauce) actually need 1.5–2x more fresh weight
 // per jar, low-density (snap beans) need ~1 lb/pint. The disclaimer below the
 // planner says so. Whole-tomato (NCHFP-published) is the middle-of-the-road
@@ -5573,7 +5573,7 @@ function computePreservationForCrop(yieldLbs, freshPct, method) {
   // unstorablePreserved tracks the share the user asked to preserve but the
   // crop physically can't be (lettuce, etc. with preservation:["fresh"]).
   // Without this the calculator silently dropped the preserved share AND told
-  // the user "no preservation needed" — see audit finding #40.
+  // the user "no preservation needed" - see audit finding #40.
   const unstorablePreserved = method === "fresh" ? preserved : 0;
   const result = {
     method, fresh, preserved, unstorablePreserved,
@@ -5612,7 +5612,7 @@ function PreservationPlanner({
   metric,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
-  // Same empty-state pattern as Cost Savings — check now, branch AFTER
+  // Same empty-state pattern as Cost Savings - check now, branch AFTER
   // hooks to preserve order across renders (Rules of Hooks).
   const noCrops = !baseResults.perCrop.length;
 
@@ -5726,7 +5726,7 @@ function PreservationPlanner({
         }}>
           <strong>{(totals.unstorablePreserved * massConv).toFixed(0)} {unitMass}</strong> of your harvest comes from
           fresh-only crops (lettuce, spinach, etc.) that can't be canned, frozen, or stored long-term.
-          Eat that share fresh in season — it's not counted in the preservation totals below.
+          Eat that share fresh in season - it's not counted in the preservation totals below.
         </div>
       )}
 
@@ -5816,7 +5816,7 @@ function PreservationCropRow({ row, onMethodChange, massConv, unitMass, metric }
   const summary = (() => {
     if (row.method === "fresh") {
       if (d.unstorablePreserved > 0.5) {
-        return `Eat fresh in season — this crop can't be canned or stored.`;
+        return `Eat fresh in season - this crop can't be canned or stored.`;
       }
       return "Fresh eating only.";
     }
@@ -5981,7 +5981,7 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 12, flexWrap: "wrap",
       }}>
-        {/* Logo / title — deliberately oversized so the masthead reads like
+        {/* Logo / title - deliberately oversized so the masthead reads like
             a premium print journal instead of a calculator widget. */}
         <a href="#home"
           onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
@@ -5999,7 +5999,7 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
         {/* Hemisphere + Metric toggles */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <div role="radiogroup" aria-label="Hemisphere"
-            title="Hemisphere flips planting dates by 6 months — pick yours so spring/autumn line up with your calendar."
+            title="Hemisphere flips planting dates by 6 months - pick yours so spring/autumn line up with your calendar."
             style={{
               display: "flex", alignItems: "center",
               background: T.bg2, borderRadius: T.radiusPill,
@@ -6050,7 +6050,7 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
   );
 }
 
-// — CurrencySelect (native <select> styled to match the header pill toggles) —
+// - CurrencySelect (native <select> styled to match the header pill toggles) -
 // A 5-way choice is too many pills for the header; a styled native select is
 // compact on mobile, accessible, and threads through every cost display in
 // the Soil Calculator (and, later, the paid Cost Savings tab).
@@ -6061,7 +6061,7 @@ const CURRENCY_OPTIONS = [
   { symbol: "R", code: "ZAR", name: "South African Rand" },
   { symbol: "¥", code: "JPY", name: "Japanese Yen" },
 ];
-// Custom popover instead of <select> — the native dropdown renders in OS
+// Custom popover instead of <select> - the native dropdown renders in OS
 // chrome (Windows ships a 1990s-era listbox), which clashed badly with the
 // warm parchment design system. The popover is anchored to the trigger,
 // closes on outside click + Escape, and uses arrow-key navigation.
@@ -6107,7 +6107,7 @@ function CurrencySelect({ value, onChange }) {
       e.preventDefault();
       itemRefs.current[CURRENCY_OPTIONS.length - 1]?.focus();
     } else if (e.key === "Tab") {
-      // Focus is about to leave the popover — close it so the open state
+      // Focus is about to leave the popover - close it so the open state
       // tracks where the keyboard actually is. Don't preventDefault: the
       // browser still moves focus to the next tabbable element.
       setOpen(false);
@@ -6239,7 +6239,7 @@ function TabBar({ tab, setTab, paid, validating }) {
               id={`tab-${t.id}`}
               ref={(el) => (btnRefs.current[i] = el)}
               role="tab" aria-selected={active} aria-controls="main-panel"
-              aria-label={locked ? `${t.label} — requires full access` : undefined}
+              aria-label={locked ? `${t.label} - requires full access` : undefined}
               tabIndex={active ? 0 : -1}
               onClick={() => setTab(t.id)}
               style={{
@@ -6409,7 +6409,7 @@ function AppFooter() {
 // ═══════════════════════════════════════════════════════════════════════════
 const VALID_TABS = TABS.map((t) => t.id);
 // Hash aliases kept intentionally empty. Home and Self-Sufficiency are
-// now separate tabs — a brief merge window (Apr 2026) routed
+// now separate tabs - a brief merge window (Apr 2026) routed
 // #self-sufficiency → #home, but the split reinstated each as its own id.
 // If old bookmarks surface, add them back here as { "old-id": "new-id" }.
 const HASH_ALIASES = {};
@@ -6558,7 +6558,7 @@ export default function App() {
     return valid;
   });
 
-  // Crop Database state (Tab 6 — paid)
+  // Crop Database state (Tab 6 - paid)
   const [cropDbState, setCropDbState] = useState(() => {
     const saved = loadState(LS_CROP_DB, null);
     const defaults = { search: "", categoryFilter: [], sort: "name_asc", expandedId: null };
@@ -6571,13 +6571,13 @@ export default function App() {
       search: typeof saved.search === "string" ? saved.search.slice(0, 64) : "",
       categoryFilter: validCats,
       sort: validSort,
-      // Don't restore an expanded row — it's an interaction-state, not a setting,
+      // Don't restore an expanded row - it's an interaction-state, not a setting,
       // and a stale id from a removed crop would render an empty drawer.
       expandedId: null,
     };
   });
 
-  // Cost Savings state (Tab 7 — paid)
+  // Cost Savings state (Tab 7 - paid)
   // Strict numeric coercion: Number(null) === 0, Number(false) === 0, "" → 0.
   // Without typeof===number guard a corrupt LS write of {tomato: null} silently
   // hydrates as {tomato: 0} and the user's tomato savings disappear. Audit #10.
@@ -6605,7 +6605,7 @@ export default function App() {
     return { priceOverrides: cleanPrices, setupCosts: cleanSetup };
   });
 
-  // Growing Plan state (Tab 5 — paid)
+  // Growing Plan state (Tab 5 - paid)
   // Persists the user's input choices AND the last generated plan + timestamp
   // so reloads don't blow away an expensive call. Plan body is sanitised on
   // load so a corrupt cache can't crash the renderer.
@@ -6641,7 +6641,7 @@ export default function App() {
     };
   });
 
-  // Preservation Planner state (Tab 8 — paid)
+  // Preservation Planner state (Tab 8 - paid)
   const [preservation, setPreservation] = useState(() => {
     const saved = loadState(LS_PRESERVATION, null);
     const defaults = { freshPct: 30, methodChoice: {} };
@@ -6662,7 +6662,7 @@ export default function App() {
 
   // ── Paywall state ────────────────────────────────────────────────────────
   // paid starts false. validating starts true. Mount effect resolves both.
-  // Paid tab UI MUST gate on !validating — rendering paid content while
+  // Paid tab UI MUST gate on !validating - rendering paid content while
   // validating === true is the race window that leaks free access.
   const [paid, setPaid] = useState(false);
   const [validating, setValidating] = useState(true);
@@ -6773,8 +6773,8 @@ export default function App() {
             commitPaid(storedKey, r.instance_id);
             return;
           }
-          // Stored key no longer valid — wipe silently. User sees paywall,
-          // not an error — they didn't just try to enter it.
+          // Stored key no longer valid - wipe silently. User sees paywall,
+          // not an error - they didn't just try to enter it.
           clearLS(LS_KEY);
           clearLS(LS_INSTANCE);
         }
@@ -6826,7 +6826,7 @@ export default function App() {
           eventHandler: (event) => {
             if (event?.event === "Checkout.Success") {
               // Open the 48-h grace window. The licence-key email hasn't
-              // arrived yet — this is the bridge until the ?key= URL or
+              // arrived yet - this is the bridge until the ?key= URL or
               // manual paste takes over.
               try { localStorage.setItem(LS_PENDING, String(Date.now())); } catch { /* noop */ }
               setPaid(true);
@@ -6846,7 +6846,7 @@ export default function App() {
         if (cancelled) return;
         if (setup()) { clearInterval(pollHandle); pollHandle = null; }
       }, 250);
-      // Give up after 8 s — lemon.js isn't reachable, CSP is blocking, or
+      // Give up after 8 s - lemon.js isn't reachable, CSP is blocking, or
       // the user is offline. Paywall CTA still works as a plain link.
       setTimeout(() => { if (pollHandle) { clearInterval(pollHandle); pollHandle = null; } }, 8000);
     }
@@ -6887,7 +6887,7 @@ export default function App() {
 
   // Hash routing: mount-only init + back/forward + hashchange.
   // hashchange covers footer links like #features that are landing-section
-  // anchors, not tab ids — we route those to Home and scroll to the anchor.
+  // anchors, not tab ids - we route those to Home and scroll to the anchor.
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     const resolvedInit = resolveHash(hash);
@@ -6958,7 +6958,7 @@ export default function App() {
   };
 
   // Single source of truth for crop-level results. Cost Savings, Preservation
-  // (and a future AI Growing Plan tab) all branch off this — keeping one
+  // (and a future AI Growing Plan tab) all branch off this - keeping one
   // memoized computation prevents the two paid tabs from drifting if the
   // formula in computeResults changes. Audit #61.
   const baseResults = useMemo(
@@ -7115,7 +7115,7 @@ function GlobalStyles() {
       }
 
       /* Bigger range thumb so the touch target meets 44x44 (Apple HIG).
-         Native default is ~16px on most browsers — too small for fingers
+         Native default is ~16px on most browsers - too small for fingers
          on the preservation slider. Audit #45. */
       .hhp-range { -webkit-appearance: none; appearance: none; height: 6px; background: ${T.bg2}; border-radius: 999px; padding: 0; }
       .hhp-range::-webkit-slider-thumb {
