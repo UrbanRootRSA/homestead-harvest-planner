@@ -102,7 +102,7 @@
     <p>These terms govern your use of the Homestead Harvest Planner (the "Service"), a web-based garden planning tool operated by Urban Root. By using the Service you agree to these terms. If you don't, please don't use the Service.</p>
 
     <h2>1. What the Service is</h2>
-    <p>The Homestead Harvest Planner is a browser-based calculator and planning tool for home gardeners. It includes free calculators (self-sufficiency, raised-bed soil, companion planting, planting dates) and, after a one-time purchase, a paid tier that adds an AI-generated growing plan, a searchable crop database, a cost-savings calculator, and a preservation planner.</p>
+    <p>The Homestead Harvest Planner is a browser-based calculator and planning tool for home gardeners. It includes free calculators (self-sufficiency, raised-bed soil, companion planting, planting dates) and, after a one-time purchase, a paid tier that adds a personalised growing plan, a searchable crop database, a cost-savings calculator, and a preservation planner.</p>
     <p>The Service runs in your browser. Your plans are stored in your browser's local storage on your device unless you choose to export them.</p>
 
     <h2>2. Licence</h2>
@@ -113,9 +113,10 @@
     <p>Plant spacing, yield estimates, companion relationships, frost-date offsets, and all other numbers in the Service are based on published data from extension services, peer-reviewed research, and widely accepted gardening references. They are planning estimates, not guarantees. Your actual results will vary based on soil, weather, variety, pest pressure, and management.</p>
     <p>Do not rely on the Service for professional agronomy or commercial farming decisions without cross-checking with local extension services and a qualified agronomist.</p>
 
-    <h2>4. AI-generated content (paid tier)</h2>
-    <p>The Full Growing Plan tab uses Claude, a large language model operated by Anthropic, to generate a personalised monthly schedule from the inputs you provide. Generated plans are advisory, not authoritative. They can contain mistakes, including crop advice that doesn't suit your local conditions. Review every AI-generated plan with common sense before acting on it.</p>
-    <p>Urban Root does not train any AI model on your inputs or the generated output. Anthropic's own data-use policy applies to the API call itself — see their privacy page for details.</p>
+    <h2>4. How the growing plan is generated (paid tier)</h2>
+    <p>The Growing Plan tab transmits the inputs you provide (family size, hardiness zone, frost dates, garden space, sun exposure, soil type, watering method, experience level, goals, and selected crops) to Claude, a large language model operated by Anthropic, which returns a structured personalised monthly schedule. The model output is generated automatically and is therefore advisory, not authoritative. Generated plans can contain mistakes — including crop advice that does not suit your local soil, microclimate, or pest pressure. Review every plan with common sense and cross-check against local extension-service guidance before acting on it.</p>
+    <p>No personal information (name, email, address, payment details) is sent in the request. Urban Root does not train any model on your inputs or the generated output, and does not store the request or response on its own servers beyond what is necessary to return the plan to your browser. Anthropic's data-use policy governs the API call itself — see <a href="https://www.anthropic.com/legal/privacy" rel="noopener" target="_blank">anthropic.com/legal/privacy</a>.</p>
+    <p>If you have a regulatory requirement to disclose use of automated systems (e.g., agronomy advice for commercial operations), the Service is not appropriate for that use case.</p>
 
     <h2>5. Your content</h2>
     <p>Your garden plans, bed dimensions, crop selections, and any notes you add are yours. We don't claim ownership. The underlying crop database, companion-planting database, calculation methods, UI, and brand are Urban Root's intellectual property and are not licensed for reuse in other products.</p>
@@ -125,7 +126,7 @@
     <p>Refunds are governed by our <a href="/refund.html">refund policy</a>.</p>
 
     <h2>7. Availability</h2>
-    <p>We aim for the Service to be available but don't guarantee uptime. The Service runs mostly in your browser, so temporary server-side outages (license validation, AI plan generation) don't affect your ability to use the free calculators on a saved page.</p>
+    <p>We aim for the Service to be available but don't guarantee uptime. The Service runs mostly in your browser, so temporary server-side outages (licence validation, growing-plan generation) don't affect your ability to use the free calculators on a saved page.</p>
 
     <h2>8. Limitation of liability</h2>
     <p>To the maximum extent permitted by law, Urban Root's total liability for any claim related to the Service is limited to the amount you paid for it. We are not liable for indirect, incidental, consequential, or punitive damages, including lost harvests, crop failures, or missed planting windows.</p>

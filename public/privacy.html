@@ -131,9 +131,9 @@
           <td>To confirm your licence is valid and hasn't exceeded its 3-device limit.</td>
         </tr>
         <tr>
-          <td>At AI plan generation (paid tier)</td>
-          <td>The inputs you chose (family size, crops, zone, etc.) and the generated plan</td>
-          <td>Sent to Anthropic's Claude API to produce the plan. The request is transient — nothing is stored on our servers.</td>
+          <td>At growing-plan generation (paid tier)</td>
+          <td>The inputs you chose (family size, hardiness zone, frost dates, garden space, sun exposure, soil type, watering method, experience, goals, selected crops) and the returned plan</td>
+          <td>Transmitted to Anthropic's Claude API to generate the plan. No personal information (name, email, address, payment details) is included. The request is transient — neither the request nor the response is stored on our servers beyond what is required to deliver it back to your browser. Anthropic's own data-use policy applies to the API call itself.</td>
         </tr>
         <tr>
           <td>When the site loads</td>
@@ -147,7 +147,7 @@
     <p>We use a small number of third parties. Each has their own privacy policy; we link them below.</p>
     <ul>
       <li><strong>LemonSqueezy</strong> — payments, licence keys, tax collection. Acts as the Merchant of Record. <a href="https://www.lemonsqueezy.com/privacy" rel="noopener" target="_blank">lemonsqueezy.com/privacy</a></li>
-      <li><strong>Anthropic</strong> — the Claude API that generates AI growing plans on the paid tier. <a href="https://www.anthropic.com/legal/privacy" rel="noopener" target="_blank">anthropic.com/legal/privacy</a></li>
+      <li><strong>Anthropic</strong> — the language-model API used to generate the personalised growing plan on the paid tier. <a href="https://www.anthropic.com/legal/privacy" rel="noopener" target="_blank">anthropic.com/legal/privacy</a></li>
       <li><strong>Vercel</strong> — hosting + Vercel Web Analytics (cookie-less, aggregate). <a href="https://vercel.com/legal/privacy-policy" rel="noopener" target="_blank">vercel.com/legal/privacy-policy</a></li>
       <li><strong>Google Fonts</strong> — font files served from Google's CDN. Google logs the request (IP, user-agent). No cookies are set. <a href="https://developers.google.com/fonts/faq/privacy" rel="noopener" target="_blank">Google Fonts privacy FAQ</a></li>
     </ul>
