@@ -63,7 +63,11 @@ const LS_CURRENCY = "hhp_currency";
 const SQFT_TO_SQM = 0.0929;
 const LB_TO_KG = 0.453592;
 const PATH_BUFFER = 1.20; // 20% extra for paths + margins
-const ANNUAL_VEG_PER_PERSON_LBS = 200; // USDA-aligned whole-food vegetable target
+// USDA MyPlate suggests ~2.5 cups of veg/day (~165 lb/person/year). Homesteaders
+// typically plan higher to cover root storage, preservation losses, and a wider
+// variety of crops (fruits, herbs, and greens above the minimum). 200 lb/person
+// is a reasonable whole-food annual target for the "family veg + fruit" denominator.
+const ANNUAL_PRODUCE_PER_PERSON_LBS = 200;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Crop database (v1 seed — 20 crops covering all categories) ──
@@ -383,7 +387,15 @@ const fmtRange = (arr, unit = "") => {
 };
 
 function persistState(key, data) {
-  try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* quota / sandbox */ }
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    return true;
+  } catch (err) {
+    // Quota exceeded, sandboxed iframe, or disabled storage. Log once per key
+    // per session so we leave a breadcrumb without spamming the console.
+    console.warn(`[hhp] Could not persist "${key}":`, err?.message || err);
+    return false;
+  }
 }
 function loadState(key, fallback) {
   try {
@@ -414,8 +426,10 @@ function useCountUp(target, duration = 800) {
   const [display, setDisplay] = useState(Number.isFinite(target) ? target : 0);
   const frameRef = useRef(null);
   useEffect(() => {
-    if (!Number.isFinite(target)) { setDisplay(0); return; }
-    const start = display;
+    // Hold the last good display value when target is transiently invalid,
+    // so the UI doesn't glitch 0 → N every time a derived calc returns NaN.
+    if (!Number.isFinite(target)) return;
+    const start = Number.isFinite(display) ? display : 0;
     const diff = target - start;
     if (Math.abs(diff) < 0.01) { setDisplay(target); return; }
     const startTime = performance.now();
@@ -440,8 +454,9 @@ function useCountUp(target, duration = 800) {
 
 // — Counter —
 function Counter({ value, onChange, min = 0, max, label }) {
-  const atMin = value <= min;
-  const atMax = max != null && value >= max;
+  const safe = Number.isFinite(value) ? value : min;
+  const atMin = safe <= min;
+  const atMax = max != null && safe >= max;
   const btnStyle = (disabled) => ({
     minWidth: 44, minHeight: 44, borderRadius: 10,
     background: T.card, border: `1.5px solid ${T.border}`,
@@ -454,14 +469,14 @@ function Counter({ value, onChange, min = 0, max, label }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <button type="button" disabled={atMin}
-        onClick={() => onChange(Math.max(min, value - 1))}
+        onClick={() => onChange(Math.max(min, safe - 1))}
         style={btnStyle(atMin)} aria-label={`Decrease ${label}`}>−</button>
       <span style={{
         fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
         fontSize: 24, fontWeight: 700, minWidth: 40, textAlign: "center", color: T.tx,
       }}>{Number.isFinite(value) ? value : "—"}</span>
       <button type="button" disabled={atMax}
-        onClick={() => onChange(Math.min(max ?? Infinity, value + 1))}
+        onClick={() => onChange(Math.min(max ?? Infinity, safe + 1))}
         style={btnStyle(atMax)} aria-label={`Increase ${label}`}>+</button>
     </div>
   );
@@ -483,7 +498,7 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
           <button key={opt.id} type="button" role="radio" aria-checked={active}
             onClick={() => onChange(opt.id)}
             style={{
-              flex: "1 1 auto", minHeight: size === "sm" ? 36 : 44,
+              flex: "1 1 auto", minHeight: size === "sm" ? 40 : 44,
               padding, fontSize, fontWeight: active ? 700 : 500,
               fontFamily: T.fontBody, color: active ? "#FEFCF8" : T.tx2,
               background: active ? T.primary : "transparent",
@@ -491,8 +506,11 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel }) {
               transition: "all 0.18s ease", whiteSpace: "nowrap",
             }}>
             <span style={{ display: "block" }}>{opt.label}</span>
-            {opt.sub && !active && (
-              <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: T.tx3, marginTop: 2 }}>
+            {opt.sub && (
+              <span style={{
+                display: "block", fontSize: 11, fontWeight: 400, marginTop: 2,
+                color: active ? "rgba(254, 252, 248, 0.78)" : T.tx3,
+              }}>
                 {opt.sub}
               </span>
             )}
@@ -607,10 +625,11 @@ function computeResults(selectedMap, familySize, goalKey) {
   }
 
   const totalSpaceWithBuffer = totalSpaceSqft * PATH_BUFFER;
-  const householdVegTarget = ANNUAL_VEG_PER_PERSON_LBS * familySize * goalMult;
-  const selfSufficiencyPct = householdVegTarget > 0
-    ? Math.min(100, (totalYieldLbs / householdVegTarget) * 100)
+  const householdTarget = ANNUAL_PRODUCE_PER_PERSON_LBS * familySize * goalMult;
+  const rawSelfSufficiencyPct = householdTarget > 0
+    ? (totalYieldLbs / householdTarget) * 100
     : 0;
+  const selfSufficiencyPct = Math.min(100, rawSelfSufficiencyPct);
 
   return {
     perCrop,
@@ -618,8 +637,9 @@ function computeResults(selectedMap, familySize, goalKey) {
     totalSpaceRaw: totalSpaceSqft,
     totalPlants,
     totalYieldLbs,
-    householdVegTarget,
+    householdTarget,
     selfSufficiencyPct,
+    rawSelfSufficiencyPct,
     categorySpaceMap,
   };
 }
@@ -785,11 +805,17 @@ function SelfSufficiencyCalculator({
               decimals={0} size={isMobile ? 56 : 80} unit="%" />
           </div>
           <p style={{
-            margin: "12px auto 0", maxWidth: 440,
+            margin: "12px auto 0", maxWidth: 480,
             fontSize: 15, color: T.tx2, lineHeight: 1.5,
           }}>
-            You'd grow about {Math.round(results.selfSufficiencyPct)}% of your family's vegetable needs
-            from the crops you've selected.
+            You'd grow about {Math.round(results.selfSufficiencyPct)}% of your family's fresh
+            produce needs from the crops you've selected.
+            {results.rawSelfSufficiencyPct > 110 && (
+              <span style={{ display: "block", marginTop: 6, color: T.primary, fontWeight: 600 }}>
+                That's more than your household needs. Extra can go to neighbors,
+                preserves, or next year's seed stock.
+              </span>
+            )}
           </p>
         </div>
 
@@ -799,7 +825,8 @@ function SelfSufficiencyCalculator({
           gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 12,
         }}>
           <MiniStat label="Plants to grow" value={results.totalPlants} unit="plants" />
-          <MiniStat label="Garden space needed" value={results.totalSpaceSqft * areaConv}
+          <MiniStat label="Garden space (incl. paths)"
+            value={results.totalSpaceSqft * areaConv}
             decimals={1} unit={unitArea} />
           <MiniStat label="Estimated yield" value={results.totalYieldLbs * massConv}
             decimals={0} unit={unitMass} />
@@ -807,13 +834,17 @@ function SelfSufficiencyCalculator({
 
         {/* Category breakdown */}
         <div style={{ marginTop: 24 }}>
-          <div style={eyebrowStyle}>Space by category</div>
+          <div style={eyebrowStyle}>Crop area by category</div>
           <div style={{ marginTop: 10 }}>
             <CategoryBar
               categorySpaceMap={results.categorySpaceMap}
               totalSpaceSqft={results.totalSpaceRaw}
               metric={metric} />
           </div>
+          <p style={{ marginTop: 10, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+            Totals above include 20% extra for paths and margins. The bar shows
+            crop area only.
+          </p>
         </div>
 
         {/* Per-crop breakdown */}
@@ -837,7 +868,7 @@ function SelfSufficiencyCalculator({
           marginTop: 20, fontSize: 13, color: T.tx3, lineHeight: 1.5,
         }}>
           Yields vary by soil, weather, variety, and management. These are conservative
-          planning estimates — adjust as you learn your garden.
+          planning estimates. Adjust as you learn your garden.
         </p>
       </div>
     </section>
@@ -859,19 +890,23 @@ function MiniStat({ label, value, unit, decimals = 0 }) {
   const text = Number.isFinite(value)
     ? (decimals > 0 ? display.toFixed(decimals) : Math.round(display).toLocaleString())
     : "—";
+  const readable = Number.isFinite(value) ? `${text} ${unit}` : `${unit} not available`;
   return (
-    <div style={{
+    <div role="group" aria-label={`${label}: ${readable}`} style={{
       padding: "16px 18px", borderRadius: T.radius,
       background: T.card, border: `1.5px solid ${T.border}`,
     }}>
       <div style={{ fontSize: 12, color: T.tx3, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
         {label}
       </div>
-      <div style={{
+      <div aria-hidden="true" style={{
         marginTop: 6, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
         fontSize: 28, fontWeight: 700, color: T.tx,
       }}>
-        {text} <span style={{ fontSize: 14, color: T.tx3, fontWeight: 500 }}>{unit}</span>
+        {text}
+        <span style={{ fontSize: 28 * 0.4, color: T.tx3, fontWeight: 500, marginLeft: 4 }}>
+          {unit}
+        </span>
       </div>
     </div>
   );
@@ -880,9 +915,10 @@ function MiniStat({ label, value, unit, decimals = 0 }) {
 function CropBreakdownCard({ result, metric, areaConv, massConv, unitArea, unitMass }) {
   const { crop, plantsNeeded, spaceSqFt, expectedYieldLbs } = result;
   return (
-    <div style={{
+    <div className="ur-crop-card" style={{
       padding: "14px 16px", borderRadius: T.radius,
       background: T.card, border: `1.5px solid ${T.border}`,
+      transition: "background 0.18s ease, border-color 0.18s ease",
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: T.tx }}>{crop.name}</div>
@@ -961,13 +997,13 @@ function HomeView(props) {
         </div>
       </section>
 
-      {/* Placeholder landing sections — to be fleshed out in later sessions */}
+      {/* Placeholder landing sections, fleshed out in later sessions */}
       <LandingPlaceholder id="features" title="More free calculators"
-        blurb="Soil volume, companion planting, and planting dates — coming this week." />
+        blurb="Soil volume, companion planting, and planting dates. Coming this week." />
       <LandingPlaceholder id="how-it-works" title="How it works"
         blurb="Pick your crops. See your plan. Plant with confidence." bg={T.bg2} />
       <LandingPlaceholder id="pricing" title="Pay once, use forever"
-        blurb="Full growing plan, crop database, cost savings, and preservation planner — $19.99 one-time." />
+        blurb="Full growing plan, crop database, cost savings, and preservation planner. $19.99 one-time." />
       <LandingPlaceholder id="faq" title="FAQ"
         blurb="Common questions about the planner." bg={T.bg2} />
     </>
@@ -979,6 +1015,7 @@ function LandingPlaceholder({ id, title, blurb, bg }) {
     <section id={id} style={{
       background: bg || T.bg,
       padding: "clamp(48px, 8vw, 96px) clamp(16px, 4vw, 48px)",
+      scrollMarginTop: 80,
     }}>
       <div style={{ maxWidth: 880, margin: "0 auto", textAlign: "center" }}>
         <h2 style={{
@@ -1087,16 +1124,18 @@ function AppHeader({ metric, setMetric, currency, setCurrency }) {
 
         {/* Metric toggle */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{
+          <div role="radiogroup" aria-label="Unit system" style={{
             display: "flex", background: T.bg2, borderRadius: T.radiusPill,
-            padding: 3, fontSize: 13, fontFamily: T.fontBody,
+            padding: 4, fontSize: 13, fontFamily: T.fontBody,
           }}>
             {["imperial", "metric"].map((u) => {
               const active = (u === "metric") === metric;
               return (
-                <button key={u} type="button" onClick={() => setMetric(u === "metric")}
+                <button key={u} type="button" role="radio" aria-checked={active}
+                  onClick={() => setMetric(u === "metric")}
                   style={{
-                    padding: "6px 12px", minHeight: 32, border: "none", cursor: "pointer",
+                    padding: "0 18px", minHeight: 44, minWidth: 44, border: "none",
+                    cursor: "pointer",
                     background: active ? T.card : "transparent",
                     color: active ? T.tx : T.tx2,
                     fontWeight: active ? 700 : 500,
@@ -1115,22 +1154,47 @@ function AppHeader({ metric, setMetric, currency, setCurrency }) {
 }
 
 function TabBar({ tab, setTab }) {
+  const tabs = TABS; // show every tab, including Home, so there's always a visible selection
+  const btnRefs = useRef([]);
+  const activeIdx = Math.max(0, tabs.findIndex((t) => t.id === tab));
+
+  const focusTab = (idx) => {
+    const clamped = (idx + tabs.length) % tabs.length;
+    const el = btnRefs.current[clamped];
+    if (el) el.focus();
+    setTab(tabs[clamped].id);
+  };
+
+  const onKeyDown = (e) => {
+    switch (e.key) {
+      case "ArrowRight": e.preventDefault(); focusTab(activeIdx + 1); break;
+      case "ArrowLeft":  e.preventDefault(); focusTab(activeIdx - 1); break;
+      case "Home":       e.preventDefault(); focusTab(0); break;
+      case "End":        e.preventDefault(); focusTab(tabs.length - 1); break;
+      default: break;
+    }
+  };
+
   return (
-    <nav role="tablist" aria-label="Planner sections" style={{
-      background: T.bg2, borderBottom: `1px solid ${T.border}`,
-    }}>
+    <nav role="tablist" aria-label="Planner sections"
+      aria-orientation="horizontal"
+      onKeyDown={onKeyDown}
+      style={{ background: T.bg2, borderBottom: `1px solid ${T.border}` }}>
       <div className="ur-tab-scroller" style={{
         maxWidth: 1200, margin: "0 auto",
         padding: "10px clamp(12px, 4vw, 48px)",
         display: "flex", gap: 6, overflowX: "auto",
       }}>
-        {TABS.filter((t) => t.id !== "home").map((t) => {
+        {tabs.map((t, i) => {
           const active = tab === t.id;
           return (
-            <button key={t.id} role="tab" aria-selected={active}
+            <button key={t.id}
+              ref={(el) => (btnRefs.current[i] = el)}
+              role="tab" aria-selected={active} aria-controls="main-panel"
+              tabIndex={active ? 0 : -1}
               onClick={() => setTab(t.id)}
               style={{
-                padding: "8px 14px", minHeight: 40,
+                padding: "0 16px", minHeight: 44,
                 fontSize: 14, fontWeight: active ? 700 : 500, fontFamily: T.fontBody,
                 color: active ? "#FEFCF8" : T.tx2,
                 background: active ? T.primary : "transparent",
@@ -1143,7 +1207,7 @@ function TabBar({ tab, setTab }) {
               }}>
               {t.label}
               {!t.live && (
-                <span style={{
+                <span aria-label="coming soon" style={{
                   fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
                   textTransform: "uppercase",
                   padding: "2px 6px", borderRadius: 999,
@@ -1171,7 +1235,7 @@ function AppFooter() {
         <a href="#home" style={{ color: T.primary, textDecoration: "none", fontWeight: 600 }}>Urban Root</a>
       </div>
       <div style={{ marginTop: 6, color: T.tx3 }}>
-        Session 1 preview — soil calculator, companion checker, planting dates coming soon.
+        Session 1 preview. Soil calculator, companion checker, and planting dates coming soon.
       </div>
     </footer>
   );
@@ -1187,8 +1251,11 @@ export default function App() {
   const [tab, setTab] = useState("home");
 
   // Global prefs
-  const [metric, setMetric] = useState(() => loadState(LS_METRIC, false));
-  const [currency, setCurrency] = useState(() => loadState(LS_CURRENCY, "$"));
+  const [metric, setMetric] = useState(() => loadState(LS_METRIC, false) === true);
+  const [currency, setCurrency] = useState(() => {
+    const c = loadState(LS_CURRENCY, "$");
+    return typeof c === "string" && c.length <= 3 ? c : "$";
+  });
 
   // Calculator state
   const [familySize, setFamilySize] = useState(() =>
@@ -1217,11 +1284,13 @@ export default function App() {
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (hash && VALID_TABS.includes(hash)) setTab(hash);
-  }, []);
-  useEffect(() => {
-    const onPop = () => {
-      const h = window.location.hash.slice(1) || "home";
-      if (VALID_TABS.includes(h)) setTab(h);
+    const onPop = (e) => {
+      const stateTab = e.state?.tab;
+      const hashTab = window.location.hash.slice(1) || "home";
+      const next = VALID_TABS.includes(stateTab)
+        ? stateTab
+        : (VALID_TABS.includes(hashTab) ? hashTab : "home");
+      setTab(next);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1234,13 +1303,16 @@ export default function App() {
     if (window.location.hash.slice(1) !== id) {
       window.history.pushState({ tab: id }, "", `#${id}`);
     }
-    window.scrollTo({ top: 0, behavior: "instant" });
+    window.scrollTo(0, 0);
   }, []);
 
-  // Resolve active tab data
+  // Resolve active tab data. If state ever desyncs (corrupt hash, schema change)
+  // snap back to Home so `ComingSoon` never renders with a stale blurb.
   const activeTab = useMemo(() => {
-    const t = TABS.find((x) => x.id === tab) || TABS[0];
-    return t;
+    return TABS.find((x) => x.id === tab) || TABS[0];
+  }, [tab]);
+  useEffect(() => {
+    if (!VALID_TABS.includes(tab)) setTab("home");
   }, [tab]);
 
   const calcProps = {
@@ -1262,7 +1334,7 @@ export default function App() {
 
       <TabBar tab={tab} setTab={changeTab} />
 
-      <main>
+      <main id="main-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
         {tab === "home" && <HomeView {...calcProps} />}
         {tab === "self-sufficiency" && (
           <section style={{
@@ -1314,6 +1386,12 @@ function GlobalStyles() {
       /* Hide horizontal tab scrollbar visually while keeping scroll */
       .ur-tab-scroller { scrollbar-width: none; -ms-overflow-style: none; }
       .ur-tab-scroller::-webkit-scrollbar { display: none; }
+
+      /* Subtle hover on per-crop breakdown cards */
+      .ur-crop-card:hover {
+        background: ${T.cardHover};
+        border-color: ${T.tx3};
+      }
 
       @keyframes fadeUp {
         from { opacity: 0; transform: translateY(16px); }
