@@ -3022,86 +3022,168 @@ function ComparisonSection() {
 
 function PricingSection() {
   const isMobile = useMediaQuery("(max-width: 640px)");
-  const features = [
+  const freeFeatures = [
+    "Self-sufficiency calculator — plant counts, garden space, annual yield",
+    "Raised-bed soil calculator — 3 shapes, 4 mix presets, bag counts",
+    "Companion planting checker — 82 crops, 164 extension-sourced pairings",
+    "Planting dates — USDA zones 3-11 or manual frost, hemisphere-aware",
+    "Works on phone in the garden, data saves to your browser",
+    "No account, no email, no trial countdown",
+  ];
+  const paidFeatures = [
     "Personalised month-by-month growing plan tuned to your family and zone",
-    "Complete crop database with 60+ vegetables and varieties",
+    "Complete crop database — 82 vegetables with yields, spacing, preservation",
     "Cost savings calculator with ROI and break-even timeline",
     "Preservation planner (can, freeze, dehydrate, root cellar)",
     "Self-contained HTML report you can save, print, or email",
-    "Works on your phone in the garden, mobile-first",
-    "3-device license, never expires",
+    "3-device licence, never expires",
+    "Everything in the free tier, always",
   ];
+  // Shared styles between the two tiles so they read as a matched pair.
+  const tileStyle = {
+    padding: isMobile ? "28px 22px" : "36px 30px",
+    borderRadius: T.radiusLg,
+    background: T.card,
+    boxShadow: T.shadow.lg,
+    display: "flex", flexDirection: "column",
+  };
+  const featureBullet = (tintBg, tintFg) => ({
+    flexShrink: 0, width: 20, height: 20, borderRadius: 999,
+    background: tintBg, color: tintFg,
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    fontWeight: 700, fontSize: 12, marginTop: 2,
+  });
   return (
-    <LandingSection id="pricing">
+    <LandingSection id="pricing" maxWidth={1080}>
       <SectionHeading
         eyebrow="Pricing"
         title="Pay once. Use forever."
-        subtitle="The four free calculators above stay free. The paid tier unlocks the full growing plan plus the rest." />
+        subtitle="Four calculators are free forever. The paid tier unlocks the AI growing plan, full crop database, cost savings, and preservation planner." />
       <div style={{
-        marginTop: 36,
-        maxWidth: 520, marginLeft: "auto", marginRight: "auto",
-        padding: isMobile ? "28px 24px" : "40px 36px",
-        borderRadius: T.radiusLg,
-        background: T.card,
-        border: `1.5px solid ${T.border}`,
-        boxShadow: T.shadow.lg,
-        textAlign: "center",
+        marginTop: 36, display: "grid", gap: 20,
+        gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+        alignItems: "stretch",
       }}>
+        {/* ── Free tier ── */}
         <div style={{
-          display: "inline-block", padding: "6px 14px", borderRadius: T.radiusPill,
-          background: T.accentBg, color: T.accent,
-          fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-          marginBottom: 16,
+          ...tileStyle,
+          border: `1.5px solid ${T.border}`,
         }}>
-          Full Growing Plan
-        </div>
-        <div style={{
-          fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
-          fontSize: "clamp(3rem, 7vw, 4.5rem)", fontWeight: 700, color: T.tx,
-          lineHeight: 1,
-        }}>
-          $19.99
-        </div>
-        <div style={{
-          marginTop: 8, fontSize: 14, color: T.tx2, fontWeight: 600,
-        }}>One-time purchase. No renewal.</div>
-
-        <ul style={{
-          listStyle: "none", padding: 0, margin: "28px 0 0",
-          textAlign: "left", display: "grid", gap: 10,
-        }}>
-          {features.map((f) => (
-            <li key={f} style={{
-              display: "flex", alignItems: "flex-start", gap: 10,
-              fontSize: 15, color: T.tx, lineHeight: 1.5,
-            }}>
-              <span aria-hidden="true" style={{
-                flexShrink: 0, width: 20, height: 20, borderRadius: 999,
-                background: T.primaryBg, color: T.primary,
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                fontWeight: 700, fontSize: 12, marginTop: 2,
-              }}>✓</span>
-              {f}
-            </li>
-          ))}
-        </ul>
-
-        <button type="button" disabled
-          style={{
-            marginTop: 28, width: "100%",
-            padding: "16px 24px", minHeight: 56,
-            background: T.tx3, color: "#FEFCF8",
-            border: "none", borderRadius: T.radiusPill,
-            fontFamily: T.fontBody, fontSize: 16, fontWeight: 700,
-            cursor: "not-allowed", opacity: 0.65,
+          <div style={{
+            display: "inline-block", padding: "6px 14px", borderRadius: T.radiusPill,
+            background: T.primaryBg, color: T.primary,
+            fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+            marginBottom: 16, alignSelf: "flex-start",
           }}>
-          Coming soon
-        </button>
-        <p style={{
-          margin: "14px 0 0", fontSize: 12, color: T.tx3, lineHeight: 1.5,
+            Free forever
+          </div>
+          <div style={{
+            fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+            fontSize: "clamp(3rem, 7vw, 4.5rem)", fontWeight: 700, color: T.tx,
+            lineHeight: 1,
+          }}>
+            $0
+          </div>
+          <div style={{
+            marginTop: 8, fontSize: 14, color: T.tx2, fontWeight: 600,
+          }}>No account. No trial. Just use it.</div>
+
+          <ul style={{
+            listStyle: "none", padding: 0, margin: "28px 0 0",
+            display: "grid", gap: 10, flex: "1 1 auto",
+          }}>
+            {freeFeatures.map((f) => (
+              <li key={f} style={{
+                display: "flex", alignItems: "flex-start", gap: 10,
+                fontSize: 15, color: T.tx, lineHeight: 1.5,
+              }}>
+                <span aria-hidden="true" style={featureBullet(T.primaryBg, T.primary)}>✓</span>
+                {f}
+              </li>
+            ))}
+          </ul>
+
+          <a href="#self-sufficiency"
+            onClick={(e) => { e.preventDefault(); window.location.hash = "self-sufficiency"; }}
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              marginTop: 28, padding: "16px 24px", minHeight: 56,
+              background: "transparent", color: T.primary,
+              border: `1.5px solid ${T.primary}`, borderRadius: T.radiusPill,
+              fontFamily: T.fontBody, fontSize: 16, fontWeight: 700,
+              textDecoration: "none", cursor: "pointer",
+            }}>
+            Start planning
+          </a>
+        </div>
+
+        {/* ── Paid tier ── */}
+        <div style={{
+          ...tileStyle,
+          border: `1.5px solid ${T.accent}`,
+          position: "relative",
         }}>
-          Paid tier launches with Session 4. All four calculators above stay free.
-        </p>
+          {/* Subtle "recommended" flag — terracotta to match the accent border */}
+          <div aria-hidden="true" style={{
+            position: "absolute", top: -12, right: 20,
+            padding: "4px 12px", borderRadius: T.radiusPill,
+            background: T.accent, color: "#FEFCF8",
+            fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+          }}>
+            Most homesteaders
+          </div>
+          <div style={{
+            display: "inline-block", padding: "6px 14px", borderRadius: T.radiusPill,
+            background: T.accentBg, color: T.accent,
+            fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+            marginBottom: 16, alignSelf: "flex-start",
+          }}>
+            Full Growing Plan
+          </div>
+          <div style={{
+            fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+            fontSize: "clamp(3rem, 7vw, 4.5rem)", fontWeight: 700, color: T.tx,
+            lineHeight: 1,
+          }}>
+            ${PRICE_USD}
+          </div>
+          <div style={{
+            marginTop: 8, fontSize: 14, color: T.tx2, fontWeight: 600,
+          }}>One-time purchase. 48-hour refund window.</div>
+
+          <ul style={{
+            listStyle: "none", padding: 0, margin: "28px 0 0",
+            display: "grid", gap: 10, flex: "1 1 auto",
+          }}>
+            {paidFeatures.map((f) => (
+              <li key={f} style={{
+                display: "flex", alignItems: "flex-start", gap: 10,
+                fontSize: 15, color: T.tx, lineHeight: 1.5,
+              }}>
+                <span aria-hidden="true" style={featureBullet(T.accentBg, T.accent)}>✓</span>
+                {f}
+              </li>
+            ))}
+          </ul>
+
+          <a href={CHECKOUT_URL} className="lemonsqueezy-button"
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              marginTop: 28, padding: "16px 24px", minHeight: 56,
+              background: T.accent, color: "#FEFCF8",
+              border: "none", borderRadius: T.radiusPill,
+              fontFamily: T.fontBody, fontSize: 16, fontWeight: 700,
+              textDecoration: "none", cursor: "pointer",
+              boxShadow: T.shadow.accent,
+            }}>
+            Get full access
+          </a>
+          <p style={{
+            margin: "14px 0 0", fontSize: 12, color: T.tx3, lineHeight: 1.5, textAlign: "center",
+          }}>
+            Secure checkout via LemonSqueezy. Licence key emailed within seconds.
+          </p>
+        </div>
       </div>
     </LandingSection>
   );
