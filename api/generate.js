@@ -40,10 +40,13 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4096;
 
-// Per-licence rate limit. 20 generations per hour per key - generous enough
-// for legitimate iteration, tight enough to bound a stolen-key abuse blast.
+// Fair-use: 20 plans per rolling 24-hour window per licence. Documented in terms.html.
+// Rolling window (not fixed daily reset) — TTL on the Redis key expires exactly 24h after
+// the first plan in the window, so an attacker can't burn 20 at 23:59 and 20 more at 00:01.
+// Slightly more generous than FaminePrep's 10/24h because Homestead's $19.99 price point
+// justifies more iteration headroom (garden size, crop mix, family size tuning).
 const RL_MAX = 20;
-const RL_WINDOW_SEC = 3600; // 1 hour
+const RL_WINDOW_SEC = 86400; // 24 hours in seconds
 
 // Anthropic API requires absolute upper bounds on inputs we'll later reflect
 // in the prompt - guards against an attacker crafting a 200 KB payload that
@@ -530,7 +533,7 @@ export default async function handler(req, res) {
   if (!(await rateLimitOK(`lk:${hashKey(licenseKey)}`))) {
     return res.status(429).json({
       ok: false,
-      error: "You've generated several plans this hour. Please wait a bit before generating another.",
+      error: "You've reached the fair-use limit of 20 plans in 24 hours. Please try again later. See our terms for details.",
     });
   }
 
