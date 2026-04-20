@@ -77,7 +77,11 @@ const LS_PLANTING = "hhp_planting";
 const LS_CROP_DB = "hhp_crop_db";
 const LS_COST_SAVINGS = "hhp_cost_savings";
 const LS_PRESERVATION = "hhp_preservation";
-const LS_PLAN = "hhp_plan";
+// hhp_plan_v2: paywall V2 retrofit 2026-04-20 (Finding A). Stores ONLY
+// { inputs, generatedAt, cropFingerprint } - NEVER the plan body. The
+// rename is a clean break from the pre-V2 hhp_plan key so any leaked blob
+// is orphaned by design (and the rehydrator actively deletes it).
+const LS_PLAN_V2 = "hhp_plan_v2";
 
 // Paywall storage (Session 4). hhp_paid is NOT read on mount - state machine
 // is paid:false / validating:true until the server confirms. See engineering-
@@ -3588,6 +3592,48 @@ const LOADING_MESSAGES = [
   "Drafting your tips...",
 ];
 
+// ───────────────────────────────────────────────────────────────────────────
+// V2 paywall retrofit 2026-04-20 (Finding A). cropFingerprint is a SHA-256
+// hex digest of a canonical-form serialisation of the full generation input
+// set. It is:
+//   - Derived from inputs ONLY. Never plan-derived, never timestamp-tainted.
+//   - Canonical: sorted object keys, sorted arrays where order is not
+//     semantically significant (goals, cropIds).
+//   - Deterministic: no Math.random(), no Date.now(), no environmental noise.
+//   - Cryptographic: SHA-256 via crypto.subtle.digest. No home-rolled hashes.
+//
+// IMPORTANT: the field set below MUST match the field set sent to
+// /api/generate.js in the request body at ~L3827-3848. If you change one,
+// change both, or the stale-plan banner will lie.
+function canonicalizeFingerprintInput(d) {
+  return JSON.stringify({
+    familySize: d.familySize,
+    cropIds: [...(d.cropIds || [])].sort(),
+    zoneStr: d.zoneStr,
+    lastSpringFrostStr: d.lastSpringFrostStr,
+    firstFallFrostStr: d.firstFallFrostStr,
+    hemisphere: d.hemisphere,
+    gardenSqFt: d.gardenSqFt,
+    producePerPersonLbs: d.producePerPersonLbs,
+    sunExposure: d.inputs.sunExposure,
+    soilType: d.inputs.soilType,
+    waterMethod: d.inputs.waterMethod,
+    experience: d.inputs.experience,
+    goals: [...(d.inputs.goals || [])].sort(),
+    displayUnits: d.displayUnits,
+    currency: d.currency,
+  });
+}
+async function computeFingerprint(d) {
+  const json = canonicalizeFingerprintInput(d);
+  const bytes = new TextEncoder().encode(json);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 // Mirrors api/generate.js sanitisePlan(). Used when re-hydrating a cached plan
 // from localStorage so a tampered or migrated cache can't crash the renderer.
 // Returns null if the plan is unsalvageable (no monthlySchedule).
@@ -3724,15 +3770,6 @@ function GrowingPlanTab({
   const cropIds = baseResults.perCrop.map((r) => r.cropId);
   const cropNames = baseResults.perCrop.map((r) => r.crop.name);
 
-  // Sorted-IDs fingerprint - used to detect when the user has changed crop
-  // selection since the cached plan was generated (#15).
-  const currentFingerprint = useMemo(
-    () => cropIds.slice().sort().join(","),
-    [cropIds]
-  );
-  const fingerprintStale = !!plan && !!planState.cropFingerprint
-    && planState.cropFingerprint !== currentFingerprint;
-
   // Manual frost mode missing dates? Block generation (#5).
   const manualMissing = plantingState.mode === "manual"
     && (!plantingState.manualFrost?.lastSpring || !plantingState.manualFrost?.firstFall);
@@ -3781,6 +3818,48 @@ function GrowingPlanTab({
   const goalLabels = inputs.goals
     .map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label)
     .filter(Boolean);
+
+  // ── V2 paywall retrofit 2026-04-20 (Finding A) ──────────────────────────
+  // SHA-256 hex digest of the full generation input set in canonical form.
+  // Lives in local state because crypto.subtle.digest is async. Recomputed
+  // when any input that affects generation changes. While the first digest
+  // is in flight, currentFingerprint is "" and fingerprintStale is false
+  // (safe default - no banner). See `canonicalizeFingerprintInput` at module
+  // scope for the exact input shape.
+  const displayUnits = metric ? "metric" : "imperial";
+  const fingerprintInput = useMemo(() => ({
+    familySize,
+    cropIds,
+    zoneStr,
+    lastSpringFrostStr,
+    firstFallFrostStr,
+    hemisphere,
+    gardenSqFt,
+    producePerPersonLbs: producePerPerson,
+    inputs,
+    displayUnits,
+    currency,
+  }), [familySize, cropIds, zoneStr, lastSpringFrostStr, firstFallFrostStr,
+       hemisphere, gardenSqFt, producePerPerson, inputs, displayUnits, currency]);
+  const fingerprintJsonRef = useRef("");
+  const fingerprintDigestRef = useRef("");
+  const [currentFingerprint, setCurrentFingerprint] = useState("");
+  useEffect(() => {
+    const json = canonicalizeFingerprintInput(fingerprintInput);
+    if (json === fingerprintJsonRef.current) return; // cached
+    fingerprintJsonRef.current = json;
+    let cancelled = false;
+    computeFingerprint(fingerprintInput).then((digest) => {
+      if (cancelled) return;
+      fingerprintDigestRef.current = digest;
+      setCurrentFingerprint(digest);
+    }).catch(() => { /* crypto.subtle failure - leave "" */ });
+    return () => { cancelled = true; };
+  }, [fingerprintInput]);
+  const fingerprintStale = !!plan && !!planState.cropFingerprint
+    && !!currentFingerprint
+    && planState.cropFingerprint !== currentFingerprint;
+  // ────────────────────────────────────────────────────────────────────────
 
   const generate = async () => {
     if (cropIds.length === 0) {
@@ -3853,11 +3932,20 @@ function GrowingPlanTab({
         setGenerating(false);
         return;
       }
+      // Compute the fingerprint at generation time from the same input set
+      // we just sent to /api/generate. We don't reuse the `currentFingerprint`
+      // state var because the useEffect that populates it is async - there's
+      // a brief window on first load where it's still "". This path is
+      // authoritative for what gets persisted.
+      let freshFingerprint = currentFingerprint;
+      try {
+        freshFingerprint = await computeFingerprint(fingerprintInput);
+      } catch { /* fall back to whatever the effect has given us */ }
       setPlanState((prev) => ({
         ...prev,
         plan: data.plan,
         generatedAt: Date.now(),
-        cropFingerprint: currentFingerprint,
+        cropFingerprint: freshFingerprint,
       }));
       setGenerating(false);
     } catch (e) {
@@ -6606,11 +6694,18 @@ export default function App() {
   });
 
   // Growing Plan state (Tab 5 - paid)
-  // Persists the user's input choices AND the last generated plan + timestamp
-  // so reloads don't blow away an expensive call. Plan body is sanitised on
-  // load so a corrupt cache can't crash the renderer.
+  // V2 paywall retrofit 2026-04-20 (Finding A - client-side paywall leak).
+  // Architectural invariant: planState.plan === null on EVERY mount, licensed
+  // or not. The plan body is never read from localStorage. Inputs + status
+  // fingerprint + timestamp rehydrate; a licensed user clicks Generate to
+  // rebuild the plan. See CLAUDE_CODE_FIX_PROMPT_V2_HOMESTEAD_PAYWALL.md.
   const [planState, setPlanState] = useState(() => {
-    const saved = loadState(LS_PLAN, null);
+    // Legacy cleanup: unconditionally remove any pre-V2 hhp_plan blob left
+    // behind by prior code versions. Idempotent after first run; try/catch
+    // makes it safe even in private-browsing contexts where LS throws.
+    try { localStorage.removeItem("hhp_plan"); } catch { /* noop */ }
+
+    const saved = loadState(LS_PLAN_V2, null);
     const validInputs = (raw) => {
       if (!raw || typeof raw !== "object") return { ...PLAN_INPUT_DEFAULTS };
       return {
@@ -6626,18 +6721,20 @@ export default function App() {
     if (!saved || typeof saved !== "object") {
       return { inputs: { ...PLAN_INPUT_DEFAULTS }, plan: null, generatedAt: null, cropFingerprint: "" };
     }
-    // Run cached plan through the same sanitiser the server uses, so a corrupt
-    // or tampered cache (or one written by an older code version) can't crash
-    // the renderer. Drops the plan but keeps inputs if shape is unsalvageable.
-    const cachedPlan = sanitisePlanShape(saved.plan);
+    // Plan body is NEVER restored from localStorage. Start with plan: null on
+    // every mount, by design. Inputs + status fingerprint restore; the plan
+    // regenerates on demand. Do not add `saved.plan` reads here.
     const generatedAt = typeof saved.generatedAt === "number" ? saved.generatedAt : null;
+    // cropFingerprint is a SHA-256 hex string (64 chars). Accept only that
+    // exact shape; anything else resets to "" so the next Generate computes
+    // a fresh digest and writes it back - graceful degradation.
     const cropFingerprint = typeof saved.cropFingerprint === "string"
-      ? saved.cropFingerprint.slice(0, 4096) : "";
+      && /^[0-9a-f]{64}$/.test(saved.cropFingerprint) ? saved.cropFingerprint : "";
     return {
       inputs: validInputs(saved.inputs),
-      plan: cachedPlan,
-      generatedAt: cachedPlan ? generatedAt : null,
-      cropFingerprint: cachedPlan ? cropFingerprint : "",
+      plan: null,
+      generatedAt,
+      cropFingerprint,
     };
   });
 
@@ -6684,7 +6781,19 @@ export default function App() {
   useEffect(() => { persistState(LS_CROP_DB, cropDbState); }, [cropDbState]);
   useEffect(() => { persistState(LS_COST_SAVINGS, costSavings); }, [costSavings]);
   useEffect(() => { persistState(LS_PRESERVATION, preservation); }, [preservation]);
-  useEffect(() => { persistState(LS_PLAN, planState); }, [planState]);
+  // V2 paywall retrofit 2026-04-20 (Finding A): persist ONLY the inputs +
+  // status fingerprint + timestamp, NEVER the plan body. The derived subset
+  // is rebuilt on every change; it must not contain a key named `plan` or
+  // any plan-body field. If you ever find yourself adding `plan: …` here,
+  // you have regressed the paywall fix - read CLAUDE_CODE_FIX_PROMPT_V2_
+  // HOMESTEAD_PAYWALL.md first.
+  useEffect(() => {
+    persistState(LS_PLAN_V2, {
+      inputs: planState.inputs,
+      generatedAt: planState.generatedAt,
+      cropFingerprint: planState.cropFingerprint,
+    });
+  }, [planState]);
 
   // If a long-lived browser session crosses Jan 1, bump the planting
   // referenceYear to the new calendar year so the timeline doesn't silently
@@ -7061,6 +7170,12 @@ export default function App() {
               metric={metric} />
           </TabPageShell>
         )}
+        {/* Plan body lives in React state only (planState.plan). Never persisted to
+            localStorage after V2 retrofit 2026-04-20 (Finding A). Refreshing the page
+            drops the plan by design - licensed users click "Generate" to rebuild it
+            from the still-persisted inputs + status fingerprint. This comment exists
+            to prevent a future "nice to have" refactor from re-adding a plan-persist
+            write and reopening the leak. */}
         {activeTab.paid && !validating && paid && tab === "growing-plan" && (
           <TabPageShell
             title="Your Personalised Growing Plan"
