@@ -2676,7 +2676,7 @@ function HomeView({ setTab }) {
             fontSize: isMobile ? 16 : 19, lineHeight: 1.6, color: T.tx2,
           }}>
             Plan your homestead garden based on what your family actually eats.
-            Four free calculators plus an AI-written year-long growing plan.
+            Four free calculators plus a personalized year-long growing plan.
           </p>
           <div style={{
             marginTop: isMobile ? 28 : 36,
@@ -3062,7 +3062,7 @@ function PricingSection() {
       <SectionHeading
         eyebrow="Pricing"
         title="Pay once. Use forever."
-        subtitle="Four calculators are free forever. The paid tier unlocks the AI growing plan, full crop database, cost savings, and preservation planner." />
+        subtitle="Four calculators are free forever. The paid tier unlocks the full growing plan, crop database, cost savings, and preservation planner." />
       <div style={{
         marginTop: 36, display: "grid", gap: 20,
         gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
@@ -6086,34 +6086,38 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
 
         {/* Hemisphere + Metric toggles */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div role="radiogroup" aria-label="Hemisphere"
-            title="Hemisphere flips planting dates by 6 months - pick yours so spring/autumn line up with your calendar."
-            style={{
-              display: "flex", alignItems: "center",
-              background: T.bg2, borderRadius: T.radiusPill,
-              padding: 3, paddingLeft: isMobile ? 8 : 10,
-            }}>
-            <span aria-hidden="true" style={{
-              fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
-              textTransform: "uppercase", color: T.tx2, marginRight: 6,
-              fontFamily: T.fontBody,
+          {/* Hemisphere: the label sits OUTSIDE the pill container so it reads
+              as a caption, not a third button. The pill contains only the two
+              interactive options. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span id="hemisphere-label" style={{
+              fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
+              textTransform: "uppercase", color: T.tx3,
+              fontFamily: T.fontBody, whiteSpace: "nowrap",
             }}>
               {isMobile ? "Hemi" : "Hemisphere"}
             </span>
-            {[
-              { id: "north", short: "N. Hem.", long: "Northern" },
-              { id: "south", short: "S. Hem.", long: "Southern" },
-            ].map((h) => {
-              const active = hemisphere === h.id;
-              return (
-                <button key={h.id} type="button" role="radio" aria-checked={active}
-                  aria-label={`${h.long} hemisphere`}
-                  onClick={() => setHemisphere(h.id)}
-                  style={pillBtnStyle(active)}>
-                  {isMobile ? h.short : h.long}
-                </button>
-              );
-            })}
+            <div role="radiogroup" aria-labelledby="hemisphere-label"
+              title="Hemisphere flips planting dates by 6 months - pick yours so spring/autumn line up with your calendar."
+              style={{
+                display: "flex", alignItems: "center",
+                background: T.bg2, borderRadius: T.radiusPill, padding: 3,
+              }}>
+              {[
+                { id: "north", short: "N. Hem.", long: "Northern" },
+                { id: "south", short: "S. Hem.", long: "Southern" },
+              ].map((h) => {
+                const active = hemisphere === h.id;
+                return (
+                  <button key={h.id} type="button" role="radio" aria-checked={active}
+                    aria-label={`${h.long} hemisphere`}
+                    onClick={() => setHemisphere(h.id)}
+                    style={pillBtnStyle(active)}>
+                    {isMobile ? h.short : h.long}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div role="radiogroup" aria-label="Unit system" style={{
