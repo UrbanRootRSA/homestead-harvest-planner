@@ -159,9 +159,17 @@ export default async function handler(req, res) {
       return res.status(200).json({ valid: false, error: msg });
     }
 
-    // Optional store-ID lock-down. Set LEMONSQUEEZY_STORE_ID in Vercel once you
-    // know it (it appears in meta.store_id of the first successful validate).
+    // Store-ID lock-down. Hybrid fail-closed: in production, missing
+    // LEMONSQUEEZY_STORE_ID is a server misconfig (refuse to validate). In
+    // preview/dev, warn and skip the check so local testing still works.
     const expectedStoreId = process.env.LEMONSQUEEZY_STORE_ID;
+    if (!expectedStoreId) {
+      if (process.env.VERCEL_ENV === "production") {
+        console.error("[CRITICAL] LEMONSQUEEZY_STORE_ID missing in production — refusing to validate");
+        return res.status(500).json({ valid: false, error: "Server misconfigured. Please contact support." });
+      }
+      console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
+    }
     if (expectedStoreId && meta.store_id != null && String(meta.store_id) !== String(expectedStoreId)) {
       return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
     }

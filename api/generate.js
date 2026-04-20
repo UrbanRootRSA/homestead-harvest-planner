@@ -161,9 +161,18 @@ async function validateLicence(key, instanceId) {
     const isActive = status === "active" || js.valid === true;
     if (!isActive) return false;
 
-    // Optional store-ID lock-down (mirrors validate-key.js).
+    // Store-ID lock-down (mirrors validate-key.js). Hybrid fail-closed: in
+    // production, missing LEMONSQUEEZY_STORE_ID is a server misconfig and we
+    // refuse to validate. In preview/dev, warn and skip so local testing works.
     const meta = js.meta || {};
     const expectedStoreId = process.env.LEMONSQUEEZY_STORE_ID;
+    if (!expectedStoreId) {
+      if (process.env.VERCEL_ENV === "production") {
+        console.error("[CRITICAL] LEMONSQUEEZY_STORE_ID missing in production — refusing to validate");
+        return false;
+      }
+      console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
+    }
     if (expectedStoreId && meta.store_id != null && String(meta.store_id) !== String(expectedStoreId)) {
       return false;
     }
