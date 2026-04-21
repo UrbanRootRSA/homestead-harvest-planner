@@ -927,7 +927,18 @@ function ProduceTargetField({ value, onChange, metric, isMobile }) {
   const displayValue = metric ? Number((value * LB_TO_KG).toFixed(1)) : value;
   const min = metric ? MIN_PRODUCE_PER_PERSON_LBS * LB_TO_KG : MIN_PRODUCE_PER_PERSON_LBS;
   const max = metric ? MAX_PRODUCE_PER_PERSON_LBS * LB_TO_KG : MAX_PRODUCE_PER_PERSON_LBS;
+  // Canonical storage is lb/person/yr. The Field displays kg in metric
+  // mode and commits through the kg→lb conversion on blur. Without a
+  // skip-if-unchanged guard, every blur re-encoded the displayed 1-decimal
+  // kg value back through v / LB_TO_KG, accumulating ~0.017% drift per
+  // blur in metric mode. Mirror the Cost Savings Price fix (L5573-5598):
+  // if the committed displayed value equals what the current canonical
+  // lb already renders as, skip the write entirely. Audit #25 / Fix 5.
   const commit = (v) => {
+    const displayedNow = metric
+      ? Number((value * LB_TO_KG).toFixed(1))
+      : value;
+    if (v === displayedNow) return;
     const asLbs = metric ? v / LB_TO_KG : v;
     onChange(Math.max(MIN_PRODUCE_PER_PERSON_LBS, Math.min(MAX_PRODUCE_PER_PERSON_LBS, asLbs)));
   };
@@ -4320,7 +4331,7 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownloa
                   fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
                   fontSize: 14, color: T.primary, fontWeight: 700,
                 }}>
-                  {y.plants} plants · ~{y.estimatedYield.toFixed(1)} {y.unit}
+                  {y.plants} plants · ~{fmtDecimal(y.estimatedYield, 1)} {y.unit}
                 </div>
                 {y.note && <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>{y.note}</div>}
               </div>
@@ -4636,7 +4647,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
           <strong>${escapeHtml(y.crop)}</strong>
-          <span class="num" style="color:#2D5A27;">${y.plants} plants &middot; ~${y.estimatedYield.toFixed(1)} ${escapeHtml(y.unit)}</span>
+          <span class="num" style="color:#2D5A27;">${y.plants} plants &middot; ~${fmtDecimal(y.estimatedYield, 1)} ${escapeHtml(y.unit)}</span>
         </div>
         ${y.note ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(y.note)}</p>` : ""}
       </div>
@@ -5438,7 +5449,7 @@ function CostSavingsCalculator({
             ? "Add at least one crop in the Self-Sufficiency tab to see your break-even timeline."
             : totals.totalSetup === 0
               ? "Add your setup costs below to see when your garden pays for itself."
-              : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
+              : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven < 1 || heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
         </p>
       </div>
 
@@ -5571,14 +5582,25 @@ function CostSavingsCalculator({
                       </div>
                     </div>
                     <div>
-                      {/* Storage in $/lb at 6 dp so the metric round-trip
-                          (kg → lb → kg display) doesn't drift below the
-                          displayed 2-dp precision on blur. Audit #25. */}
+                      {/* Canonical storage is $/lb. The Field displays $/kg in
+                          metric mode and commits through the kg→lb conversion
+                          on blur. Previously every blur re-encoded through
+                          toFixed(2) at display time and toFixed(6) at write
+                          time, which accumulated ~0.017% drift per blur in
+                          metric mode. Now we first check whether the committed
+                          displayed value is semantically identical to what the
+                          current canonical $/lb already renders as - if so, we
+                          skip the write entirely, breaking the drift cycle
+                          for toggle-blur-without-edit. Audit #25 / Fix 1. */}
                       <Field label="Price" unit={`${currency}/${unitMass}`}
                         value={metric
                           ? Number(pricePerKg.toFixed(2))
                           : Number(r.pricePerLb.toFixed(2))}
                         onChange={(v) => {
+                          const displayedNow = metric
+                            ? Number((r.pricePerLb / LB_TO_KG).toFixed(2))
+                            : Number(r.pricePerLb.toFixed(2));
+                          if (v === displayedNow) return;
                           const asLb = metric ? v * LB_TO_KG : v;
                           updatePrice(r.cropId, Math.max(0, Number(asLb.toFixed(6))));
                         }}

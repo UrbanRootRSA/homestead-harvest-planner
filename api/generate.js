@@ -110,6 +110,20 @@ async function rateLimitOK(suffix) {
 // raw key in Redis).
 const LICENCE_CACHE_TTL_SEC = 3600;
 
+// 3-device cap binding (Fix 3 2026-04-21):
+// Store a canonical instance_id per licence hash in Upstash. generate.js will
+// force-use this canonical instance when validating against LS, so clearing
+// client-side hhp_instance to spawn a new LS activation does not bypass the
+// device cap for plan generation. First-ever generate call with a valid
+// client-supplied instance_id binds the canonical; subsequent calls ignore
+// what the client sent and use the canonical.
+//
+// TTL is intentionally long (30 days) so a legit user who reinstalls / clears
+// LS within the month can resume via their original canonical instance. The
+// canonical is refreshed on every successful validate (sliding window).
+const INSTANCE_BIND_TTL_SEC = 30 * 86400; // 30 days
+const instanceBindKey = (licenceHash) => `hhp:instance:${licenceHash}`;
+
 async function callLs(endpoint, params) {
   const body = new URLSearchParams(params).toString();
   const resp = await fetch(endpoint, {
@@ -129,7 +143,8 @@ async function validateLicence(key, instanceId) {
   if (!key || typeof key !== "string" || key.length < 8 || key.length > 128) {
     return false;
   }
-  const cacheKey = `hhp:lk:ok:${hashKey(key)}`;
+  const licenceHash = hashKey(key);
+  const cacheKey = `hhp:lk:ok:${licenceHash}`;
   if (redis) {
     try {
       const cached = await redis.get(cacheKey);
@@ -138,17 +153,42 @@ async function validateLicence(key, instanceId) {
       console.warn("[generate] licence cache read failed:", e?.message);
     }
   }
+
+  // Fix 3: look up the canonical instance_id bound to this licence hash. If
+  // present, force-use it regardless of what the client sent. This closes the
+  // "bare key" validate bypass (else branch of the old code) that let anyone
+  // with the licence key burn rate-limited Anthropic spend without ever
+  // binding a device.
+  const clientInstanceId = (typeof instanceId === "string" && instanceId.length > 0 && instanceId.length <= 64)
+    ? instanceId : "";
+  let canonicalInstanceId = "";
+  if (redis) {
+    try {
+      const stored = await redis.get(instanceBindKey(licenceHash));
+      if (typeof stored === "string" && stored.length > 0 && stored.length <= 64) {
+        canonicalInstanceId = stored;
+      }
+    } catch (e) {
+      console.warn("[generate] instance binding read failed:", e?.message);
+    }
+  }
+  // Decide which instance_id to present to LS:
+  //   - canonical present → use canonical (server source-of-truth)
+  //   - canonical absent + client sent one → use client's (first-bind path)
+  //   - canonical absent + client sent nothing → reject (no bare-key validate)
+  // The last case is the security-critical change: generate.js no longer
+  // accepts a bare-key call even during the client-side 48h grace window.
+  // Grace only lets the client SEE already-persisted state; generating a new
+  // (expensive) plan requires a bound instance.
+  const instanceIdForLs = canonicalInstanceId || clientInstanceId;
+  if (!instanceIdForLs) {
+    console.warn("[generate] no instance_id available (canonical missing and client sent none) — refusing to validate");
+    return false;
+  }
+
   // Cache miss: ask LemonSqueezy.
   try {
-    let ls;
-    if (instanceId && typeof instanceId === "string" && instanceId.length <= 64) {
-      ls = await callLs(LS_VALIDATE, { license_key: key, instance_id: instanceId });
-    } else {
-      // No instance - fall back to validate-only (will return active=true if the
-      // key exists at all, even with no activation). This matches the cached-key
-      // grace path used in the client.
-      ls = await callLs(LS_VALIDATE, { license_key: key });
-    }
+    const ls = await callLs(LS_VALIDATE, { license_key: key, instance_id: instanceIdForLs });
     if (ls.status >= 500) {
       // LS unreachable - fail closed for paid endpoints.
       console.error("[generate] LS unreachable during validation:", ls.status);
@@ -180,6 +220,30 @@ async function validateLicence(key, instanceId) {
     if (redis) {
       try { await redis.set(cacheKey, "1", { ex: LICENCE_CACHE_TTL_SEC }); }
       catch (e) { console.warn("[generate] licence cache write failed:", e?.message); }
+      // Fix 3: bind the canonical instance_id. Two distinct operations:
+      //   - If canonical was ABSENT, write clientInstanceId as the new
+      //     canonical using NX (first-write-wins). Later bare-key or
+      //     different-instance callers are then forced to use this canonical.
+      //   - If canonical was PRESENT, only refresh the 30-day TTL so an
+      //     active legit user's canonical doesn't expire. Do NOT overwrite
+      //     with instanceIdForLs - that's already the canonical we just
+      //     validated against.
+      try {
+        if (!canonicalInstanceId) {
+          // SET NX: only succeeds if the key doesn't exist. Guards against a
+          // race where two concurrent first-bind requests both find the
+          // canonical absent; the second write no-ops.
+          await redis.set(instanceBindKey(licenceHash), instanceIdForLs, {
+            ex: INSTANCE_BIND_TTL_SEC,
+            nx: true,
+          });
+        } else {
+          // Sliding-window refresh: same value, same TTL, just resets the
+          // clock. expire() avoids a write if the key vanished between
+          // lookup and refresh (acceptable race; next request rebinds).
+          await redis.expire(instanceBindKey(licenceHash), INSTANCE_BIND_TTL_SEC);
+        }
+      } catch (e) { console.warn("[generate] instance binding write failed:", e?.message); }
     }
     return true;
   } catch (e) {
