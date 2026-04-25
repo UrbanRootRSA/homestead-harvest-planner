@@ -15,7 +15,7 @@
 // every prompt token after the first request inside the 5-minute TTL window.
 //
 // Sonnet 4.6 chosen (not Opus) because this is a paywall-gated feature on a
-// $19.99 product. Sonnet runs the structured-output path well, costs ~5x less
+// $39.99 product. Sonnet runs the structured-output path well, costs ~5x less
 // than Opus per call (~$0.06 vs ~$0.10 with caching), and the spec at
 // CLAUDE.md §8 explicitly names the Sonnet tier.
 
@@ -43,7 +43,7 @@ const MAX_TOKENS = 4096;
 // Fair-use: 20 plans per rolling 24-hour window per licence. Documented in terms.html.
 // Rolling window (not fixed daily reset) — TTL on the Redis key expires exactly 24h after
 // the first plan in the window, so an attacker can't burn 20 at 23:59 and 20 more at 00:01.
-// Slightly more generous than FaminePrep's 10/24h because Homestead's $19.99 price point
+// Slightly more generous than FaminePrep's 10/24h because Homestead's $39.99 price point
 // justifies more iteration headroom (garden size, crop mix, family size tuning).
 const RL_MAX = 20;
 const RL_WINDOW_SEC = 86400; // 24 hours in seconds

@@ -91,8 +91,8 @@ const LS_KEY = "hhp_key";
 const LS_INSTANCE = "hhp_instance";
 const LS_PENDING = "hhp_pending";
 const GRACE_WINDOW_MS = 48 * 60 * 60 * 1000;
-const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/ee15261e-d919-4650-9c84-fb6bbf10eca2";
-const PRICE_USD = "19.99";
+const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/6aecd238-c4b2-41a1-9a05-255dc8bfc822";
+const PRICE_USD = "39.99";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Conversion constants + USDA baseline ──
@@ -2796,7 +2796,7 @@ function SocialProofSection() {
       sub: "Tomatoes to parsnips. Regional additions for non-US gardens." },
     { value: String(pairCount), label: "companion pairings",
       sub: "Sourced from extension-service research, not Pinterest folklore." },
-    { value: "$19.99", label: "one-time purchase",
+    { value: "$39.99", label: "one-time purchase",
       sub: "No subscription. No renewals. Your plan is yours." },
   ];
   return (
@@ -2957,7 +2957,7 @@ function HowItWorksSection() {
 function ComparisonSection() {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const rows = [
-    { tool: "The Homestead Plan", cost: "$19.99 once", fiveYears: "$19.99", afterStop: "Keep everything", ours: true },
+    { tool: "The Homestead Plan", cost: "$39.99 once", fiveYears: "$39.99", afterStop: "Keep everything", ours: true },
     { tool: "GrowVeg", cost: "$29 / year", fiveYears: "$145", afterStop: "Plans locked" },
     { tool: "Old Farmer's Almanac Planner", cost: "$29 / year", fiveYears: "$145", afterStop: "Plans locked" },
     { tool: "Seedtime (paid tier)", cost: "from ~$10 / month", fiveYears: "~$420+", afterStop: "Plans locked" },
