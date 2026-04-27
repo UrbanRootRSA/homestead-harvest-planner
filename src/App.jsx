@@ -2078,17 +2078,32 @@ function CompatibilityMatrix({ ids }) {
   // overflow:hidden rather than bleed into the previous section.
   const cellSize = 44;
   const headerHeight = 108;
+  // Width budget for the row-label column. "Endive / Escarole" is the longest
+  // current row label at 12 px nowrap; 140 gives breathing room without
+  // crowding the data grid on narrow viewports.
+  const rowLabelWidth = 140;
   return (
     <div style={{ display: "inline-block", minWidth: "100%", paddingTop: 4 }}>
-      <table style={{ borderCollapse: "separate", borderSpacing: 2 }}>
+      {/* tableLayout: fixed + an explicit <colgroup> forces every data column
+          to exactly cellSize, regardless of how long the rotated header text
+          is. Without this, "Tomatoes (General)" / "Endive / Escarole" columns
+          render wider than "Basil" / "Onions" because table-layout: auto
+          expands each column to fit its rotated content's bounding box. */}
+      <table style={{ borderCollapse: "separate", borderSpacing: 2, tableLayout: "fixed" }}>
         {/* SR-only caption gives screen-reader users the matrix purpose
             before they navigate cell-by-cell - audit #M9. */}
         <caption style={srOnlyStyle}>
           Compatibility matrix for {ids.length} crops. Green cells mean good companions, red cells mean avoid planting together, neutral cells have no documented interaction. Hover any cell for the reason.
         </caption>
+        <colgroup>
+          <col style={{ width: rowLabelWidth }} />
+          {ids.map((id) => (
+            <col key={id} style={{ width: cellSize }} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
-            <th style={{ width: cellSize, height: headerHeight }} aria-hidden="true" />
+            <th style={{ width: rowLabelWidth, height: headerHeight }} aria-hidden="true" />
             {ids.map((id) => (
               <th key={id} scope="col"
                 style={{
@@ -2096,7 +2111,7 @@ function CompatibilityMatrix({ ids }) {
                   fontSize: 11, fontWeight: 600, color: T.tx2,
                   fontFamily: T.fontBody, whiteSpace: "nowrap",
                   padding: 0, verticalAlign: "bottom",
-                  overflow: "hidden",
+                  overflow: "visible",
                 }}>
                 <div style={{
                   display: "inline-block",
@@ -2115,8 +2130,10 @@ function CompatibilityMatrix({ ids }) {
           {ids.map((row) => (
             <tr key={row}>
               <th scope="row" style={{
+                width: rowLabelWidth,
                 fontSize: 12, fontWeight: 600, color: T.tx2, fontFamily: T.fontBody,
                 textAlign: "right", paddingRight: 8, whiteSpace: "nowrap",
+                overflow: "hidden", textOverflow: "ellipsis",
               }}>
                 {CROPS[row]?.name || row}
               </th>
