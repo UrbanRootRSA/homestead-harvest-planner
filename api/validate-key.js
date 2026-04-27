@@ -141,10 +141,18 @@ export default async function handler(req, res) {
       // Retry path: caller sent instance_id that LS no longer recognises (e.g.
       // deactivated from the dashboard). Surface a clean error so the client
       // can drop the cached instance and re-activate.
+      // SECURITY: narrow retry_activation to errors that actually mention an
+      // instance — over-firing it on every error condition (e.g. "key not
+      // found") makes URL-key phishing-link slot-burn easier to exploit. See
+      // docs/security-2026-04-27-url-key-instance-trust.md (Finding #3).
+      // TODO: LS error strings are not contractually stable; revisit if LS
+      // changes the wording of instance-related errors.
+      const errStr = String(js.error || "");
+      const looksLikeStaleInstance = Boolean(instanceId) && /instance/i.test(errStr);
       return res.status(200).json({
         valid: false,
-        error: String(js.error).slice(0, 200),
-        retry_activation: Boolean(instanceId),
+        error: errStr.slice(0, 200),
+        retry_activation: looksLikeStaleInstance,
       });
     }
 

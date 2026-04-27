@@ -541,7 +541,8 @@ function clearLS(key) {
 //   { valid: false, error: string, retry_activation?: boolean }
 // Never throws - network failures resolve to { valid: false, error: ... } so
 // the caller can simply branch on `valid`.
-async function validateKeyRemote(key, instanceId) {
+async function validateKeyRemote(key, instanceId, opts) {
+  opts = opts || {};
   // 15s wall-clock cap keeps the paywall mount effect from spinning forever
   // when cold-start Vercel + cold Upstash + cold LS upstream stack on a slow
   // first request. /api/generate has a 90s timeout already; this path didn't,
@@ -555,7 +556,13 @@ async function validateKeyRemote(key, instanceId) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         key: String(key || "").trim(),
-        instance_id: instanceId ? String(instanceId) : undefined,
+        // SECURITY GATE 1: do NOT send the legit customer's stored instance_id
+        // when the caller is the URL-key path. opts.skipStoredInstance forces
+        // the field to undefined regardless of what the caller passed in. See
+        // docs/security-2026-04-27-url-key-instance-trust.md (Finding #1).
+        instance_id: opts.skipStoredInstance
+          ? undefined
+          : (instanceId ? String(instanceId) : undefined),
       }),
     });
     const data = await resp.json().catch(() => ({}));
@@ -6942,14 +6949,20 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    const attempt = async (key, existingInstance) => {
-      const r1 = await validateKeyRemote(key, existingInstance || "");
+    const attempt = async (key, existingInstance, opts) => {
+      opts = opts || {};
+      const skip = !!opts.skipStoredInstance;
+      const r1 = await validateKeyRemote(key, skip ? "" : (existingInstance || ""), opts);
       if (r1?.valid) return r1;
       // If LS no longer recognises our cached instance_id (deactivated remotely
       // from the LS dashboard, etc.), drop it and try a fresh activate.
-      if (r1?.retry_activation) {
+      // SECURITY GATE 2: skip this cleanup-write on the URL-key path. The URL
+      // ?key= value is attacker-controllable; wiping LS_INSTANCE here would
+      // burn the legit customer's activation slot on next reload. See
+      // docs/security-2026-04-27-url-key-instance-trust.md (Finding #2).
+      if (r1?.retry_activation && !skip) {
         clearLS(LS_INSTANCE);
-        const r2 = await validateKeyRemote(key, "");
+        const r2 = await validateKeyRemote(key, "", opts);
         if (r2?.valid) return r2;
         return r2;
       }
@@ -6980,8 +6993,12 @@ export default function App() {
         const params = new URLSearchParams(window.location.search);
         const urlKey = params.get("key");
         if (urlKey) {
-          const storedInstance = loadState(LS_INSTANCE, "");
-          const r = await attempt(urlKey, storedInstance);
+          // SECURITY: do NOT read LS_INSTANCE on the URL-key path. The URL
+          // ?key= value is attacker-controllable; sending the legit customer's
+          // instance_id with it leaks the instance and primes the cleanup-
+          // write slot-burn attack. See
+          // docs/security-2026-04-27-url-key-instance-trust.md (Findings #1+#2).
+          const r = await attempt(urlKey, "", { skipStoredInstance: true });
           if (cancelled) return;
           stripKeyFromUrl();
           if (r?.valid) {
