@@ -2073,97 +2073,86 @@ function CompanionChecker({ selectedIds, setSelectedIds, focusCropId, setFocusCr
 }
 
 function CompatibilityMatrix({ ids }) {
-  // Render as a square grid. Rotated column headers need vertical headroom on
-  // narrow viewports - we reserve 108 px and let long labels clip via
-  // overflow:hidden rather than bleed into the previous section.
+  // CSS Grid implementation — deterministic uniform cell sizing.
+  // The previous <table> + tableLayout:fixed approach was still letting some
+  // columns expand because Chrome falls back to auto-layout when the table
+  // itself has no explicit width, even with <colgroup>. Grid sidesteps that
+  // entirely. Accessibility preserved via role="grid" + aria-rowindex /
+  // aria-colindex on cells, plus a hidden caption-equivalent on the wrapper.
   const cellSize = 44;
   const headerHeight = 108;
-  // Width budget for the row-label column. "Endive / Escarole" is the longest
-  // current row label at 12 px nowrap; 140 gives breathing room without
-  // crowding the data grid on narrow viewports.
   const rowLabelWidth = 140;
+  const gap = 2;
+  const gridTemplateColumns = `${rowLabelWidth}px repeat(${ids.length}, ${cellSize}px)`;
+  const cellBox = { width: cellSize, height: cellSize, minWidth: cellSize, maxWidth: cellSize, minHeight: cellSize, maxHeight: cellSize };
   return (
-    <div style={{ display: "inline-block", minWidth: "100%", paddingTop: 4 }}>
-      {/* tableLayout: fixed + an explicit <colgroup> forces every data column
-          to exactly cellSize, regardless of how long the rotated header text
-          is. Without this, "Tomatoes (General)" / "Endive / Escarole" columns
-          render wider than "Basil" / "Onions" because table-layout: auto
-          expands each column to fit its rotated content's bounding box. */}
-      <table style={{ borderCollapse: "separate", borderSpacing: 2, tableLayout: "fixed" }}>
-        {/* SR-only caption gives screen-reader users the matrix purpose
-            before they navigate cell-by-cell - audit #M9. */}
-        <caption style={srOnlyStyle}>
-          Compatibility matrix for {ids.length} crops. Green cells mean good companions, red cells mean avoid planting together, neutral cells have no documented interaction. Hover any cell for the reason.
-        </caption>
-        <colgroup>
-          <col style={{ width: rowLabelWidth }} />
-          {ids.map((id) => (
-            <col key={id} style={{ width: cellSize }} />
-          ))}
-        </colgroup>
-        <thead>
-          <tr>
-            <th style={{ width: rowLabelWidth, height: headerHeight }} aria-hidden="true" />
-            {ids.map((id) => (
-              <th key={id} scope="col"
-                style={{
-                  width: cellSize, height: headerHeight,
-                  fontSize: 11, fontWeight: 600, color: T.tx2,
-                  fontFamily: T.fontBody, whiteSpace: "nowrap",
-                  padding: 0, verticalAlign: "bottom",
-                  overflow: "visible",
-                }}>
-                <div style={{
-                  display: "inline-block",
-                  transform: "rotate(-55deg)", transformOrigin: "left bottom",
-                  paddingLeft: cellSize / 2,
-                  maxWidth: 110,
-                  overflow: "hidden", textOverflow: "ellipsis",
-                }}>
-                  {CROPS[id]?.name || id}
-                </div>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {ids.map((row) => (
-            <tr key={row}>
-              <th scope="row" style={{
-                width: rowLabelWidth,
+    <div role="grid" aria-rowcount={ids.length + 1} aria-colcount={ids.length + 1}
+      aria-label={`Compatibility matrix for ${ids.length} crops. Green cells mean good companions, red cells mean avoid planting together, neutral cells have no documented interaction. Hover any cell for the reason.`}
+      style={{ display: "inline-block", paddingTop: 4 }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns,
+        gap,
+        alignItems: "center",
+      }}>
+        {/* Header row — empty corner + rotated column labels */}
+        <div role="columnheader" aria-colindex={1}
+          style={{ width: rowLabelWidth, height: headerHeight }} aria-hidden="true" />
+        {ids.map((id, i) => (
+          <div key={id} role="columnheader" aria-colindex={i + 2}
+            style={{
+              ...cellBox, height: headerHeight, minHeight: headerHeight, maxHeight: headerHeight,
+              position: "relative", overflow: "visible",
+            }}>
+            <div style={{
+              position: "absolute", left: cellSize / 2, bottom: 0,
+              transform: "rotate(-55deg)", transformOrigin: "left bottom",
+              fontSize: 11, fontWeight: 600, color: T.tx2,
+              fontFamily: T.fontBody, whiteSpace: "nowrap",
+              maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis",
+            }}>
+              {CROPS[id]?.name || id}
+            </div>
+          </div>
+        ))}
+        {/* Data rows */}
+        {ids.map((row, ri) => (
+          <React.Fragment key={row}>
+            <div role="rowheader" aria-rowindex={ri + 2} aria-colindex={1}
+              style={{
+                width: rowLabelWidth, minWidth: rowLabelWidth, maxWidth: rowLabelWidth,
+                height: cellSize, minHeight: cellSize, maxHeight: cellSize,
                 fontSize: 12, fontWeight: 600, color: T.tx2, fontFamily: T.fontBody,
                 textAlign: "right", paddingRight: 8, whiteSpace: "nowrap",
                 overflow: "hidden", textOverflow: "ellipsis",
+                display: "flex", alignItems: "center", justifyContent: "flex-end",
               }}>
-                {CROPS[row]?.name || row}
-              </th>
-              {ids.map((col) => {
-                if (row === col) {
-                  return <td key={col} style={{
-                    width: cellSize, height: cellSize,
-                    background: T.border, borderRadius: 4, opacity: 0.4,
-                  }} />;
-                }
-                const rel = getCompanion(row, col);
-                const bg = rel?.rel === "good" ? T.companionGood
-                  : rel?.rel === "bad" ? T.companionBad
-                  : T.bg2;
-                const title = rel ? rel.reason : "No documented interaction.";
-                return (
-                  <td key={col}
-                    title={title}
-                    aria-label={`${CROPS[row]?.name} and ${CROPS[col]?.name}: ${rel?.rel || "neutral"}. ${title}`}
-                    style={{
-                      width: cellSize, height: cellSize,
-                      background: bg, borderRadius: 4,
-                      cursor: rel ? "help" : "default",
-                    }} />
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              {CROPS[row]?.name || row}
+            </div>
+            {ids.map((col, ci) => {
+              if (row === col) {
+                return <div key={col} role="gridcell" aria-rowindex={ri + 2} aria-colindex={ci + 2}
+                  style={{ ...cellBox, background: T.border, borderRadius: 4, opacity: 0.4 }} />;
+              }
+              const rel = getCompanion(row, col);
+              const bg = rel?.rel === "good" ? T.companionGood
+                : rel?.rel === "bad" ? T.companionBad
+                : T.bg2;
+              const title = rel ? rel.reason : "No documented interaction.";
+              return (
+                <div key={col} role="gridcell"
+                  aria-rowindex={ri + 2} aria-colindex={ci + 2}
+                  title={title}
+                  aria-label={`${CROPS[row]?.name} and ${CROPS[col]?.name}: ${rel?.rel || "neutral"}. ${title}`}
+                  style={{
+                    ...cellBox, background: bg, borderRadius: 4,
+                    cursor: rel ? "help" : "default",
+                  }} />
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   );
 }
