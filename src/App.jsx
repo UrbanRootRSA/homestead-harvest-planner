@@ -257,11 +257,17 @@ const SOIL_MIXES = [
 const BAG_SIZES_CUFT = [1, 1.5, 2];
 const BAG_SIZES_L = [40, 50, 75]; // common UK/AU/ZA compost and topsoil bag sizes
 
-// Module-level counter guarantees unique ids even when two beds are created
-// in the same millisecond (e.g. rapid preset import). Beats Date.now()+random.
+// Per-bed quantity cap. Hoisted so the LS sanitiser (loadState path) and the
+// Counter UI cap stay in lock-step - audit #M3.
+const MAX_BEDS_PER_GROUP = 20;
+
+// Module-level counter guarantees unique ids per session AND a per-mount
+// timestamp prefix so a future "import beds from another session" feature
+// doesn't collide on the regenerated bed_1, bed_2, ... id space - audit #L4.
+const BED_ID_SESSION = Date.now().toString(36);
 let bedIdCounter = 0;
 const DEFAULT_BED = () => ({
-  id: `bed_${++bedIdCounter}`,
+  id: `bed_${BED_ID_SESSION}_${++bedIdCounter}`,
   shape: "rect",
   // stored internally as feet and inches regardless of metric toggle
   lengthFt: 8, widthFt: 4, depthIn: 12,
@@ -382,7 +388,10 @@ function shiftMonths(date, months) {
 }
 const SHORT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function formatDate(date, refYear) {
-  if (!date || !Number.isFinite(date.getTime())) return "-";
+  // instanceof guard hardens against accidental string/number passes from
+  // a future refactor; the bare !date short-circuit doesn't catch 0 (which
+  // would then throw on .getTime) - audit #M7.
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "-";
   const y = date.getFullYear();
   const base = `${SHORT_MONTHS[date.getMonth()]} ${date.getDate()}`;
   return refYear && y !== refYear ? `${base}, ${y}` : base;
@@ -533,9 +542,16 @@ function clearLS(key) {
 // Never throws - network failures resolve to { valid: false, error: ... } so
 // the caller can simply branch on `valid`.
 async function validateKeyRemote(key, instanceId) {
+  // 15s wall-clock cap keeps the paywall mount effect from spinning forever
+  // when cold-start Vercel + cold Upstash + cold LS upstream stack on a slow
+  // first request. /api/generate has a 90s timeout already; this path didn't,
+  // until audit #M12.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
   try {
     const resp = await fetch("/api/validate-key", {
       method: "POST",
+      signal: ac.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         key: String(key || "").trim(),
@@ -548,7 +564,12 @@ async function validateKeyRemote(key, instanceId) {
     }
     return data;
   } catch (e) {
+    if (e?.name === "AbortError") {
+      return { valid: false, error: "Licence server is slow to respond. Please try again." };
+    }
     return { valid: false, error: "Can't reach the licence server. Check your connection and try again." };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -575,6 +596,10 @@ function useCountUp(target, duration = 800) {
     // Hold the last good display value when target is transiently invalid,
     // so the UI doesn't glitch 0 → N every time a derived calc returns NaN.
     if (!Number.isFinite(target)) return;
+    // Cancel any in-flight frame BEFORE scheduling a new one. Cleanup-on-
+    // next-effect alone left a window where two RAF callbacks could race
+    // when a user smashes the Counter buttons - audit #M5.
+    if (frameRef.current) cancelAnimationFrame(frameRef.current);
     const start = Number.isFinite(display) ? display : 0;
     const diff = target - start;
     if (Math.abs(diff) < 0.01) { setDisplay(target); return; }
@@ -599,10 +624,12 @@ function useCountUp(target, duration = 800) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // - Counter -
-function Counter({ value, onChange, min = 0, max, label }) {
+// max defaults to 9999 (not Infinity) so a future use-site that forgets to
+// supply one still has a sane upper bound - audit #M2.
+function Counter({ value, onChange, min = 0, max = 9999, label }) {
   const safe = Number.isFinite(value) ? value : min;
   const atMin = safe <= min;
-  const atMax = max != null && safe >= max;
+  const atMax = safe >= max;
   const btnStyle = (disabled) => ({
     minWidth: 44, minHeight: 44, borderRadius: 10,
     background: T.card, border: `1.5px solid ${T.border}`,
@@ -622,7 +649,7 @@ function Counter({ value, onChange, min = 0, max, label }) {
         fontSize: 24, fontWeight: 700, minWidth: 40, textAlign: "center", color: T.tx,
       }}>{Number.isFinite(value) ? value : "-"}</span>
       <button type="button" disabled={atMax}
-        onClick={() => onChange(Math.min(max ?? Infinity, safe + 1))}
+        onClick={() => onChange(Math.min(max, safe + 1))}
         style={btnStyle(atMax)} aria-label={`Increase ${label}`}>+</button>
     </div>
   );
@@ -632,6 +659,10 @@ function Counter({ value, onChange, min = 0, max, label }) {
 // Local string state lets the user type "0", ".", "5" naturally. We only commit
 // on blur / Enter, and we clamp to [min, max] there. Never use `parseFloat||0`.
 function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, disabled, placeholder }) {
+  // Self-heal swapped bounds so a callsite typo doesn't silently lock the
+  // input out (every Math.min(max, n) collapses to max, then Math.max(min,
+  // max) returns min, so every value commits to min on blur) - audit #M4.
+  if (min > max) { [min, max] = [max, min]; }
   const [raw, setRaw] = useState(() =>
     Number.isFinite(value) ? String(value) : ""
   );
@@ -1272,9 +1303,14 @@ const srOnlyStyle = {
 function MiniStat({ label, value, unit, decimals = 0 }) {
   const display = useCountUp(Number.isFinite(value) ? value : 0);
   const text = formatCountUp(display, value, decimals);
-  const readable = Number.isFinite(value) ? `${text} ${unit}` : `${unit} not available`;
+  // Settled value for the aria-live region. The visual count-up is hidden
+  // from AT (else SRs would announce every interpolated frame); this hidden
+  // span announces the final value once when it settles - audit #M8.
+  const settledText = Number.isFinite(value)
+    ? `${formatCountUp(value, value, decimals)} ${unit}`
+    : `${unit} not available`;
   return (
-    <div role="group" aria-label={`${label}: ${readable}`} style={{
+    <div role="group" aria-label={label} style={{
       padding: "16px 18px", borderRadius: T.radius,
       background: T.card, border: `1.5px solid ${T.border}`,
     }}>
@@ -1290,6 +1326,7 @@ function MiniStat({ label, value, unit, decimals = 0 }) {
           {unit}
         </span>
       </div>
+      <span aria-live="polite" style={srOnlyStyle}>{label}: {settledText}</span>
     </div>
   );
 }
@@ -1509,10 +1546,17 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
           gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
         }}>
           {effectiveMix.components.map((c) => {
+            const canonicalCuFt = mixPriceOverrides[c.key] ?? c.pricePerCuFt;
             const displayPrice = metric
-              ? Number(((mixPriceOverrides[c.key] ?? c.pricePerCuFt) / CUFT_TO_L).toFixed(3))
-              : mixPriceOverrides[c.key] ?? c.pricePerCuFt;
+              ? Number((canonicalCuFt / CUFT_TO_L).toFixed(3))
+              : canonicalCuFt;
+            // Skip-if-equal guard. Without it, every metric-mode blur (even
+            // with no edit) re-encodes the 3dp displayed value through
+            // CUFT_TO_L, drifting the canonical $/cu ft by ~0.04% per cycle.
+            // Mirrors ProduceTargetField (L937-944) and Cost Savings price
+            // (L5599-5605) - audit #H1.
             const commitPrice = (v) => {
+              if (v === displayPrice) return;
               const cuftPrice = metric ? v * CUFT_TO_L : v;
               setComponentPrice(c.key, Math.max(0, cuftPrice));
             };
@@ -1666,8 +1710,21 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
   const dDepth = metric ? IN_TO_CM : 1;
   const unitLen = metric ? "m" : "ft";
   const unitDepth = metric ? "cm" : "in";
-  const commitLen = (raw) => (metric ? raw / FT_TO_M : raw);
-  const commitDepth = (raw) => (metric ? raw / IN_TO_CM : raw);
+  // Skip-if-equal guards. Each commit takes the canonical ft/in value of the
+  // field being committed; if the user blurred without editing, the display
+  // round-trip would otherwise drift the canonical by ~0.06% per cycle and
+  // compound across length/width/depth/diameter/cutouts (8 fields/bed) -
+  // audit #H2.
+  const commitLen = (raw, canonicalFt) => {
+    const displayedNow = Number((canonicalFt * dLen).toFixed(2));
+    if (raw === displayedNow) return canonicalFt;
+    return metric ? raw / FT_TO_M : raw;
+  };
+  const commitDepth = (raw, canonicalIn) => {
+    const displayedNow = Number((canonicalIn * dDepth).toFixed(1));
+    if (raw === displayedNow) return canonicalIn;
+    return metric ? raw / IN_TO_CM : raw;
+  };
 
   return (
     <div style={{
@@ -1708,43 +1765,43 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
           <>
             <Field label="Length" unit={unitLen}
               value={Number((bed.lengthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ lengthFt: commitLen(v) })}
+              onChange={(v) => onChange({ lengthFt: commitLen(v, bed.lengthFt) })}
               min={0.5} max={100} step={0.5} />
             <Field label="Width" unit={unitLen}
               value={Number((bed.widthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ widthFt: commitLen(v) })}
+              onChange={(v) => onChange({ widthFt: commitLen(v, bed.widthFt) })}
               min={0.5} max={50} step={0.5} />
           </>
         )}
         {bed.shape === "circle" && (
           <Field label="Diameter" unit={unitLen}
             value={Number((bed.diameterFt * dLen).toFixed(2))}
-            onChange={(v) => onChange({ diameterFt: commitLen(v) })}
+            onChange={(v) => onChange({ diameterFt: commitLen(v, bed.diameterFt) })}
             min={0.5} max={50} step={0.5} />
         )}
         {bed.shape === "lshape" && (
           <>
             <Field label="Outer length" unit={unitLen}
               value={Number((bed.outerLengthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ outerLengthFt: commitLen(v) })}
+              onChange={(v) => onChange({ outerLengthFt: commitLen(v, bed.outerLengthFt) })}
               min={1} max={100} step={0.5} />
             <Field label="Outer width" unit={unitLen}
               value={Number((bed.outerWidthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ outerWidthFt: commitLen(v) })}
+              onChange={(v) => onChange({ outerWidthFt: commitLen(v, bed.outerWidthFt) })}
               min={1} max={50} step={0.5} />
             <Field label="Cutout length" unit={unitLen}
               value={Number((bed.cutoutLengthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ cutoutLengthFt: commitLen(v) })}
+              onChange={(v) => onChange({ cutoutLengthFt: commitLen(v, bed.cutoutLengthFt) })}
               min={0} max={99} step={0.5} />
             <Field label="Cutout width" unit={unitLen}
               value={Number((bed.cutoutWidthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ cutoutWidthFt: commitLen(v) })}
+              onChange={(v) => onChange({ cutoutWidthFt: commitLen(v, bed.cutoutWidthFt) })}
               min={0} max={49} step={0.5} />
           </>
         )}
         <Field label="Depth" unit={unitDepth}
           value={Number((bed.depthIn * dDepth).toFixed(1))}
-          onChange={(v) => onChange({ depthIn: commitDepth(v) })}
+          onChange={(v) => onChange({ depthIn: commitDepth(v, bed.depthIn) })}
           min={4} max={48} step={1} />
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, color: T.tx2, marginBottom: 6 }}>
@@ -1752,7 +1809,7 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
           </div>
           <Counter value={bed.qty || 1}
             onChange={(v) => onChange({ qty: v })}
-            min={1} max={20} label={`bed ${index + 1} quantity`} />
+            min={1} max={MAX_BEDS_PER_GROUP} label={`bed ${index + 1} quantity`} />
         </div>
       </div>
 
@@ -1999,6 +2056,11 @@ function CompatibilityMatrix({ ids }) {
   return (
     <div style={{ display: "inline-block", minWidth: "100%", paddingTop: 4 }}>
       <table style={{ borderCollapse: "separate", borderSpacing: 2 }}>
+        {/* SR-only caption gives screen-reader users the matrix purpose
+            before they navigate cell-by-cell - audit #M9. */}
+        <caption style={srOnlyStyle}>
+          Compatibility matrix for {ids.length} crops. Green cells mean good companions, red cells mean avoid planting together, neutral cells have no documented interaction. Hover any cell for the reason.
+        </caption>
         <thead>
           <tr>
             <th style={{ width: cellSize, height: headerHeight }} aria-hidden="true" />
@@ -3342,7 +3404,7 @@ function ValidatingOverlay() {
   );
 }
 
-function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onClearError }) {
+function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onClearError, onClearPrefill }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const [keyInputOpen, setKeyInputOpen] = useState(Boolean(prefillKey));
   const [key, setKey] = useState(prefillKey || "");
@@ -3513,7 +3575,14 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
               )}
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
                 <button type="button"
-                  onClick={() => { setKeyInputOpen(false); onClearError(); }}
+                  onClick={() => {
+                    setKeyInputOpen(false);
+                    setKey("");
+                    onClearError();
+                    // Clear the parent's prefill state too so re-opening the
+                    // input doesn't restore a known-bad ?key= - audit #M11.
+                    onClearPrefill?.();
+                  }}
                   disabled={activating}
                   style={{
                     background: "transparent", border: `1.5px solid ${T.border}`,
@@ -6589,7 +6658,7 @@ export default function App() {
             outerWidthFt:   sanitizeNum(b.outerWidthFt,   def.outerWidthFt,   1,   50),
             cutoutLengthFt: sanitizeNum(b.cutoutLengthFt, def.cutoutLengthFt, 0,   99),
             cutoutWidthFt:  sanitizeNum(b.cutoutWidthFt,  def.cutoutWidthFt,  0,   49),
-            qty:            clampInt   (b.qty,            def.qty,            1,   20),
+            qty:            clampInt   (b.qty,            def.qty,            1,   MAX_BEDS_PER_GROUP),
           };
         });
       if (valid.length > 0) return valid;
@@ -6894,6 +6963,12 @@ export default function App() {
           setPaid(false);
           setValidating(false);
           // Send them to the paywall UI instead of silently dropping on Home.
+          // Sync the URL hash too so bookmark/copy-link/refresh after a bad
+          // ?key= all land back on the paywall, not at "/" with stale state -
+          // audit #H3.
+          if (window.location.hash.slice(1) !== "growing-plan") {
+            window.history.replaceState({ tab: "growing-plan" }, "", "#growing-plan");
+          }
           setTab("growing-plan");
           return;
         }
@@ -7165,7 +7240,8 @@ export default function App() {
             prefillKey={prefillKey}
             activating={activating}
             onActivate={activateKey}
-            onClearError={() => setKeyError("")} />
+            onClearError={() => setKeyError("")}
+            onClearPrefill={() => setPrefillKey("")} />
         )}
         {activeTab.paid && !validating && paid && tab === "crops" && (
           <TabPageShell
