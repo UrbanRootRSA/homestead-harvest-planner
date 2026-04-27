@@ -602,7 +602,9 @@ function useCountUp(target, duration = 800) {
     if (frameRef.current) cancelAnimationFrame(frameRef.current);
     const start = Number.isFinite(display) ? display : 0;
     const diff = target - start;
-    if (Math.abs(diff) < 0.01) { setDisplay(target); return; }
+    // Null the ref alongside the early-return so `frameRef.current` doesn't
+    // hold a stale handle until the next effect run - audit #R2-L3.
+    if (Math.abs(diff) < 0.01) { setDisplay(target); frameRef.current = null; return; }
     const startTime = performance.now();
     const easeOutExpo = (t) => (t === 1 ? 1 : 1 - Math.pow(2, -10 * t));
     const animate = (now) => {
@@ -1191,7 +1193,10 @@ function SelfSufficiencyCalculator({
       </div>
 
       {/* ───── Results ───── */}
-      <div style={{ marginTop: 40 }} aria-live="polite">
+      {/* No outer aria-live - each MiniStat owns its own settled-value live
+          region (audit #M8). Wrapping them in a parent live region produced
+          double SR announcements - audit #R2-M1. */}
+      <div style={{ marginTop: 40 }}>
         <div style={{
           padding: isMobile ? 20 : 32,
           borderRadius: T.radiusLg,
@@ -1314,7 +1319,10 @@ function MiniStat({ label, value, unit, decimals = 0 }) {
       padding: "16px 18px", borderRadius: T.radius,
       background: T.card, border: `1.5px solid ${T.border}`,
     }}>
-      <div style={{ fontSize: 12, color: T.tx3, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+      {/* aria-hidden so SRs don't echo the label three times (group's
+          aria-label + this visible div + the live-region span all carry
+          it) - audit #R2-M2. */}
+      <div aria-hidden="true" style={{ fontSize: 12, color: T.tx3, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
         {label}
       </div>
       <div aria-hidden="true" style={{
@@ -1478,7 +1486,11 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
     const next = beds.filter((b) => b.id !== id);
     if (next.length > 0) setBeds(next);
   };
-  const updateBed = (id, patch) => setBeds(beds.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  // Functional updater so two adjacent commits on the same bed (rapid Tab
+  // navigation across Length/Width Fields) both apply against fresh state.
+  // The closure-style version dropped the first patch when both calls
+  // captured the same `beds` snapshot - audit #R2-L4.
+  const updateBed = (id, patch) => setBeds((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
 
   const setComponentPrice = (key, value) => {
     setMixOverrides({
@@ -1547,6 +1559,10 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
         }}>
           {effectiveMix.components.map((c) => {
             const canonicalCuFt = mixPriceOverrides[c.key] ?? c.pricePerCuFt;
+            // displayPrice precision (.toFixed(3)) MUST match the Field's
+            // display rendering. The commitPrice guard relies on
+            // Number(x.toFixed(3)) being stable through Field's
+            // String(value) → Number(value) round-trip - audit #R2-L2.
             const displayPrice = metric
               ? Number((canonicalCuFt / CUFT_TO_L).toFixed(3))
               : canonicalCuFt;
@@ -1571,7 +1587,14 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
                   <div style={{ marginBottom: 10 }}>
                     <Field label="Share of mix" unit="%"
                       value={pctValue}
-                      onChange={(v) => setComponentPct(c.key, v / 100)}
+                      onChange={(v) => {
+                        // Skip-if-equal mirrors H1 commitPrice. Without it,
+                        // every blur re-encodes through (toFixed(1)/100),
+                        // drifting the canonical pct ~0.1%/blur in custom
+                        // mode - audit #R2-L1.
+                        if (v === pctValue) return;
+                        setComponentPct(c.key, v / 100);
+                      }}
                       min={0} max={100} step={1} />
                   </div>
                 ) : (
@@ -1598,7 +1621,9 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
       </div>
 
       {/* ───── Results ───── */}
-      <div style={{ marginTop: 40 }} aria-live="polite">
+      {/* No outer aria-live - MiniStat children own their own settled-value
+          live regions. Parent wrapper would double-announce - audit #R2-M1. */}
+      <div style={{ marginTop: 40 }}>
         <div style={{
           padding: isMobile ? 20 : 32,
           borderRadius: T.radiusLg,
