@@ -7117,11 +7117,19 @@ export default function App() {
 
   // Activate a licence key from the paywall form. Wraps validateKeyRemote +
   // state updates so the overlay component can stay presentational.
+  //
+  // Cross-product audit 2026-05-01 (H3): contract migrated from boolean to
+  // { ok, error? }. Every false-return path MUST carry an `error` string. This
+  // makes "forgot to surface the error" a runtime crash for future maintainers
+  // who add a new reject branch (e.g. server-side rate limit) — far harder to
+  // ship silently than the prior "set state then return false" coupling.
+  // The caller is responsible for calling setKeyError(result.error). Pending
+  // state (setActivating, transient setKeyError("") on retry) stays inside
+  // because resetting your own in-flight state is not error-display coupling.
   const activateKey = useCallback(async (rawKey) => {
     const key = String(rawKey || "").trim();
     if (key.length < 8) {
-      setKeyError("Please paste the full licence key from your email.");
-      return false;
+      return { ok: false, error: "Please paste the full licence key from your email." };
     }
     setActivating(true);
     setKeyError("");
@@ -7132,12 +7140,10 @@ export default function App() {
         if (r.instance_id) persistState(LS_INSTANCE, r.instance_id);
         clearLS(LS_PENDING);
         setPaid(true);
-        setKeyError("");
         setPrefillKey("");
-        return true;
+        return { ok: true };
       }
-      setKeyError(r?.error || "We couldn't verify that licence key.");
-      return false;
+      return { ok: false, error: r?.error || "We couldn't verify that licence key." };
     } finally {
       setActivating(false);
     }
@@ -7287,7 +7293,14 @@ export default function App() {
             keyError={keyError}
             prefillKey={prefillKey}
             activating={activating}
-            onActivate={activateKey}
+            onActivate={async (key) => {
+              // Cross-product audit 2026-05-01 (H3): activateKey returns
+              // { ok, error? }; bridging the error string into setKeyError
+              // lives here so a future maintainer who adds a new reject
+              // branch in activateKey can't forget to surface it.
+              const result = await activateKey(key);
+              if (!result.ok) setKeyError(result.error);
+            }}
             onClearError={() => setKeyError("")}
             onClearPrefill={() => setPrefillKey("")} />
         )}

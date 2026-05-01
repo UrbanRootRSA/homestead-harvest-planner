@@ -138,17 +138,22 @@ async function callLs(endpoint, params) {
   return { httpOk: resp.ok, status: resp.status, json };
 }
 
-// Returns true if the licence key is currently valid (cached or fresh from LS).
+// Returns { ok, reason? } describing the validation outcome. ok=true means the
+// licence is currently valid (cached or fresh from LS); ok=false carries a
+// reason slug for server-side telemetry. Cross-product audit 2026-05-01 (H4):
+// migrated from boolean → tagged-union shape so the handler can log WHICH gate
+// rejected without exposing the reason to the response body. Caller still
+// returns an opaque 401 to prevent leaking which gate failed to attackers.
 async function validateLicence(key, instanceId) {
   if (!key || typeof key !== "string" || key.length < 8 || key.length > 128) {
-    return false;
+    return { ok: false, reason: "bad_key_shape" };
   }
   const licenceHash = hashKey(key);
   const cacheKey = `hhp:lk:ok:${licenceHash}`;
   if (redis) {
     try {
       const cached = await redis.get(cacheKey);
-      if (cached) return true;
+      if (cached) return { ok: true, fromCache: true };
     } catch (e) {
       console.warn("[generate] licence cache read failed:", e?.message);
     }
@@ -183,7 +188,7 @@ async function validateLicence(key, instanceId) {
   const instanceIdForLs = canonicalInstanceId || clientInstanceId;
   if (!instanceIdForLs) {
     console.warn("[generate] no instance_id available (canonical missing and client sent none) — refusing to validate");
-    return false;
+    return { ok: false, reason: "instance_missing" };
   }
 
   // Cache miss: ask LemonSqueezy.
@@ -192,14 +197,14 @@ async function validateLicence(key, instanceId) {
     if (ls.status >= 500) {
       // LS unreachable - fail closed for paid endpoints.
       console.error("[generate] LS unreachable during validation:", ls.status);
-      return false;
+      return { ok: false, reason: "ls_unreachable" };
     }
     const js = ls.json || {};
-    if (js.error) return false;
+    if (js.error) return { ok: false, reason: "ls_api_error" };
     const lk = js.license_key || {};
     const status = lk.status || (js.valid ? "active" : null);
     const isActive = status === "active" || js.valid === true;
-    if (!isActive) return false;
+    if (!isActive) return { ok: false, reason: "licence_inactive" };
 
     // Store-ID lock-down (mirrors validate-key.js). Hybrid fail-closed: in
     // production, missing LEMONSQUEEZY_STORE_ID is a server misconfig and we
@@ -209,12 +214,12 @@ async function validateLicence(key, instanceId) {
     if (!expectedStoreId) {
       if (process.env.VERCEL_ENV === "production") {
         console.error("[CRITICAL] LEMONSQUEEZY_STORE_ID missing in production — refusing to validate");
-        return false;
+        return { ok: false, reason: "store_id_misconfig" };
       }
       console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
     }
     if (expectedStoreId && meta.store_id != null && String(meta.store_id) !== String(expectedStoreId)) {
-      return false;
+      return { ok: false, reason: "store_mismatch" };
     }
 
     if (redis) {
@@ -245,10 +250,10 @@ async function validateLicence(key, instanceId) {
         }
       } catch (e) { console.warn("[generate] instance binding write failed:", e?.message); }
     }
-    return true;
+    return { ok: true };
   } catch (e) {
     console.error("[generate] licence validation error:", e?.message, e?.code);
-    return false;
+    return { ok: false, reason: "validation_exception" };
   }
 }
 
@@ -594,8 +599,13 @@ export default async function handler(req, res) {
   if (!licenseKey) {
     return res.status(401).json({ ok: false, error: "A valid licence is required to generate a plan." });
   }
-  const licenceOk = await validateLicence(licenseKey, instanceId);
-  if (!licenceOk) {
+  // Cross-product audit 2026-05-01 (H4): validateLicence now returns
+  // { ok, reason } so we can log WHICH gate rejected (telemetry only). The
+  // user-facing response stays opaque — never echo `reason` into the body or
+  // attackers can probe which gate is failing per-key.
+  const licenceResult = await validateLicence(licenseKey, instanceId);
+  if (!licenceResult.ok) {
+    console.warn("[generate] licence validation failed:", licenceResult.reason);
     return res.status(401).json({ ok: false, error: "Your licence couldn't be verified. Please re-enter your key on the home page." });
   }
 
