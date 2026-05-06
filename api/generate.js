@@ -286,7 +286,7 @@ async function validateLicence(key, instanceId) {
 // control chars, or bidi-override unicode — strip them before they reach
 // the prompt. This is one layer in a stack: forced tool-use +
 // additionalProperties:false + sanitisePlan + escapeHtml are the others.
-const UNSAFE_CHAR_RE = /[ --​-‏‪-‮⁦-⁩]/g;
+const UNSAFE_CHAR_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]/g;
 function stripUnsafeChars(s) {
   return String(s).replace(UNSAFE_CHAR_RE, " ");
 }

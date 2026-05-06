@@ -301,6 +301,9 @@ const PLANTING_DATE_DEFAULT_CROPS = [
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Utilities ──
 // ═══════════════════════════════════════════════════════════════════════════
+// NaN-coerced inputs return `min` (NOT a caller-supplied fallback — no
+// fallback parameter exists). When you need an explicit fallback distinct
+// from min, use sanitizeNum(v, fallback, min, max) below.
 const clampInt = (v, min, max) => {
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return min;
