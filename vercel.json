@@ -1,9 +1,17 @@
 {
   "redirects": [
     {
+      "source": "/",
+      "has": [
+        { "type": "host", "value": "homestead-harvest-planner[a-z0-9-]*\\.vercel\\.app" }
+      ],
+      "destination": "https://thehomesteadplan.com/",
+      "permanent": true
+    },
+    {
       "source": "/:path*",
       "has": [
-        { "type": "host", "value": "(?<host>homestead-harvest-planner[a-z0-9-]*\\.vercel\\.app)" }
+        { "type": "host", "value": "homestead-harvest-planner[a-z0-9-]*\\.vercel\\.app" }
       ],
       "destination": "https://thehomesteadplan.com/:path*",
       "permanent": true
