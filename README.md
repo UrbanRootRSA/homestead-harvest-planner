@@ -1,19 +1,35 @@
 # The Homestead Plan
 
-Urban Root's flagship soil-growing calculator and planning tool for homesteaders.
+Urban Root's flagship soil-growing calculator and AI-driven planning tool for homesteaders. **Live at https://thehomesteadplan.com — $39.99 one-time.**
 
-**Build spec:** `../CLAUDE.md`
-**Design system:** `~/.claude/skills/premium-ui/`
+## Spec
+
+- **Living spec:** `../CLAUDE.md` (auto-loaded; product behaviour, calc logic, design system)
+- **Status / dashboard TODOs:** `../STATUS.md`
+- **Design system:** `.claude/skills/premium-ui/`
 
 ## Development
 
 ```
 npm install
-npm run dev
+npm run dev      # vite dev server at http://localhost:5173/
+npm run build    # production build
 ```
 
-Opens at `http://localhost:5173/`.
+## Deploy
 
-## Status
+Auto-deployed by Vercel on push to `main`. Commit author must be `urbanroot.contact@gmail.com` (Vercel Hobby restriction).
 
-Session 1 - scaffold + Self-Sufficiency Calculator (Tab 1 of 8).
+## Required Vercel env vars
+
+- `ANTHROPIC_API_KEY` — Claude Sonnet 4.6 (mark as Sensitive)
+- `LEMONSQUEEZY_STORE_ID=348457`
+- `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` + `KV_REST_API_TOKEN` — Vercel Marketplace integration injects either)
+
+## Repo layout
+
+- `src/App.jsx` — single ~7.4 KLOC file, all components inline
+- `src/data/{crops,companions}.js` — 82 crops, 230 pairings
+- `api/{generate,validate-key}.js` — serverless functions (Anthropic proxy + LS licence)
+- `public/` — favicon, og-image, sitemap, robots, 4 legal HTML pages
+- `docs/` — current audit references (round-6 convergence cert, Phase-2 security audit, 2025-2026 threat research)

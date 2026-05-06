@@ -193,8 +193,9 @@ export default async function handler(req, res) {
       // can drop the cached instance and re-activate.
       // SECURITY: narrow retry_activation to errors that actually mention an
       // instance — over-firing it on every error condition (e.g. "key not
-      // found") makes URL-key phishing-link slot-burn easier to exploit. See
-      // docs/security-2026-04-27-url-key-instance-trust.md (Finding #3).
+      // found") makes URL-key phishing-link slot-burn easier to exploit.
+      // Cross-product pattern documented in workspace memory
+      // `feedback_url_key_instance_trust.md`. Fix shipped in commit `4f862e1`.
       // Phase-2 L5: normalise verbatim LS strings to an allowlist instead of
       // slice(0,200). Future LS API changes can no longer leak internal info.
       const errStr = String(js.error || "");

@@ -561,8 +561,9 @@ async function validateKeyRemote(key, instanceId, opts) {
         key: String(key || "").trim(),
         // SECURITY GATE 1: do NOT send the legit customer's stored instance_id
         // when the caller is the URL-key path. opts.skipStoredInstance forces
-        // the field to undefined regardless of what the caller passed in. See
-        // docs/security-2026-04-27-url-key-instance-trust.md (Finding #1).
+        // the field to undefined regardless of what the caller passed in.
+        // Cross-product pattern: workspace memory `feedback_url_key_instance_trust.md`.
+        // Fix shipped in commit `4f862e1` 2026-04-27.
         instance_id: opts.skipStoredInstance
           ? undefined
           : (instanceId ? String(instanceId) : undefined),
@@ -6986,8 +6987,8 @@ export default function App() {
       // from the LS dashboard, etc.), drop it and try a fresh activate.
       // SECURITY GATE 2: skip this cleanup-write on the URL-key path. The URL
       // ?key= value is attacker-controllable; wiping LS_INSTANCE here would
-      // burn the legit customer's activation slot on next reload. See
-      // docs/security-2026-04-27-url-key-instance-trust.md (Finding #2).
+      // burn the legit customer's activation slot on next reload.
+      // Pattern: workspace memory `feedback_url_key_instance_trust.md`.
       if (r1?.retry_activation && !skip) {
         clearLS(LS_INSTANCE);
         const r2 = await validateKeyRemote(key, "", opts);
@@ -7024,8 +7025,8 @@ export default function App() {
           // SECURITY: do NOT read LS_INSTANCE on the URL-key path. The URL
           // ?key= value is attacker-controllable; sending the legit customer's
           // instance_id with it leaks the instance and primes the cleanup-
-          // write slot-burn attack. See
-          // docs/security-2026-04-27-url-key-instance-trust.md (Findings #1+#2).
+          // write slot-burn attack. Both gates required (read + cleanup-write).
+          // Pattern: workspace memory `feedback_url_key_instance_trust.md`.
           const r = await attempt(urlKey, "", { skipStoredInstance: true });
           if (cancelled) return;
           stripKeyFromUrl();
