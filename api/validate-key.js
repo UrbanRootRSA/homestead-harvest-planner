@@ -191,7 +191,10 @@ export default async function handler(req, res) {
       activation_usage: lk.activation_usage ?? null,
     });
   } catch (e) {
-    console.error("[validate-key] error:", e);
+    // Round-3 L5: log message + code only (matches generate.js pattern).
+    // Logging the full exception object can pull request body / header
+    // info into log aggregators via the error's `cause` chain.
+    console.error("[validate-key] error:", e?.message, e?.code);
     return res.status(500).json({ valid: false, error: "Server error during validation. Try again." });
   }
 }

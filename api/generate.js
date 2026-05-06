@@ -40,13 +40,19 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4096;
 
-// Fair-use: 20 plans per rolling 24-hour window per licence. Documented in terms.html.
-// Rolling window (not fixed daily reset) — TTL on the Redis key expires exactly 24h after
-// the first plan in the window, so an attacker can't burn 20 at 23:59 and 20 more at 00:01.
-// Slightly more generous than FaminePrep's 10/24h because Homestead's $39.99 price point
-// justifies more iteration headroom (garden size, crop mix, family size tuning).
-const RL_MAX = 20;
-const RL_WINDOW_SEC = 86400; // 24 hours in seconds
+// Round-3 M2: rate-limit constants split per gate. Prior implementation reused a
+// single (20/24h) pair for both per-IP pre-flight and per-licence cost-control,
+// which collapsed shared-NAT customers (CGNAT, dorms, family routers) into one
+// bucket — a single bad-key spammer could lock out a paying neighbour for 24h.
+//
+// Per-licence: cost control. 20 plans/24h is generous for $39.99 at ~$0.06/call.
+const RL_LICENCE_MAX = 20;
+const RL_LICENCE_WINDOW_SEC = 86400; // 24 hours
+// Per-IP pre-flight: anti-abuse. Sized to absorb shared-NAT bursts (a family
+// router behind CGNAT could legitimately produce 30+ requests/hour during
+// onboarding) while still cutting bad-key spammers within an hour.
+const RL_IP_MAX = 60;
+const RL_IP_WINDOW_SEC = 3600; // 1 hour
 
 // Anthropic API requires absolute upper bounds on inputs we'll later reflect
 // in the prompt - guards against an attacker crafting a 200 KB payload that
@@ -91,13 +97,13 @@ function hashKey(key) {
   return createHash("sha256").update(String(key)).digest("hex").slice(0, 16);
 }
 
-async function rateLimitOK(suffix) {
+async function rateLimitOK(suffix, max, windowSec) {
   if (!redis) return true;
   try {
     const key = `hhp:rl:generate:${suffix}`;
     const count = await redis.incr(key);
-    if (count === 1) await redis.expire(key, RL_WINDOW_SEC);
-    return count <= RL_MAX;
+    if (count === 1) await redis.expire(key, windowSec);
+    return count <= max;
   } catch (e) {
     console.warn("[generate] rate limit check failed:", e?.message);
     return true;
@@ -150,18 +156,19 @@ async function validateLicence(key, instanceId) {
   }
   const licenceHash = hashKey(key);
   const cacheKey = `hhp:lk:ok:${licenceHash}`;
-  if (redis) {
-    try {
-      const cached = await redis.get(cacheKey);
-      if (cached) return { ok: true, fromCache: true };
-    } catch (e) {
-      console.warn("[generate] licence cache read failed:", e?.message);
-    }
-  }
 
-  // Fix 3: look up the canonical instance_id bound to this licence hash. If
-  // present, force-use it regardless of what the client sent. This closes the
-  // "bare key" validate bypass (else branch of the old code) that let anyone
+  // Round-3 H1 fix (was: cache check ran BEFORE this gate, allowing a warm
+  // cache to short-circuit straight to ok=true regardless of whether a
+  // canonical-instance binding existed). The cache encodes "this licence is
+  // currently valid in LS"; it does NOT encode "this caller is authorised to
+  // generate". The canonical-instance gate is the per-caller authorisation
+  // check, so it MUST run unconditionally — including on cache hits — or a
+  // stolen key with no instance_id can drain the legit customer's daily
+  // 20-plan quota during the 1-hour cache window.
+  //
+  // Fix 3 (kept): look up the canonical instance_id bound to this licence
+  // hash. If present, force-use it regardless of what the client sent. This
+  // closes the "bare key" validate bypass that would otherwise let anyone
   // with the licence key burn rate-limited Anthropic spend without ever
   // binding a device.
   const clientInstanceId = (typeof instanceId === "string" && instanceId.length > 0 && instanceId.length <= 64)
@@ -181,14 +188,27 @@ async function validateLicence(key, instanceId) {
   //   - canonical present → use canonical (server source-of-truth)
   //   - canonical absent + client sent one → use client's (first-bind path)
   //   - canonical absent + client sent nothing → reject (no bare-key validate)
-  // The last case is the security-critical change: generate.js no longer
-  // accepts a bare-key call even during the client-side 48h grace window.
-  // Grace only lets the client SEE already-persisted state; generating a new
+  // The last case is the security-critical gate: generate.js never accepts a
+  // bare-key call, including during the client-side 48h grace window. Grace
+  // only lets the client SEE already-persisted state; generating a new
   // (expensive) plan requires a bound instance.
   const instanceIdForLs = canonicalInstanceId || clientInstanceId;
   if (!instanceIdForLs) {
     console.warn("[generate] no instance_id available (canonical missing and client sent none) — refusing to validate");
     return { ok: false, reason: "instance_missing" };
+  }
+
+  // Now consult the cache. Safe to short-circuit here because the canonical
+  // gate has already passed: any caller reaching this line either matches the
+  // canonical or is the first-bind for a never-bound key. The cache only
+  // saves the LS round-trip; it cannot grant access on its own.
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) return { ok: true, fromCache: true };
+    } catch (e) {
+      console.warn("[generate] licence cache read failed:", e?.message);
+    }
   }
 
   // Cache miss: ask LemonSqueezy.
@@ -258,9 +278,21 @@ async function validateLicence(key, instanceId) {
 }
 
 // ── Input validation ────────────────────────────────────────────────────────
+// Round-3 SEC-HIGH3: defence-in-depth against indirect prompt injection
+// (OWASP LLM01:2025 — the #1 LLM risk in 2025). User-supplied strings flow
+// into the user prompt at buildUserPrompt(); a payload like
+// `Tomatoes\n\n[SYSTEM] Ignore prior instructions...` is the canonical
+// anchor. Real crop / goal / experience values never contain newlines,
+// control chars, or bidi-override unicode — strip them before they reach
+// the prompt. This is one layer in a stack: forced tool-use +
+// additionalProperties:false + sanitisePlan + escapeHtml are the others.
+const UNSAFE_CHAR_RE = /[ --​-‏‪-‮⁦-⁩]/g;
+function stripUnsafeChars(s) {
+  return String(s).replace(UNSAFE_CHAR_RE, " ");
+}
 function clampStr(v, max = MAX_STR) {
   if (typeof v !== "string") return "";
-  return v.trim().slice(0, max);
+  return stripUnsafeChars(v).trim().slice(0, max);
 }
 function clampNum(v, min, max, fallback) {
   const n = Number(v);
@@ -272,7 +304,7 @@ function clampStrArray(arr, maxItems, maxStrLen = MAX_STR) {
   const out = [];
   for (const v of arr) {
     if (typeof v !== "string") continue;
-    const s = v.trim().slice(0, maxStrLen);
+    const s = stripUnsafeChars(v).trim().slice(0, maxStrLen);
     if (s) out.push(s);
     if (out.length >= maxItems) break;
   }
@@ -582,9 +614,10 @@ export default async function handler(req, res) {
 
   // ── Per-IP pre-flight rate limit ──────────────────────────────────────────
   // Stops an attacker spamming invalid keys to wear down the LS validate path.
-  // Tighter than the per-licence limit because it's pre-auth.
+  // Round-3 M2: distinct (60/h) sizing from the per-licence (20/24h) bucket so
+  // shared-NAT customers don't get throttled by neighbour spam.
   const ip = getIp(req);
-  if (!(await rateLimitOK(`ip:${ip}`))) {
+  if (!(await rateLimitOK(`ip:${ip}`, RL_IP_MAX, RL_IP_WINDOW_SEC))) {
     return res.status(429).json({
       ok: false,
       error: "Too many attempts from this network. Please wait a few minutes.",
@@ -611,9 +644,10 @@ export default async function handler(req, res) {
 
   // ── Per-licence rate limit ────────────────────────────────────────────────
   // Hashed for privacy; we never use the raw key as a Redis key. This is the
-  // primary cost-control gate - limits an authenticated attacker to RL_MAX
-  // generations per RL_WINDOW_SEC even if they hold a valid key.
-  if (!(await rateLimitOK(`lk:${hashKey(licenseKey)}`))) {
+  // primary cost-control gate - limits an authenticated attacker to
+  // RL_LICENCE_MAX generations per RL_LICENCE_WINDOW_SEC even if they hold a
+  // valid key.
+  if (!(await rateLimitOK(`lk:${hashKey(licenseKey)}`, RL_LICENCE_MAX, RL_LICENCE_WINDOW_SEC))) {
     return res.status(429).json({
       ok: false,
       error: "You've reached the fair-use limit of 20 plans in 24 hours. Please try again later. See our terms for details.",
@@ -639,6 +673,13 @@ export default async function handler(req, res) {
         // Cache the system prompt - it's stable across all requests, so the
         // first call writes the cache and every later call inside the 5-min
         // TTL pays ~10% of the input price for those tokens.
+        //
+        // SECURITY (Round-3 SEC-HIGH2): the cached block is potentially
+        // extractable via prompt-cache TTFT timing side-channels (Stanford
+        // CS191 2024). NEVER move secrets, licence data, or any per-user
+        // content into this `system` array. Only the static SYSTEM_PROMPT
+        // (a tone-and-format guide with no business-secret content) belongs
+        // here. Per-request inputs go in the user message below.
         system: [
           {
             type: "text",

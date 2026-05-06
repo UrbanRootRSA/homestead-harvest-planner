@@ -3140,7 +3140,7 @@ function PricingSection() {
   const freeFeatures = [
     "Self-sufficiency calculator - plant counts, garden space, annual yield",
     "Raised-bed soil calculator - 3 shapes, 4 mix presets, bag counts",
-    "Companion planting checker - 82 crops, 164 extension-sourced pairings",
+    `Companion planting checker - 82 crops, ${COMPANIONS.length} extension-sourced pairings`,
     "Planting dates - USDA zones 3-11 or manual frost, hemisphere-aware",
     "Works on phone in the garden, data saves to your browser",
     "No account, no email, no trial countdown",
@@ -3327,7 +3327,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Is companion planting in here? I've read some of it is folklore.",
-    a: "Good instinct. Our 153 pairings are sourced from university extensions and peer-reviewed allelopathy studies, with a short mechanism note on every entry. We skip \"basil makes tomatoes taste better\" style claims that don't have evidence.",
+    a: `Good instinct. Our ${COMPANIONS.length} pairings are sourced from university extensions and peer-reviewed allelopathy studies, with a short mechanism note on every entry. We skip "basil makes tomatoes taste better" style claims that don't have evidence.`,
   },
   {
     q: "How is the growing plan created?",
@@ -3742,13 +3742,32 @@ function canonicalizeFingerprintInput(d) {
     currency: d.currency,
   });
 }
+// Round-3 L4: crypto.subtle.digest only works in secure contexts (HTTPS or
+// localhost). If it's unavailable (file://, mixed-content downgrade, browser
+// quirk) we still need a deterministic "did inputs change" signal so the
+// stale-plan banner keeps working — fall back to a fast non-crypto djb2 hash.
+// The fingerprint is NOT security-critical — it only gates the "regenerate?"
+// confirm dialog. SHA-256 is overkill here, kept as the production path
+// for free since secure contexts are universal.
+function djb2Hash(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
 async function computeFingerprint(d) {
   const json = canonicalizeFingerprintInput(d);
-  const bytes = new TextEncoder().encode(json);
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  try {
+    if (typeof crypto !== "undefined" && crypto.subtle?.digest) {
+      const bytes = new TextEncoder().encode(json);
+      const hash = await crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    }
+  } catch (e) {
+    console.warn("[hhp] crypto.subtle.digest failed, using djb2 fallback:", e?.message);
+  }
+  return `djb2:${djb2Hash(json)}`;
 }
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -3971,7 +3990,11 @@ function GrowingPlanTab({
       if (cancelled) return;
       fingerprintDigestRef.current = digest;
       setCurrentFingerprint(digest);
-    }).catch(() => { /* crypto.subtle failure - leave "" */ });
+    }).catch((e) => {
+      // computeFingerprint always resolves (djb2 fallback) — this catch only
+      // fires on JSON.stringify cycles or memory exhaustion. Log + leave "".
+      console.warn("[hhp] fingerprint compute unexpectedly threw:", e?.message);
+    });
     return () => { cancelled = true; };
   }, [fingerprintInput]);
   const fingerprintStale = !!plan && !!planState.cropFingerprint
@@ -6696,7 +6719,9 @@ export default function App() {
             outerWidthFt:   sanitizeNum(b.outerWidthFt,   def.outerWidthFt,   1,   50),
             cutoutLengthFt: sanitizeNum(b.cutoutLengthFt, def.cutoutLengthFt, 0,   99),
             cutoutWidthFt:  sanitizeNum(b.cutoutWidthFt,  def.cutoutWidthFt,  0,   49),
-            qty:            clampInt   (b.qty,            def.qty,            1,   MAX_BEDS_PER_GROUP),
+            // Round-3 H2: clampInt is (v, min, max); the prior 4-arg call silently
+            // discarded MAX_BEDS_PER_GROUP, clamping every loaded qty to 1.
+            qty:            Math.round(sanitizeNum(b.qty, def.qty, 1, MAX_BEDS_PER_GROUP)),
           };
         });
       if (valid.length > 0) return valid;
@@ -7099,6 +7124,7 @@ export default function App() {
       return true;
     };
 
+    let giveUpHandle = null;
     if (!setup()) {
       pollHandle = setInterval(() => {
         if (cancelled) return;
@@ -7106,12 +7132,16 @@ export default function App() {
       }, 250);
       // Give up after 8 s - lemon.js isn't reachable, CSP is blocking, or
       // the user is offline. Paywall CTA still works as a plain link.
-      setTimeout(() => { if (pollHandle) { clearInterval(pollHandle); pollHandle = null; } }, 8000);
+      giveUpHandle = setTimeout(() => {
+        giveUpHandle = null;
+        if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+      }, 8000);
     }
 
     return () => {
       cancelled = true;
       if (pollHandle) clearInterval(pollHandle);
+      if (giveUpHandle) clearTimeout(giveUpHandle);
     };
   }, []);
 

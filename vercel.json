@@ -3,7 +3,7 @@
     {
       "source": "/:path*",
       "has": [
-        { "type": "host", "value": "homestead-harvest-planner.vercel.app" }
+        { "type": "host", "value": "(?<host>homestead-harvest-planner[a-z0-9-]*\\.vercel\\.app)" }
       ],
       "destination": "https://thehomesteadplan.com/:path*",
       "permanent": true
