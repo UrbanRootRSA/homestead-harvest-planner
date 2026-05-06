@@ -13,6 +13,7 @@
 // an API key. We still proxy them so origin + rate limit + store check apply.
 
 import { Redis } from "@upstash/redis";
+import { createHash } from "crypto";
 
 const ALLOWED_ORIGINS = [
   "https://thehomesteadplan.com",
@@ -24,8 +25,18 @@ const ALLOWED_ORIGINS = [
 const LS_ACTIVATE = "https://api.lemonsqueezy.com/v1/licenses/activate";
 const LS_VALIDATE = "https://api.lemonsqueezy.com/v1/licenses/validate";
 
-const RL_MAX = 10;
-const RL_WINDOW_SEC = 600;
+// Per-IP: anti-spam pre-flight before LS round-trip
+const RL_IP_MAX = 10;
+const RL_IP_WINDOW_SEC = 600;
+// Phase-2 L6: per-licence bucket — caps an attacker holding a stolen key from
+// firing /api/validate-key from N residential-proxy IPs to probe activation
+// state. Wider window because validate-key is the cheap endpoint and legit
+// users hit it more than /api/generate (mount-revalidate, URL-key flow).
+const RL_LICENCE_MAX = 50;
+const RL_LICENCE_WINDOW_SEC = 3600;
+
+// Phase-2 M5: bound the LS fetch (mirrors generate.js LS_TIMEOUT_MS).
+const LS_TIMEOUT_MS = 8000;
 
 // Vercel auto-injects different env var names depending on which Marketplace
 // integration the user installed:
@@ -57,18 +68,27 @@ function isAllowedOrigin(req) {
 }
 
 function getIp(req) {
+  // Phase-2 M4: prefer x-real-ip (Vercel-platform-attested at the edge).
+  // Drops socket.remoteAddress fallback (returned Vercel-pod-internal IPs
+  // that bucketed many distinct clients into one rate-limit slot).
+  const real = req.headers["x-real-ip"];
+  if (typeof real === "string" && real.length > 0) return real.trim();
   const xff = req.headers["x-forwarded-for"];
   if (typeof xff === "string" && xff.length > 0) return xff.split(",")[0].trim();
-  return req.socket?.remoteAddress || "unknown";
+  return "no-ip";
 }
 
-async function rateLimitOK(ip) {
+function hashKey(key) {
+  return createHash("sha256").update(String(key)).digest("hex").slice(0, 16);
+}
+
+async function rateLimitOK(suffix, max, windowSec) {
   if (!redis) return true;
   try {
-    const key = `hhp:rl:validate-key:${ip}`;
+    const key = `hhp:rl:validate-key:${suffix}`;
     const count = await redis.incr(key);
-    if (count === 1) await redis.expire(key, RL_WINDOW_SEC);
-    return count <= RL_MAX;
+    if (count === 1) await redis.expire(key, windowSec);
+    return count <= max;
   } catch (e) {
     console.warn("[validate-key] rate limit check failed:", e?.message);
     return true;
@@ -76,17 +96,40 @@ async function rateLimitOK(ip) {
 }
 
 async function callLs(endpoint, params) {
-  const body = new URLSearchParams(params).toString();
-  const resp = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Accept": "application/json",
-    },
-    body,
-  });
-  const json = await resp.json().catch(() => ({}));
-  return { httpOk: resp.ok, status: resp.status, json };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), LS_TIMEOUT_MS);
+  try {
+    const body = new URLSearchParams(params).toString();
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+      },
+      body,
+      signal: ac.signal,
+    });
+    const json = await resp.json().catch(() => ({}));
+    return { httpOk: resp.ok, status: resp.status, json };
+  } catch (e) {
+    const isAbort = e?.name === "AbortError";
+    console.warn("[validate-key] callLs error:", isAbort ? "timeout" : e?.message);
+    return { httpOk: false, status: 504, json: {} };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Phase-2 L5: map LS verbatim error strings to a small allowlist of normalised
+// messages. LS error wording is not contractually stable; if they ever surface
+// internal staff-debug strings (e.g. account IDs) verbatim-passing leaks them
+// to the client. The four buckets cover all current LS error states.
+function normaliseLsError(errStr) {
+  if (/expired/i.test(errStr)) return "This licence key has expired.";
+  if (/disabled/i.test(errStr)) return "This licence key has been disabled.";
+  if (/instance/i.test(errStr)) return "This device is no longer activated. Try re-entering your licence key.";
+  if (/not found|invalid/i.test(errStr)) return "This licence key was not found.";
+  return "This licence key could not be validated.";
 }
 
 export default async function handler(req, res) {
@@ -101,7 +144,7 @@ export default async function handler(req, res) {
   }
 
   const ip = getIp(req);
-  if (!(await rateLimitOK(ip))) {
+  if (!(await rateLimitOK(`ip:${ip}`, RL_IP_MAX, RL_IP_WINDOW_SEC))) {
     return res.status(429).json({ valid: false, error: "Too many attempts. Try again in a few minutes." });
   }
 
@@ -112,6 +155,13 @@ export default async function handler(req, res) {
 
   if (key.length < 8 || key.length > 128) {
     return res.status(400).json({ valid: false, error: "Invalid licence key format." });
+  }
+
+  // Phase-2 L6: per-licence bucket. Caps an attacker who has a key from firing
+  // validate-key from many proxy IPs to probe activation state without burning
+  // a single per-IP bucket. Mirrors the two-tier pattern on /api/generate.
+  if (!(await rateLimitOK(`lk:${hashKey(key)}`, RL_LICENCE_MAX, RL_LICENCE_WINDOW_SEC))) {
+    return res.status(429).json({ valid: false, error: "Too many attempts for this licence. Try again in an hour." });
   }
 
   try {
@@ -145,13 +195,13 @@ export default async function handler(req, res) {
       // instance — over-firing it on every error condition (e.g. "key not
       // found") makes URL-key phishing-link slot-burn easier to exploit. See
       // docs/security-2026-04-27-url-key-instance-trust.md (Finding #3).
-      // TODO: LS error strings are not contractually stable; revisit if LS
-      // changes the wording of instance-related errors.
+      // Phase-2 L5: normalise verbatim LS strings to an allowlist instead of
+      // slice(0,200). Future LS API changes can no longer leak internal info.
       const errStr = String(js.error || "");
       const looksLikeStaleInstance = Boolean(instanceId) && /instance/i.test(errStr);
       return res.status(200).json({
         valid: false,
-        error: errStr.slice(0, 200),
+        error: normaliseLsError(errStr),
         retry_activation: looksLikeStaleInstance,
       });
     }
@@ -182,13 +232,15 @@ export default async function handler(req, res) {
       return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
     }
 
+    // Phase-2 L2: trim response to the fields the client actually consumes.
+    // The previously-leaked store_id / activation_limit / activation_usage
+    // were free reconnaissance for a stolen-key attacker probing activation
+    // state. Cross-product pattern (Grow Room d87a210 M2). The canonical-
+    // instance gate at /api/generate is the actual enforcement; these were
+    // legacy fields no caller in src/App.jsx reads.
     return res.status(200).json({
       valid: true,
       instance_id: inst?.id || instanceId || null,
-      // Surfaced for client-side logging + future store-ID env lookup. No PII.
-      store_id: meta.store_id ?? null,
-      activation_limit: lk.activation_limit ?? null,
-      activation_usage: lk.activation_usage ?? null,
     });
   } catch (e) {
     // Round-3 L5: log message + code only (matches generate.js pattern).

@@ -88,9 +88,17 @@ function isAllowedOrigin(req) {
 }
 
 function getIp(req) {
+  // Phase-2 M4: prefer x-real-ip (Vercel-platform-attested at the edge,
+  // can't be spoofed by client). Fall back to x-forwarded-for[0] for
+  // non-Vercel hosts (localhost dev). Drop the socket.remoteAddress
+  // fallback — on Vercel it returns pod-internal IPs that collapse all
+  // unknown clients into one rate-limit bucket.
+  // Defence-in-depth — the per-licence gate is the actual cost control.
+  const real = req.headers["x-real-ip"];
+  if (typeof real === "string" && real.length > 0) return real.trim();
   const xff = req.headers["x-forwarded-for"];
   if (typeof xff === "string" && xff.length > 0) return xff.split(",")[0].trim();
-  return req.socket?.remoteAddress || "unknown";
+  return "no-ip";
 }
 
 function hashKey(key) {
@@ -130,18 +138,40 @@ const LICENCE_CACHE_TTL_SEC = 3600;
 const INSTANCE_BIND_TTL_SEC = 30 * 86400; // 30 days
 const instanceBindKey = (licenceHash) => `hhp:instance:${licenceHash}`;
 
+// Phase-2 M5: per-fetch timeouts. The handler has maxDuration:300 (Vercel
+// Fluid Compute), but a degraded LS / Anthropic that almost-responds (TLS
+// completes, body never finishes) would otherwise tie up a function instance
+// for up to 5 minutes per stuck call. Slow-loris-style pressure from a
+// degraded upstream can saturate function instances and starve legit traffic.
+// OWASP A10:2025 — Mishandling of Exceptional Conditions.
+const LS_TIMEOUT_MS = 8000;          // LS validate ~500 ms under normal load
+const ANTHROPIC_TIMEOUT_MS = 75000;  // plan generation 30-60 s; leaves ~225 s headroom in 300 s slot
+
 async function callLs(endpoint, params) {
-  const body = new URLSearchParams(params).toString();
-  const resp = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Accept": "application/json",
-    },
-    body,
-  });
-  const json = await resp.json().catch(() => ({}));
-  return { httpOk: resp.ok, status: resp.status, json };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), LS_TIMEOUT_MS);
+  try {
+    const body = new URLSearchParams(params).toString();
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+      },
+      body,
+      signal: ac.signal,
+    });
+    const json = await resp.json().catch(() => ({}));
+    return { httpOk: resp.ok, status: resp.status, json };
+  } catch (e) {
+    // Timeout or network failure → surface as LS-unreachable so the caller's
+    // `status >= 500` branch maps it to fail-closed.
+    const isAbort = e?.name === "AbortError";
+    console.warn("[generate] callLs error:", isAbort ? "timeout" : e?.message);
+    return { httpOk: false, status: 504, json: {} };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Returns { ok, reason? } describing the validation outcome. ok=true means the
@@ -667,6 +697,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: "Pick at least one crop on the Self-Sufficiency tab before generating a plan." });
   }
 
+  // Phase-2 M5: bound the Anthropic call. Without this, a hung upstream can
+  // tie up the 300 s function slot indefinitely until Vercel kills it.
+  const anthropicAc = new AbortController();
+  const anthropicTimer = setTimeout(() => anthropicAc.abort(), ANTHROPIC_TIMEOUT_MS);
   try {
     const apiResp = await fetch(ANTHROPIC_API_URL, {
       method: "POST",
@@ -675,6 +709,7 @@ export default async function handler(req, res) {
         "x-api-key": process.env.ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
       },
+      signal: anthropicAc.signal,
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_TOKENS,
@@ -770,7 +805,13 @@ export default async function handler(req, res) {
   } catch (e) {
     // Don't log the full exception object - could include request payload or
     // header data. Just message + code for actionable triage.
-    console.error("[generate] handler error:", e?.message, e?.code);
+    const isAbort = e?.name === "AbortError";
+    console.error("[generate] handler error:", isAbort ? "anthropic timeout" : e?.message, e?.code);
+    if (isAbort) {
+      return res.status(504).json({ ok: false, error: "The plan generator is taking longer than expected. Please try again." });
+    }
     return res.status(500).json({ ok: false, error: "Server error while generating the plan. Please try again." });
+  } finally {
+    clearTimeout(anthropicTimer);
   }
 }
