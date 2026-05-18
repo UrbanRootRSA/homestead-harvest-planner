@@ -94,10 +94,24 @@ const GRACE_WINDOW_MS = 48 * 60 * 60 * 1000;
 const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/6aecd238-c4b2-41a1-9a05-255dc8bfc822";
 const PRICE_USD = "39.99";
 
+// Closed allowlist of currency symbols the UI knows how to render. Hoisted here
+// (round-1 M3 closure 2026-05-18) so the localStorage clamp at currency-state
+// init can structurally allowlist the value rather than accept any ≤3-char
+// string. Cross-product hygiene anchor: workspace memory
+// `feedback_fmt_helper_html_escape_audit.md`. Source-of-truth for both the
+// LLM-response sanitiser (sanitisePlanShape) and the CurrencySelect UI.
+const CURRENCY_SYMBOLS = ["$", "€", "£", "R", "¥"];
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Conversion constants + USDA baseline ──
 // ═══════════════════════════════════════════════════════════════════════════
-const SQFT_TO_SQM = 0.0929;
+// Canonical SI / NIST conversion factors. 1 ft = 0.3048 m exactly is the
+// international definition (NIST SP 811); all derived units (sqft, cuft)
+// flow from squaring/cubing that definition. SQFT_TO_SQM was 0.0929 prior
+// to engineering audit 2026-05-18 — that's only 3 sig figs and underdrifts
+// every garden-space display + LLM input + HTML report by ~0.003%. Now
+// matches sibling Urban Root products (Grow Room, Aero-Calc) at 6 sig figs.
+const SQFT_TO_SQM = 0.09290304;    // 1 sq ft = 0.3048² m² (exact)
 const LB_TO_KG = 0.453592;
 const FT_TO_M = 0.3048;
 const IN_TO_CM = 2.54;
@@ -523,7 +537,12 @@ function persistState(key, data) {
   } catch (err) {
     // Quota exceeded, sandboxed iframe, or disabled storage. Log once per key
     // per session so we leave a breadcrumb without spamming the console.
-    console.warn(`[hhp] Could not persist "${key}":`, err?.message || err);
+    // Round-2 L1 closure 2026-05-18 — A09:2025. Narrowed from `err?.message
+    // || err` (which fell back to logging the raw exception object when
+    // `.message` was undefined — proxied / custom subclasses) to the same
+    // message+code shape used at the paywall-mount catch (Round-1 M1) and
+    // every api/*.js catch site. Prevents the same cause-chain payload leak.
+    console.warn(`[hhp] Could not persist "${key}":`, err?.message, err?.code);
     return false;
   }
 }
@@ -1052,7 +1071,10 @@ function SelfSufficiencyCalculator({
   }, []);
 
   const unitArea = metric ? "m²" : "sq ft";
-  const unitMass = metric ? "kg" : "lbs";
+  // Singular "lb" matches the three other tabs (Crop DB, Cost Savings,
+  // Preservation Planner). Plural "lbs" here drifted from the canonical
+  // label set — engineering audit 2026-05-18 M2.
+  const unitMass = metric ? "kg" : "lb";
   const areaConv = metric ? SQFT_TO_SQM : 1;
   const massConv = metric ? LB_TO_KG : 1;
 
@@ -3782,7 +3804,8 @@ const PLAN_STR_MAX = 800;
 const PLAN_SHORT_MAX = 80;
 const VALID_MONTHS = new Set(["January", "February", "March", "April", "May", "June",
                               "July", "August", "September", "October", "November", "December"]);
-const CURRENCY_SYMBOLS = ["$", "€", "£", "R", "¥"];
+// CURRENCY_SYMBOLS hoisted to the top of the file (above LS-key constants) so
+// it's in-scope for the currency-state localStorage clamp. Round-1 M3 closure.
 function _str(v, max = PLAN_STR_MAX) {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
 }
@@ -4834,7 +4857,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
         <h1>Your Personalised Growing Plan</h1>
         <div class="muted">by Urban Root &middot; generated ${escapeHtml(dateStr)}</div>
       </div>
-      <button class="print-btn" type="button" onclick="window.print()">Save as PDF</button>
+      <button class="print-btn" id="hhp-print-btn" type="button">Save as PDF</button>
     </div>
 
     <div class="meta">
@@ -4871,6 +4894,14 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
       <p style="margin:0;">The Homestead Plan by Urban Root &middot; thehomesteadplan.com</p>
     </footer>
   </div>
+  <script>
+    // Round-1 L1 closure 2026-05-18: registered listener replaces inline
+    // onclick="window.print()" on the Save-as-PDF button. Forward-protects the
+    // print feature against any future browser default CSP on Blob: documents
+    // (which would block inline event handlers but still allow a same-document
+    // <script>). A05:2025 defence-in-depth.
+    document.getElementById('hhp-print-btn')?.addEventListener('click', function () { window.print(); });
+  </script>
 </body>
 </html>`;
 }
@@ -6670,8 +6701,14 @@ export default function App() {
   // Global prefs
   const [metric, setMetric] = useState(() => loadState(LS_METRIC, false) === true);
   const [currency, setCurrency] = useState(() => {
+    // Round-1 M3 closure 2026-05-18: tightened from `typeof c === "string" &&
+    // c.length <= 3` to the closed allowlist. Today no JSON-import path exists
+    // (verified 2026-05-07 fmtMoney cross-product doc) so this is defence-in-
+    // depth, but a future Load-Design feature would otherwise let a payload
+    // like `"<x>"` slip the length clamp and rely on every emit site to escape
+    // it. Allowlist at source makes that class of regression impossible.
     const c = loadState(LS_CURRENCY, "$");
-    return typeof c === "string" && c.length <= 3 ? c : "$";
+    return CURRENCY_SYMBOLS.includes(c) ? c : "$";
   });
   const [hemisphere, setHemisphere] = useState(() => {
     const h = loadState(LS_HEMISPHERE, "north");
@@ -7085,7 +7122,11 @@ export default function App() {
         setPaid(false);
         setValidating(false);
       } catch (e) {
-        console.error("[hhp] paywall mount failed:", e);
+        // Narrow log to message+code only. Logging the raw exception object can
+        // pull request init / cause-chain payloads (including the licence key
+        // in the validateKeyRemote body) into Vercel log aggregators.
+        // Round-1 M1 closure 2026-05-18 — A09:2025. Matches api/*.js pattern.
+        console.error("[hhp] paywall mount failed:", e?.message, e?.code);
         if (!cancelled) {
           setPaid(false);
           setValidating(false);
