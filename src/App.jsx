@@ -3833,6 +3833,7 @@ function GrowingPlanTab({
   baseResults, planState, setPlanState,
   familySize, hemisphere, plantingState,
   metric, currency, producePerPerson, setTab,
+  onActivateKey,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const [generating, setGenerating] = useState(false);
@@ -3880,6 +3881,37 @@ function GrowingPlanTab({
   const plan = planState.plan;
   const cropIds = baseResults.perCrop.map((r) => r.cropId);
   const cropNames = baseResults.perCrop.map((r) => r.crop.name);
+
+  // L11 closure 2026-06-10: 48-hour grace-window customers (paid via
+  // hhp_pending after Checkout.Success, licence email not pasted yet) have
+  // no stored key, so /api/generate is guaranteed to 401 with a misleading
+  // "re-enter your key" message minutes after they paid $39.99. Detect the
+  // state at mount and swap the Generate button for a check-your-email +
+  // paste-key panel wired to the same activation flow as the paywall. The
+  // email ?key= link path reloads the page, so mount-time detection covers
+  // both recovery routes.
+  const [licenceKeyMissing, setLicenceKeyMissing] = useState(() => !loadState(LS_KEY, ""));
+  const [graceKey, setGraceKey] = useState("");
+  const [graceError, setGraceError] = useState("");
+  const [graceSaving, setGraceSaving] = useState(false);
+  const saveGraceKey = async () => {
+    if (graceSaving) return;
+    setGraceError("");
+    setGraceSaving(true);
+    try {
+      const result = typeof onActivateKey === "function"
+        ? await onActivateKey(graceKey)
+        : { ok: false, error: "Key entry is unavailable right now. Use the link in your purchase email instead." };
+      if (result?.ok) {
+        setLicenceKeyMissing(false);
+        setGraceKey("");
+      } else {
+        setGraceError(result?.error || "We couldn't verify that licence key.");
+      }
+    } finally {
+      setGraceSaving(false);
+    }
+  };
 
   const updateInput = (key, value) => {
     setPlanState((prev) => ({
@@ -3988,6 +4020,13 @@ function GrowingPlanTab({
     }
     if (manualMissing) {
       setError("Manual frost mode is selected but the dates are blank or invalid. Open Planting Dates and set both.");
+      return;
+    }
+    // L11 defence in depth: the panel below replaces the Generate button in
+    // this state, so this guard should be unreachable - but never fire a
+    // request we know the server will 401.
+    if (licenceKeyMissing) {
+      setError("Your licence key hasn't been saved on this device yet. Paste it from your purchase email first.");
       return;
     }
     // Clear any prior server error BEFORE the confirm dialog - a user who
@@ -4199,7 +4238,69 @@ function GrowingPlanTab({
 
       {/* ── Generate / Regenerate button ── */}
       <div style={{ marginTop: 28 }}>
-        {(() => {
+        {licenceKeyMissing && (
+          /* L11: grace-window state - explain the key-email wait instead of
+             rendering a Generate button that always 401s. */
+          <div style={{
+            padding: isMobile ? 16 : 20, borderRadius: T.radius,
+            background: T.bg2, border: `1.5px solid ${T.border}`,
+          }}>
+            <p style={{
+              margin: 0, fontSize: 15, fontWeight: 700, color: T.tx,
+              fontFamily: T.fontBody,
+            }}>
+              Payment received. One step left: your licence key.
+            </p>
+            <p style={{ margin: "8px 0 14px", fontSize: 14, color: T.tx2, lineHeight: 1.6 }}>
+              Your key is in the purchase email from Lemon Squeezy (it usually
+              arrives within a minute or two; check spam if not). Click the
+              link in that email, or paste the key below. Plan generation
+              unlocks the moment the key is saved on this device.
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                value={graceKey}
+                onChange={(e) => { setGraceKey(e.target.value); if (graceError) setGraceError(""); }}
+                placeholder="XXXX-XXXX-XXXX-XXXX"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={graceSaving}
+                aria-label="Licence key"
+                aria-invalid={Boolean(graceError)}
+                aria-describedby={graceError ? "hhp-grace-key-error" : undefined}
+                style={{
+                  flex: "1 1 220px", minWidth: 0,
+                  fontSize: 16, fontFamily: T.fontNum,
+                  fontVariantNumeric: "tabular-nums", letterSpacing: "0.04em",
+                  background: T.card, color: T.tx,
+                  border: `1.5px solid ${graceError ? T.error : T.border}`,
+                  borderRadius: T.radius, padding: "12px 14px", minHeight: 48,
+                  outline: "none",
+                }} />
+              <button type="button" onClick={saveGraceKey}
+                disabled={graceSaving || graceKey.trim().length < 8}
+                style={{
+                  background: T.primary, color: "#FEFCF8", border: "none",
+                  borderRadius: T.radiusPill,
+                  cursor: graceSaving ? "wait" : "pointer",
+                  padding: "10px 22px", minHeight: 48,
+                  fontFamily: T.fontBody, fontSize: 14, fontWeight: 700,
+                  opacity: (graceSaving || graceKey.trim().length < 8) ? 0.6 : 1,
+                }}>
+                {graceSaving ? "Verifying..." : "Save key"}
+              </button>
+            </div>
+            {graceError && (
+              <div id="hhp-grace-key-error" role="alert" style={{
+                marginTop: 10, padding: "10px 14px", borderRadius: T.radius,
+                background: T.errorBg, color: T.error,
+                border: `1px solid ${T.error}`, fontSize: 14, lineHeight: 1.45,
+              }}>{graceError}</div>
+            )}
+          </div>
+        )}
+        {!licenceKeyMissing && (() => {
           const disabled = generating || cropNames.length === 0 || manualMissing;
           // Disabled-state styling: drop opacity in addition to flipping the
           // background, so it reads as "not actionable" even when the colour
@@ -4233,7 +4334,7 @@ function GrowingPlanTab({
               : "This usually takes 20-40 seconds. Please don't close the tab."}
           </p>
         )}
-        {cropNames.length === 0 && !generating && (
+        {!licenceKeyMissing && cropNames.length === 0 && !generating && (
           <p style={{
             marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center",
           }}>
@@ -4246,7 +4347,7 @@ function GrowingPlanTab({
             to enable plan generation.
           </p>
         )}
-        {manualMissing && cropNames.length > 0 && !generating && (
+        {!licenceKeyMissing && manualMissing && cropNames.length > 0 && !generating && (
           <p style={{
             marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center",
           }}>
@@ -7456,7 +7557,8 @@ export default function App() {
               plantingState={plantingState}
               metric={metric} currency={currency}
               producePerPerson={producePerPerson}
-              setTab={setTab} />
+              setTab={setTab}
+              onActivateKey={activateKey} />
           </TabPageShell>
         )}
       </main>
