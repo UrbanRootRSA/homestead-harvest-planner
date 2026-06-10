@@ -778,6 +778,16 @@ export default async function handler(req, res) {
       return res.status(502).json({ ok: false, error: userMsg });
     }
 
+    // L4 closure 2026-06-10: a response cut off at MAX_TOKENS mid-JSON can
+    // still carry a parseable-but-partial tool_use input (e.g. months 1-8
+    // present, preservation/savings/tips lost) that passes the
+    // monthlySchedule.length check below and renders as a complete plan.
+    // stop_reason is the authoritative truncation signal - refuse it.
+    if (data?.stop_reason === "max_tokens") {
+      console.error("[generate] response truncated at max_tokens; output_tokens:", data?.usage?.output_tokens ?? "?");
+      return res.status(502).json({ ok: false, error: "Your plan was too large to generate in one pass. Try selecting fewer crops and regenerating." });
+    }
+
     // With forced tool-use, the model returns a content array containing a
     // tool_use block whose `input` is the structured plan object.
     const blocks = Array.isArray(data?.content) ? data.content : [];

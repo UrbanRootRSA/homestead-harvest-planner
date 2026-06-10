@@ -99,8 +99,8 @@ const PRICE_USD = "39.99";
 // (round-1 M3 closure 2026-05-18) so the localStorage clamp at currency-state
 // init can structurally allowlist the value rather than accept any ≤3-char
 // string. Cross-product hygiene anchor: workspace memory
-// `feedback_fmt_helper_html_escape_audit.md`. Source-of-truth for both the
-// LLM-response sanitiser (sanitisePlanShape) and the CurrencySelect UI.
+// `feedback_fmt_helper_html_escape_audit.md`. Source-of-truth for the
+// CurrencySelect UI (the server's sanitisePlan keeps its own copy).
 const CURRENCY_SYMBOLS = ["$", "€", "£", "R", "¥"];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3820,90 +3820,14 @@ async function computeFingerprint(d) {
 }
 // ───────────────────────────────────────────────────────────────────────────
 
-// Mirrors api/generate.js sanitisePlan(). Used when re-hydrating a cached plan
-// from localStorage so a tampered or migrated cache can't crash the renderer.
-// Returns null if the plan is unsalvageable (no monthlySchedule).
-const PLAN_STR_MAX = 800;
-const PLAN_SHORT_MAX = 80;
-const VALID_MONTHS = new Set(["January", "February", "March", "April", "May", "June",
-                              "July", "August", "September", "October", "November", "December"]);
-// CURRENCY_SYMBOLS hoisted to the top of the file (above LS-key constants) so
-// it's in-scope for the currency-state localStorage clamp. Round-1 M3 closure.
-function _str(v, max = PLAN_STR_MAX) {
-  return typeof v === "string" ? v.trim().slice(0, max) : "";
-}
-function _strArr(arr, max = 32, eachMax = PLAN_STR_MAX) {
-  if (!Array.isArray(arr)) return [];
-  return arr.map((v) => _str(v, eachMax)).filter(Boolean).slice(0, max);
-}
-function _num(v, min = 0, max = 1e9) {
-  const x = Number(v);
-  if (!Number.isFinite(x)) return 0;
-  return Math.max(min, Math.min(max, x));
-}
-function sanitisePlanShape(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  const monthlySchedule = Array.isArray(raw.monthlySchedule)
-    ? raw.monthlySchedule.slice(0, 12).map((m) => ({
-        month: _str(m?.month, PLAN_SHORT_MAX),
-        tasks: _strArr(m?.tasks, 12, 240),
-      })).filter((m) => VALID_MONTHS.has(m.month) && m.tasks.length > 0)
-    : [];
-  if (monthlySchedule.length === 0) return null;
-  const savings = raw.savingsEstimate && typeof raw.savingsEstimate === "object" ? {
-    annualSavings: Math.round(_num(raw.savingsEstimate.annualSavings, 0, 1e7)),
-    currency: CURRENCY_SYMBOLS.includes(raw.savingsEstimate.currency)
-      ? raw.savingsEstimate.currency : "$",
-    topSavers: _strArr(raw.savingsEstimate.topSavers, 10, PLAN_SHORT_MAX),
-    note: _str(raw.savingsEstimate.note, 600),
-  } : null;
-  return {
-    summary: _str(raw.summary, 1200),
-    monthlySchedule,
-    bedLayouts: Array.isArray(raw.bedLayouts)
-      ? raw.bedLayouts.slice(0, 12).map((b) => ({
-          bedName: _str(b?.bedName, 120),
-          crops: _strArr(b?.crops, 24, PLAN_SHORT_MAX),
-          notes: _str(b?.notes, 600),
-        })).filter((b) => b.bedName && b.crops.length > 0)
-      : [],
-    successionPlanting: Array.isArray(raw.successionPlanting)
-      ? raw.successionPlanting.slice(0, 24).map((sp) => ({
-          crop: _str(sp?.crop, PLAN_SHORT_MAX),
-          plantings: Math.round(_num(sp?.plantings, 1, 12)),
-          intervalWeeks: Math.round(_num(sp?.intervalWeeks, 1, 52)),
-          note: _str(sp?.note, 400),
-        })).filter((sp) => sp.crop)
-      : [],
-    harvestTimeline: Array.isArray(raw.harvestTimeline)
-      ? raw.harvestTimeline.slice(0, 32).map((h) => ({
-          crop: _str(h?.crop, PLAN_SHORT_MAX),
-          startMonth: _str(h?.startMonth, PLAN_SHORT_MAX),
-          endMonth: _str(h?.endMonth, PLAN_SHORT_MAX),
-          peakMonth: _str(h?.peakMonth, PLAN_SHORT_MAX),
-        })).filter((h) => h.crop && h.startMonth)
-      : [],
-    yieldEstimates: Array.isArray(raw.yieldEstimates)
-      ? raw.yieldEstimates.slice(0, 32).map((y) => ({
-          crop: _str(y?.crop, PLAN_SHORT_MAX),
-          plants: Math.round(_num(y?.plants, 0, 9999)),
-          estimatedYield: Math.round(_num(y?.estimatedYield, 0, 100000) * 10) / 10,
-          unit: y?.unit === "kg" ? "kg" : "lb",
-          note: _str(y?.note, 400),
-        })).filter((y) => y.crop)
-      : [],
-    preservationGuide: Array.isArray(raw.preservationGuide)
-      ? raw.preservationGuide.slice(0, 32).map((p) => ({
-          crop: _str(p?.crop, PLAN_SHORT_MAX),
-          freshShare: _str(p?.freshShare, 32),
-          preservationMethods: _strArr(p?.preservationMethods, 8, PLAN_SHORT_MAX),
-          note: _str(p?.note, 400),
-        })).filter((p) => p.crop)
-      : [],
-    savingsEstimate: savings,
-    tips: _strArr(raw.tips, 12, 400),
-  };
-}
+// L3 closure 2026-06-10: the client-side `sanitisePlanShape` mirror (~80 LOC
+// of _str/_strArr/_num helpers) that lived here was dead code - the V2
+// paywall design never restores a plan body from localStorage, so nothing
+// ever called it, and it silently drifted from the server's sanitisePlan.
+// The server (api/generate.js sanitisePlan) is the single sanitiser. If a
+// plan body ever re-enters client state from storage, re-introduce a
+// client-side shape sanitiser at that point - do not render unsanitised
+// cached plans.
 
 function GrowingPlanTab({
   baseResults, planState, setPlanState,
@@ -4182,7 +4106,13 @@ function GrowingPlanTab({
     const a = downloadAnchorRef.current;
     if (!a) return;
     a.href = url;
-    a.download = `The-Homestead-Plan-${new Date().toISOString().slice(0, 10)}.html`;
+    // L2 closure 2026-06-10: name the file after the plan's generatedAt (the
+    // date the report header shows), not today - downloading a Monday plan
+    // on Wednesday said Wednesday. Local date parts, not toISOString(): UTC
+    // slicing is off by one for UTC+ users near midnight.
+    const genDate = new Date(Number(planState.generatedAt) || Date.now());
+    const pad2 = (n) => String(n).padStart(2, "0");
+    a.download = `The-Homestead-Plan-${genDate.getFullYear()}-${pad2(genDate.getMonth() + 1)}-${pad2(genDate.getDate())}.html`;
     a.click();
   };
 
@@ -4802,21 +4732,33 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
     `).join("")}
   ` : "";
 
-  const harvestHtml = plan.harvestTimeline.length > 0 ? `
+  // L1 closure 2026-06-10: mirror PlanHarvestChart's invalid-month guard
+  // (#13). Without it a non-canonical startMonth gave startIdx -1 ->
+  // segment [-1, 11] -> a phantom full-year harvest bar in the downloaded
+  // report for a row the on-screen chart correctly hid.
+  const harvestRows = plan.harvestTimeline
+    .map((r) => {
+      const startIdx = monthIndex(r.startMonth);
+      let endIdx = monthIndex(r.endMonth);
+      let peakIdx = monthIndex(r.peakMonth);
+      // Soften end/peak like the UI renderer: single-cell bar.
+      if (endIdx === -1) endIdx = startIdx;
+      if (peakIdx === -1) peakIdx = startIdx;
+      return { ...r, startIdx, endIdx, peakIdx };
+    })
+    .filter((r) => r.startIdx >= 0);
+  const harvestHtml = harvestRows.length > 0 ? `
     <h2>Harvest timeline</h2>
     <div style="overflow-x:auto;">
       <div style="min-width:560px;">
         <div class="header-row">
           <div></div>${MONTH_ORDER.map((m) => `<div>${m.slice(0, 3)}</div>`).join("")}
         </div>
-        ${plan.harvestTimeline.map((r) => {
-          const startIdx = monthIndex(r.startMonth);
-          const endIdx = monthIndex(r.endMonth);
-          const peakIdx = monthIndex(r.peakMonth);
-          const segments = endIdx >= startIdx ? [[startIdx, endIdx]] : [[startIdx, 11], [0, endIdx]];
+        ${harvestRows.map((r) => {
+          const segments = r.endIdx >= r.startIdx ? [[r.startIdx, r.endIdx]] : [[r.startIdx, 11], [0, r.endIdx]];
           const cells = Array.from({ length: 12 }, (_, m) => {
             const on = segments.some(([a, b]) => m >= a && m <= b);
-            const peak = m === peakIdx && on;
+            const peak = m === r.peakIdx && on;
             const cls = peak ? "cell on peak" : on ? "cell on" : "cell";
             return `<div class="${cls}"></div>`;
           }).join("");
