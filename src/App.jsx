@@ -560,9 +560,18 @@ function clearLS(key) {
 
 // POST licence key to our serverless validator. Returns:
 //   { valid: true,  instance_id: string|null }
-//   { valid: false, error: string, retry_activation?: boolean }
+//   { valid: false, error: string, retry_activation?: boolean }   <- definitive (HTTP 200)
+//   { valid: false, error: string, transient: true }              <- operational failure
 // Never throws - network failures resolve to { valid: false, error: ... } so
 // the caller can simply branch on `valid`.
+//
+// C1 closure 2026-06-10 (FaminePrep bc54755 pattern): only an HTTP-200
+// response with a boolean `valid` verdict is DEFINITIVE. A 429 rate limit,
+// 5xx / LS outage, 403 origin, malformed body, network failure, or the 15 s
+// timeout tells us NOTHING about the licence - those results carry
+// `transient: true` and callers MUST NOT wipe stored licence state on them.
+// Wiping on transients silently de-licensed paying customers at mount and
+// every re-paste burned one of their 3 LS activation slots.
 async function validateKeyRemote(key, instanceId, opts) {
   opts = opts || {};
   // 15s wall-clock cap keeps the paywall mount effect from spinning forever
@@ -589,15 +598,28 @@ async function validateKeyRemote(key, instanceId, opts) {
       }),
     });
     const data = await resp.json().catch(() => ({}));
-    if (typeof data !== "object" || data === null) {
-      return { valid: false, error: "Unexpected response from licence server." };
+    if (typeof data !== "object" || data === null || typeof data.valid !== "boolean") {
+      // Malformed / empty body - even on a 200, no verdict was delivered.
+      return { valid: false, transient: true, error: "Unexpected response from licence server." };
+    }
+    if (resp.status !== 200) {
+      // 429 / 5xx / 403 / 400: operational failure, not a licence verdict.
+      // Pass the server's user-facing message through but flag transient so
+      // no caller treats it as a revocation.
+      return {
+        valid: false,
+        transient: true,
+        error: typeof data.error === "string" && data.error
+          ? data.error
+          : "Licence server error. Please try again.",
+      };
     }
     return data;
   } catch (e) {
     if (e?.name === "AbortError") {
-      return { valid: false, error: "Licence server is slow to respond. Please try again." };
+      return { valid: false, transient: true, error: "Licence server is slow to respond. Please try again." };
     }
-    return { valid: false, error: "Can't reach the licence server. Check your connection and try again." };
+    return { valid: false, transient: true, error: "Can't reach the licence server. Check your connection and try again." };
   } finally {
     clearTimeout(timer);
   }
@@ -7129,10 +7151,23 @@ export default function App() {
             commitPaid(storedKey, r.instance_id);
             return;
           }
-          // Stored key no longer valid - wipe silently. User sees paywall,
-          // not an error - they didn't just try to enter it.
-          clearLS(LS_KEY);
-          clearLS(LS_INSTANCE);
+          // C1 closure 2026-06-10: only a DEFINITIVE HTTP-200 `valid:false`
+          // verdict may de-license this device. Transient failures (rate
+          // limit, LS/Upstash outage, offline launch, timeout) keep the
+          // stored key + instance so the next launch revalidates cleanly -
+          // wiping here forced a re-paste that burned one of the customer's
+          // 3 LS activation slots per transient failure. Paid stays false
+          // for this session (the render gate never fails open); the paywall
+          // overlay explains why if they open it.
+          if (r?.transient) {
+            setKeyError("We couldn't reach the licence server to verify your saved key. It's still saved on this device - reload to try again.");
+          } else {
+            // Stored key definitively rejected (revoked / refunded /
+            // disabled) - wipe silently. User sees paywall, not an error -
+            // they didn't just try to enter it.
+            clearLS(LS_KEY);
+            clearLS(LS_INSTANCE);
+          }
         }
 
         // 3. Grace window: Checkout.Success timestamp within 48 h.
