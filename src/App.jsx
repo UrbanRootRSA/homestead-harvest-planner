@@ -6249,10 +6249,15 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
             display: "flex", alignItems: "center",
             gap: isMobile ? 14 : 20,
           }}>
+            {/* L7 closure 2026-06-10: mobile padding (not font-size) lifts the
+                tap height from ~28px to >=44px (Apple HIG, same rule as every
+                other interactive element in the app). Desktop keeps the
+                compact 6px padding so the masthead row height is unchanged. */}
             <a href="/about.html" style={{
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
-              fontWeight: 600, padding: "6px 2px",
+              fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
+              display: "inline-flex", alignItems: "center",
               borderBottom: "1px solid transparent",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
@@ -6262,7 +6267,8 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
             <a href="/blog/" style={{
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
-              fontWeight: 600, padding: "6px 2px",
+              fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
+              display: "inline-flex", alignItems: "center",
               borderBottom: "1px solid transparent",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
