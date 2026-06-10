@@ -210,29 +210,9 @@
     &copy; 2026 Urban Root &middot; <a href="/terms.html">Terms</a> &middot; <a href="/privacy.html">Privacy</a> &middot; <a href="/refund.html">Refund</a>
   </footer>
 
-  <script>
-    (function () {
-      var btn = document.getElementById("copy-btn");
-      var addr = "urbanroot.contact@gmail.com";
-      if (!btn) return;
-      btn.addEventListener("click", function () {
-        var done = function () {
-          btn.textContent = "Copied";
-          btn.classList.add("copied");
-          setTimeout(function () {
-            btn.textContent = "Copy";
-            btn.classList.remove("copied");
-          }, 1800);
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(addr).then(done, function () {
-            window.prompt("Copy the address:", addr);
-          });
-        } else {
-          window.prompt("Copy the address:", addr);
-        }
-      });
-    })();
-  </script>
+  <!-- Externalized (code-review 2026-06-10 M5): this was the only executable
+       inline script on the origin; moving it lets the site CSP drop
+       'unsafe-inline' from script-src. -->
+  <script src="/contact-copy.js" defer></script>
 </body>
 </html>
