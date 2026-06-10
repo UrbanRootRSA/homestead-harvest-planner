@@ -6256,20 +6256,51 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 12, flexWrap: "wrap",
       }}>
-        {/* Logo / title - deliberately oversized so the masthead reads like
-            a premium print journal instead of a calculator widget. */}
-        <a href="#home"
-          onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
-          style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 16, textDecoration: "none" }}>
-          <BrandMark size={isMobile ? 42 : 56} />
-          <span style={{
-            fontFamily: T.fontDisplay, fontSize: isMobile ? 22 : 34,
-            color: T.tx, fontWeight: 400, letterSpacing: "-0.015em",
-            lineHeight: 1.05,
+        {/* Logo / title + secondary nav. The masthead reads like a premium
+            print journal; About + Blog sit alongside as text links so
+            they're discoverable from every tab without crowding the tab nav. */}
+        <div style={{
+          display: "flex", alignItems: "center",
+          gap: isMobile ? 12 : 24, flexWrap: "wrap",
+        }}>
+          <a href="#home"
+            onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
+            style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 16, textDecoration: "none" }}>
+            <BrandMark size={isMobile ? 42 : 56} />
+            <span style={{
+              fontFamily: T.fontDisplay, fontSize: isMobile ? 22 : 34,
+              color: T.tx, fontWeight: 400, letterSpacing: "-0.015em",
+              lineHeight: 1.05,
+            }}>
+              The Homestead Plan
+            </span>
+          </a>
+          <nav aria-label="Secondary" style={{
+            display: "flex", alignItems: "center",
+            gap: isMobile ? 14 : 20,
           }}>
-            {isMobile ? "The Homestead Plan" : "The Homestead Plan"}
-          </span>
-        </a>
+            <a href="/about.html" style={{
+              color: T.tx2, textDecoration: "none",
+              fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
+              fontWeight: 600, padding: "6px 2px",
+              borderBottom: "1px solid transparent",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = T.tx2; }}>
+              About
+            </a>
+            <a href="/blog/" style={{
+              color: T.tx2, textDecoration: "none",
+              fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
+              fontWeight: 600, padding: "6px 2px",
+              borderBottom: "1px solid transparent",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = T.tx2; }}>
+              Blog
+            </a>
+          </nav>
+        </div>
 
         {/* Hemisphere + Metric toggles */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -6643,6 +6674,7 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Learn</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
+              <a href="/blog/" style={linkStyle}>Blog</a>
               <a href="#features" style={linkStyle}
                 onClick={(e) => { e.preventDefault(); window.location.hash = "features"; }}>Features</a>
               <a href="#how-it-works" style={linkStyle}
@@ -6661,6 +6693,7 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Support</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
+              <a href="/about.html" style={linkStyle}>About</a>
               <a href="/contact.html" style={linkStyle}>Contact</a>
               <a href="/privacy.html" style={linkStyle}>Privacy</a>
               <a href="/terms.html" style={linkStyle}>Terms</a>
@@ -6676,7 +6709,6 @@ function AppFooter() {
           fontSize: 12, color: T.tx3,
         }}>
           <div>© {year} Urban Root. Pay once, use forever.</div>
-          <div>Built for homesteaders who read extension-service PDFs for fun.</div>
         </div>
       </div>
     </footer>

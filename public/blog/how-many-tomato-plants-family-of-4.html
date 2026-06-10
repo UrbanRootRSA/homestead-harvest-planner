@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How Many Tomato Plants for a Family of 4? The Real Numbers</title>
+  <meta name="description" content="The actual math behind tomato planning for a family of four — three scenarios from fresh-eating only to full-year self-sufficiency, with yield numbers from cooperative-extension data." />
+  <meta name="theme-color" content="#2D5A27" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="canonical" href="https://thehomesteadplan.com/blog/how-many-tomato-plants-family-of-4.html" />
+  <meta name="robots" content="index,follow" />
+  <meta property="og:title" content="How Many Tomato Plants for a Family of 4?" />
+  <meta property="og:description" content="The real math behind tomato planning. Three scenarios with yield numbers from extension-service data." />
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://thehomesteadplan.com/blog/how-many-tomato-plants-family-of-4.html" />
+  <meta property="og:image" content="https://thehomesteadplan.com/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="https://thehomesteadplan.com/og-image.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "How Many Tomato Plants for a Family of 4? The Real Numbers",
+    "description": "The actual math behind tomato planning for a family of four — three scenarios from fresh-eating only to full-year self-sufficiency.",
+    "datePublished": "2026-05-18",
+    "dateModified": "2026-05-18",
+    "author": {
+      "@type": "Organization",
+      "name": "Urban Root",
+      "url": "https://thehomesteadplan.com/about.html"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "Urban Root",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://thehomesteadplan.com/favicon-192.png"
+      }
+    },
+    "mainEntityOfPage": {
+      "@type": "WebPage",
+      "@id": "https://thehomesteadplan.com/blog/how-many-tomato-plants-family-of-4.html"
+    },
+    "image": "https://thehomesteadplan.com/og-image.png"
+  }
+  </script>
+  <style>
+    :root {
+      --bg:#FAF7F2; --bg2:#F2EDE4; --card:#FEFCF8; --border:#DDD6C8;
+      --tx:#2C2418; --tx2:#6B5D4F; --tx3:#7A6E5F;
+      --primary:#2D5A27; --accent:#C45D3E; --gold:#B8942C;
+      --fontDisplay:"DM Serif Display", Georgia, serif;
+      --fontBody:"Plus Jakarta Sans", system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      background: var(--bg); color: var(--tx);
+      font-family: var(--fontBody); font-size: 16px; line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+    a:hover { color: var(--accent); }
+    header {
+      background: rgba(250,247,242,0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px clamp(16px, 4vw, 48px);
+      position: sticky; top: 0; z-index: 10;
+    }
+    header .inner {
+      max-width: 760px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: center; gap: 14px;
+    }
+    .mark {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: var(--primary); flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .mark svg { width: 28px; height: 28px; }
+    .brand { font-family: var(--fontDisplay); font-size: 24px; color: var(--tx); text-decoration: none; }
+    .brand:hover { color: var(--primary); text-decoration: none; }
+    main { max-width: 720px; margin: 0 auto; padding: clamp(28px, 5vw, 56px) clamp(16px, 4vw, 32px); }
+    .eyebrow {
+      font-size: 12px; font-weight: 700; color: var(--accent);
+      letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 12px;
+    }
+    h1 {
+      font-family: var(--fontDisplay); font-weight: 400;
+      font-size: clamp(1.9rem, 4.5vw, 2.7rem); margin: 0 0 16px;
+      color: var(--tx); line-height: 1.15;
+    }
+    .byline {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      font-size: 14px; color: var(--tx3); margin: 0 0 36px;
+      padding-bottom: 24px; border-bottom: 1px solid var(--border);
+    }
+    .byline strong { color: var(--tx2); font-weight: 600; }
+    .lede {
+      font-size: clamp(1.05rem, 2vw, 1.18rem); color: var(--tx2);
+      margin: 0 0 28px; line-height: 1.55;
+    }
+    h2 {
+      font-family: var(--fontDisplay); font-weight: 400;
+      font-size: clamp(1.4rem, 2.8vw, 1.7rem);
+      margin: 40px 0 14px; color: var(--tx); line-height: 1.25;
+    }
+    h3 { font-weight: 700; font-size: 17px; margin: 28px 0 8px; color: var(--tx); }
+    p { margin: 0 0 16px; color: var(--tx2); }
+    ul, ol { color: var(--tx2); padding-left: 22px; margin: 0 0 18px; }
+    li { margin-bottom: 8px; }
+    .tldr {
+      background: var(--bg2); border-left: 3px solid var(--primary);
+      border-radius: 4px; padding: 18px 22px; margin: 24px 0 32px;
+      font-size: 15px; color: var(--tx);
+    }
+    .tldr strong { font-weight: 700; color: var(--tx); }
+    table {
+      width: 100%; border-collapse: collapse; margin: 18px 0 28px;
+      font-size: 14.5px; background: var(--card);
+      border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    }
+    th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--bg2); color: var(--tx); font-weight: 700; font-size: 13px; }
+    td { color: var(--tx2); }
+    tr:last-child td { border-bottom: none; }
+    .cta-box {
+      background: var(--card); border: 1px solid var(--primary);
+      border-radius: 12px; padding: 22px 24px; margin: 32px 0;
+    }
+    .cta-box h3 {
+      font-family: var(--fontDisplay); font-weight: 400; font-size: 19px;
+      margin: 0 0 8px; color: var(--primary);
+    }
+    .cta-box p { margin: 0 0 14px; color: var(--tx2); font-size: 15px; }
+    .cta-box a {
+      display: inline-block; padding: 10px 18px;
+      background: var(--primary); color: #FEFCF8;
+      font-weight: 600; text-decoration: none; border-radius: 8px;
+      font-size: 14px;
+    }
+    .cta-box a:hover { background: #1E3E1A; color: #FEFCF8; text-decoration: none; }
+    .source-note {
+      font-size: 13px; color: var(--tx3); font-style: italic;
+      border-top: 1px solid var(--border); padding-top: 18px; margin-top: 36px;
+    }
+    .related {
+      margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--border);
+    }
+    .related h3 { font-family: var(--fontDisplay); font-weight: 400; font-size: 22px; margin: 0 0 14px; }
+    .related ul { list-style: none; padding: 0; }
+    .related li { margin-bottom: 8px; }
+    .back { display: inline-block; margin-top: 32px; font-size: 14px; font-weight: 600; color: var(--primary); }
+    footer {
+      max-width: 760px; margin: 0 auto;
+      padding: 24px clamp(16px, 4vw, 32px) 48px;
+      color: var(--tx3); font-size: 13px; text-align: center;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="inner">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="#FAF7F2" role="img" aria-label="The Homestead Plan">
+          <rect x="7" y="5" width="3.5" height="22" rx="1"/>
+          <rect x="21.5" y="5" width="3.5" height="22" rx="1"/>
+          <rect x="7" y="14.5" width="18" height="3" rx="1"/>
+        </svg>
+      </span>
+      <a class="brand" href="/">The Homestead Plan</a>
+    </div>
+  </header>
+
+  <main>
+    <p class="eyebrow">Self-Sufficiency</p>
+    <h1>How many tomato plants for a family of 4? The real numbers.</h1>
+    <div class="byline">
+      <span><strong>By Urban Root</strong></span>
+      <span>·</span>
+      <span>Published 18 May 2026</span>
+      <span>·</span>
+      <span>7 min read</span>
+    </div>
+
+    <p class="lede">The answer ranges from <strong>6 plants</strong> to <strong>60 plants</strong>, and the difference is entirely about what you plan to do with them. Here is the actual math.</p>
+
+    <div class="tldr">
+      <strong>Quick answer for a typical family of 4:</strong><br>
+      Fresh eating only (salads, sandwiches, snacking): <strong>6 plants</strong> — 4 slicing, 2 cherry.<br>
+      Fresh + light preserving (a freezer of sauce, salsa): <strong>14 plants</strong> — 8 slicing, 2 cherry, 4 paste.<br>
+      Full-year self-sufficiency (100+ quarts of sauce, canned tomatoes, dried): <strong>36 plants</strong> — 10 slicing, 2 cherry, 24 paste.
+    </div>
+
+    <h2>Where the numbers come from</h2>
+    <p>USDA Economic Research Service tracks per-capita tomato availability at around 21 pounds of fresh-market tomatoes per person per year, plus another 70 pounds of processed tomato equivalent (sauce, paste, juice, ketchup). Home gardeners eat differently — far more fresh, often less processed — so the planning numbers we use are biased toward heavier fresh consumption and toward putting up your own sauce rather than buying it.</p>
+    <p>Our base assumption for a homestead garden: <strong>25 pounds of tomato per person per year</strong>, fresh-equivalent, before processing losses. For a family of four, that is 100 pounds total at the full-year goal. A family that loves tomatoes eats 35–40 pounds per person. A family that eats them mostly in summer salads is closer to 12–15 pounds per person.</p>
+
+    <h2>Yield per plant — what cooperative extensions actually report</h2>
+    <p>Tomato yield varies wildly by variety, climate, soil, water, pruning, and pest pressure. The numbers below are the conservative-end planning yields we use across the Homestead Plan database, all cross-referenced against Cornell Cooperative Extension, University of Minnesota Extension, and Penn State Extension publications.</p>
+
+    <table>
+      <thead><tr><th>Type</th><th>Conservative yield</th><th>Good year</th><th>Spacing</th></tr></thead>
+      <tbody>
+        <tr><td>Indeterminate slicing (Brandywine, Cherokee Purple)</td><td>8 lb / plant</td><td>12–15 lb</td><td>4 sq ft</td></tr>
+        <tr><td>Determinate slicing (Roma VF, Celebrity)</td><td>5 lb / plant</td><td>8 lb</td><td>3 sq ft</td></tr>
+        <tr><td>Cherry (Sungold, Sweet 100)</td><td>10 lb / plant</td><td>15–20 lb</td><td>4 sq ft</td></tr>
+        <tr><td>Paste / sauce (San Marzano, Amish Paste)</td><td>6 lb / plant</td><td>10 lb</td><td>3 sq ft</td></tr>
+      </tbody>
+    </table>
+
+    <p>Plan with the conservative number. If the season is generous, you have a surplus to gift, dehydrate, or freeze whole for soup base. If the season is rough — a hot dry July, an early blight outbreak — you still hit close to your target.</p>
+
+    <h2>Scenario 1: Fresh eating only</h2>
+    <p>You want sliced tomato on sandwiches all summer, a tomato in the salad most nights, a tray of bruschetta when friends are over. You are not canning. You will not freeze sauce. Any surplus goes to neighbours.</p>
+    <p>Target: 50 lb of tomatoes across 12–14 productive weeks (about July through mid-September in zone 6, longer in warmer zones).</p>
+    <ul>
+      <li>4 indeterminate slicing plants × 8 lb = 32 lb. Pick three or four varieties with different colours and maturity dates — a Black Krim, a Cherokee Purple, a yellow heirloom, a classic red.</li>
+      <li>2 cherry plants × 10 lb = 20 lb. Cherry tomatoes are the snacking, salad, and pasta-on-a-weeknight crop. They produce until frost.</li>
+    </ul>
+    <p>Total: <strong>6 plants, 24 square feet of bed</strong>, 52 lb of expected yield. Comfortably above target.</p>
+
+    <h2>Scenario 2: Fresh plus light preserving</h2>
+    <p>You want all the fresh eating from scenario 1, plus 20–30 quarts of sauce or salsa in the freezer for winter. Maybe a few jars of canned diced tomatoes if the canner comes out.</p>
+    <p>Sauce reduction is the math that surprises people. A finished quart of thick tomato sauce takes about <strong>5 pounds of fresh paste tomatoes</strong> (or 6–7 pounds of slicing tomatoes, which have more water). 25 quarts of sauce = 125 lb of paste tomatoes. That is most of your garden.</p>
+    <p>The trick is dedicating paste varieties — San Marzano, Amish Paste, Roma VF — to the sauce job. They have lower water content, thicker walls, and reduce faster.</p>
+    <ul>
+      <li>8 slicing plants × 8 lb = 64 lb fresh (everyday eating, gifts, salads).</li>
+      <li>2 cherry plants × 10 lb = 20 lb (snacks, pasta, gifts).</li>
+      <li>4 paste plants × 6 lb = 24 lb (about 5 quarts of sauce in the freezer).</li>
+    </ul>
+    <p>To get to 25 quarts of sauce, double the paste plants: <strong>8 paste plants × 6 lb = 48 lb → roughly 10 quarts.</strong> Sauce yield is the bottleneck, not slicing yield.</p>
+    <p>Realistic combination for "scenario 2 with a real sauce supply": <strong>18 plants, ~72 sq ft</strong> — 8 slicing, 2 cherry, 8 paste.</p>
+
+    <h2>Scenario 3: Full-year self-sufficiency</h2>
+    <p>This is the homestead scenario. You want 60–100 quarts of finished sauce, plus canned whole tomatoes, plus dried tomato halves, plus all the fresh you can eat. You are putting tomatoes into the pantry like grocery insurance.</p>
+    <p>100 quarts of sauce × 5 lb / quart = <strong>500 lb of paste tomatoes</strong>. At 6 lb per plant conservative yield, that is 84 paste plants. Most families settle for 60–80 quarts and 50–60 paste plants. Add slicing and cherry on top.</p>
+    <ul>
+      <li>10 slicing plants × 8 lb = 80 lb fresh (heavy fresh eating, gifts, food swap with neighbours).</li>
+      <li>2 cherry plants × 10 lb = 20 lb (snacks, dehydrated, salad).</li>
+      <li>24 paste plants × 6 lb = 144 lb → roughly 28 quarts of sauce. Plus 30 lb of whole-pack canned, plus 10 lb dehydrated.</li>
+    </ul>
+    <p>For a realistic full year: <strong>36 plants minimum, 144+ sq ft</strong>. To hit 60 quarts of sauce, scale paste varieties to 36–48 plants. Many homesteaders find it easier to plant the full sauce target every other year, rotate the bed to a heavy feeder in between, and rely on canned reserves in the off year.</p>
+
+    <h2>What we get wrong (and how to plan around it)</h2>
+    <h3>Variety mix matters more than total count</h3>
+    <p>40 indeterminate slicers will not give you sauce — they will give you 320 lb of beautiful tomatoes that take twice as long to cook down because their water content is 95%. Match variety to job: paste varieties for sauce, slicing for fresh, cherry for snacks and dehydration.</p>
+
+    <h3>Determinate vs indeterminate</h3>
+    <p>Determinate tomatoes (Roma VF, Celebrity, Bush Early Girl) set fruit over a 2–3 week window and then stop. Excellent for canning days. Indeterminate tomatoes (most heirlooms, San Marzano) keep flowering and fruiting until frost. Excellent for trickle harvest into the kitchen. A mixed planting evens out the workload.</p>
+
+    <h3>Succession planting buys time</h3>
+    <p>If you have the space and the growing season, start a second batch of 4–6 paste tomatoes from seed 4 weeks after the first transplant date. They will catch the end of the season and add 25 lb of late-summer paste to the canning queue.</p>
+
+    <h3>Failures happen</h3>
+    <p>Early blight, late blight, hornworms, drought stress, a wet July. Plan with 10–15% buffer on plant counts if your region is prone to one of these. A 60-plant sauce target becomes a 70-plant plan.</p>
+
+    <div class="cta-box">
+      <h3>Plug in your real numbers</h3>
+      <p>The Self-Sufficiency calculator takes your family size, how often you actually eat tomatoes, and your preserving goal — then returns the plant count, square footage, and expected yield. Free to use.</p>
+      <a href="/#self-sufficiency">Open the calculator →</a>
+    </div>
+
+    <h2>Quick-reference plant counts for a family of 4</h2>
+    <table>
+      <thead><tr><th>Goal</th><th>Slicing</th><th>Cherry</th><th>Paste</th><th>Total</th><th>Bed area</th></tr></thead>
+      <tbody>
+        <tr><td>Fresh only</td><td>4</td><td>2</td><td>0</td><td><strong>6</strong></td><td>24 sq ft</td></tr>
+        <tr><td>Fresh + 10 qt sauce</td><td>8</td><td>2</td><td>4</td><td><strong>14</strong></td><td>56 sq ft</td></tr>
+        <tr><td>Fresh + 25 qt sauce</td><td>8</td><td>2</td><td>10</td><td><strong>20</strong></td><td>80 sq ft</td></tr>
+        <tr><td>Full self-sufficiency</td><td>10</td><td>2</td><td>24</td><td><strong>36</strong></td><td>144 sq ft</td></tr>
+      </tbody>
+    </table>
+
+    <p>The Homestead Plan keeps these calculations honest by sourcing the underlying yield numbers from cooperative-extension data, then letting you adjust frequency and goal to match how your family actually eats. The 25 lb-per-person base is a default, not a verdict.</p>
+
+    <p class="source-note">Sources: USDA Economic Research Service (Tomatoes: per-capita availability, 2024 update), Cornell Cooperative Extension (Vegetable Crops fact sheets), University of Minnesota Extension (Growing tomatoes in home gardens), Penn State Extension (Tomato production), University of Maryland Extension (HG 56 Tomato).</p>
+
+    <div class="related">
+      <h3>Related guides</h3>
+      <ul>
+        <li><a href="/blog/companion-planting-for-tomatoes.html">Companion planting for tomatoes: 12 good neighbours and 5 to avoid</a></li>
+        <li><a href="/blog/feed-family-from-backyard-garden.html">Can you actually feed a family from a backyard garden?</a></li>
+        <li><a href="/blog/how-much-soil-for-4x8-raised-bed.html">How much soil for a 4×8 raised bed?</a></li>
+      </ul>
+    </div>
+
+    <a class="back" href="/blog/">← Back to the Blog</a>
+  </main>
+
+  <footer>
+    © 2026 Urban Root · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a>
+  </footer>
+</body>
+</html>
