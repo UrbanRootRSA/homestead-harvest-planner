@@ -3956,10 +3956,6 @@ function GrowingPlanTab({
   const cropIds = baseResults.perCrop.map((r) => r.cropId);
   const cropNames = baseResults.perCrop.map((r) => r.crop.name);
 
-  // Manual frost mode missing dates? Block generation (#5).
-  const manualMissing = plantingState.mode === "manual"
-    && (!plantingState.manualFrost?.lastSpring || !plantingState.manualFrost?.firstFall);
-
   const updateInput = (key, value) => {
     setPlanState((prev) => ({
       ...prev,
@@ -3986,10 +3982,19 @@ function GrowingPlanTab({
                        plantingState.manualFrost, plantingState.referenceYear),
     [plantingState, hemisphere]
   );
-  const lastSpringFrostStr = frostDates.lastSpring
+  // Manual frost mode with missing OR invalid dates? Block generation (#5)
+  // and fall back to the prompt UI. H1 closure 2026-06-10: getFrostDates
+  // returns null in that state (persisted to hhp_planting, so it survives
+  // reload), and the unguarded `frostDates.lastSpring` deref below crashed
+  // the whole app into the ErrorBoundary in a reload-proof loop. Derive the
+  // flag from !frostDates rather than string presence so an invalid date
+  // like 2026-02-30 (passes presence, fails parseIsoDate) is also caught,
+  // and optional-chain every deref.
+  const manualMissing = plantingState.mode === "manual" && !frostDates;
+  const lastSpringFrostStr = frostDates?.lastSpring
     ? formatDate(frostDates.lastSpring, plantingState.referenceYear)
     : "";
-  const firstFallFrostStr = frostDates.firstFall
+  const firstFallFrostStr = frostDates?.firstFall
     ? formatDate(frostDates.firstFall, plantingState.referenceYear)
     : "";
   const zoneStr = plantingState.mode === "zone"
@@ -4057,7 +4062,7 @@ function GrowingPlanTab({
       return;
     }
     if (manualMissing) {
-      setError("Manual frost mode is selected but the dates are blank. Open Planting Dates and set both.");
+      setError("Manual frost mode is selected but the dates are blank or invalid. Open Planting Dates and set both.");
       return;
     }
     // Clear any prior server error BEFORE the confirm dialog - a user who
@@ -4314,7 +4319,7 @@ function GrowingPlanTab({
           <p style={{
             marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center",
           }}>
-            Manual frost mode is selected but the dates are blank. Open{" "}
+            Manual frost mode is selected but the dates are blank or invalid. Open{" "}
             <a href="#planting-dates"
               onClick={(e) => { if (typeof setTab === "function") { e.preventDefault(); setTab("planting-dates"); } }}
               style={{ color: T.primary, fontWeight: 700, textDecoration: "underline" }}>
