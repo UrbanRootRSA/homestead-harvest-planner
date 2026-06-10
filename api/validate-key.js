@@ -184,6 +184,18 @@ export default async function handler(req, res) {
       if (preCheck.status >= 500) {
         return res.status(502).json({ valid: false, error: "Licence server unreachable. Try again." });
       }
+      // R2-H1 (code-review 2026-06-10 round 2): a non-200 LS response without
+      // a recognisable business-error body (LS-edge 429/403 WAF challenge
+      // with an HTML body, JSON:API errors[] shape) is an upstream anomaly,
+      // not a licence verdict. Without this guard an empty json fell through
+      // to the store compare below and returned a definitive "different
+      // product" 200 - which the client trusts and wipes the stored licence
+      // (the C1 harm class). 502 → client flags transient → key kept.
+      // Non-200s WITH .error (e.g. LS 404 "license_key not found") still
+      // flow to the definitive bail below, exactly as before.
+      if (preCheck.status !== 200 && !(preCheck.json && preCheck.json.error)) {
+        return res.status(502).json({ valid: false, error: "Licence server unreachable. Try again." });
+      }
       // Bail early on a confirmed-bad key (e.g. "license_key not found") so
       // the fail-closed store compare below can't mislabel it as a
       // wrong-product key, and an invalid key costs 1 LS round-trip not 2.
@@ -199,6 +211,17 @@ export default async function handler(req, res) {
       // rejects - a noisy reject on LS API drift beats a silent store-gate
       // bypass.
       const expectedStoreIdPre = process.env.LEMONSQUEEZY_STORE_ID;
+      // Hybrid fail-closed mirror of the post-/activate check (security
+      // audit 2026-06-10 I1): in production, a missing LEMONSQUEEZY_STORE_ID
+      // must refuse HERE, before LS_ACTIVATE can burn a slot on a
+      // wrong-store key. Preview/dev keeps warn-and-skip for local testing.
+      if (!expectedStoreIdPre) {
+        if (process.env.VERCEL_ENV === "production") {
+          console.error("[CRITICAL] LEMONSQUEEZY_STORE_ID missing in production — refusing to validate");
+          return res.status(500).json({ valid: false, error: "Server misconfigured. Please contact support." });
+        }
+        console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
+      }
       const preMeta = (preCheck.json && preCheck.json.meta) || {};
       if (expectedStoreIdPre && String(preMeta.store_id) !== String(expectedStoreIdPre)) {
         return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
@@ -219,6 +242,20 @@ export default async function handler(req, res) {
     const lk = js.license_key || {};
     const inst = js.instance || null;
     const meta = js.meta || {};
+
+    // R2-H1 (code-review 2026-06-10 round 2): a non-200 LS response without
+    // a recognisable business-error body is an upstream anomaly (LS-edge
+    // 429/403 WAF HTML body → json {}, JSON:API errors[] shape), not a
+    // licence verdict. Previously it fell through `isActive` into a
+    // fabricated definitive 200 valid:false, which the client trusts and
+    // wipes the stored licence - fleet-wide if LS rate-limits a shared
+    // Vercel egress IP during mount revalidations. 502 → client flags
+    // transient → key kept. Genuine LS rejections are untouched: 200 bodies
+    // (incl. the inactive-key valid:false shape) and non-200s WITH .error
+    // (e.g. 404 "license_key not found") stay definitive exactly as before.
+    if (ls.status !== 200 && !js.error) {
+      return res.status(502).json({ valid: false, error: "Licence server unreachable. Try again." });
+    }
 
     // LS returns error strings inline when invalid.
     if (js.error) {

@@ -603,8 +603,25 @@ async function validateKeyRemote(key, instanceId, opts) {
       // Malformed / empty body - even on a 200, no verdict was delivered.
       return { valid: false, transient: true, error: "Unexpected response from licence server." };
     }
+    if (resp.status === 400) {
+      // R2-L2 (code-review 2026-06-10 round 2): 400 is OUR server's
+      // payload-shape reject (key length < 8 or > 128) - a definitive
+      // verdict on the key string, not an operational failure. Labelling it
+      // transient left a hand-corrupted stored key showing "couldn't reach
+      // the licence server" forever and never wiped it. The shape check
+      // above guarantees this body is our own {valid:false, error} (platform
+      // 400s lack a boolean `valid` and stay transient), and after R2-H1 the
+      // server never emits 400 as a pass-through of ambiguous LS states -
+      // only for its own payload validation.
+      return {
+        valid: false,
+        error: typeof data.error === "string" && data.error
+          ? data.error
+          : "Invalid licence key format.",
+      };
+    }
     if (resp.status !== 200) {
-      // 429 / 5xx / 403 / 400: operational failure, not a licence verdict.
+      // 429 / 5xx / 403: operational failure, not a licence verdict.
       // Pass the server's user-facing message through but flag transient so
       // no caller treats it as a revocation.
       return {
