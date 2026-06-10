@@ -65,6 +65,7 @@ const T = {
 // ── localStorage keys ──
 // ═══════════════════════════════════════════════════════════════════════════
 const LS_FAMILY = "hhp_family";
+const LS_GOAL = "hhp_goal";
 const LS_CROPS = "hhp_crops";
 const LS_METRIC = "hhp_metric";
 const LS_CURRENCY = "hhp_currency";
@@ -6783,7 +6784,16 @@ export default function App() {
   // Calculator state
   const [familySize, setFamilySize] = useState(() =>
     clampInt(loadState(LS_FAMILY, 4), 1, 12));
-  const [goal, setGoal] = useState("fresh_preserving");
+  // M4 closure 2026-06-10: goal was the only calculator input that didn't
+  // persist - a reload silently reset the 0.5x/0.75x/1.0x demand multiplier
+  // to "Fresh + some preserving", shrinking every plant count, the hero KPI,
+  // and the derived Cost Savings / Preservation / gardenSqFt numbers with no
+  // visible input change. Allowlist clamp against GOAL_MULTIPLIER keys, same
+  // pattern as hemisphere.
+  const [goal, setGoal] = useState(() => {
+    const g = loadState(LS_GOAL, "fresh_preserving");
+    return GOAL_MULTIPLIER[g] ? g : "fresh_preserving";
+  });
   const [selection, setSelection] = useState(() => {
     const saved = loadState(LS_CROPS, null);
     if (saved && typeof saved === "object") {
@@ -7029,6 +7039,7 @@ export default function App() {
   useEffect(() => { persistState(LS_METRIC, metric); }, [metric]);
   useEffect(() => { persistState(LS_CURRENCY, currency); }, [currency]);
   useEffect(() => { persistState(LS_FAMILY, familySize); }, [familySize]);
+  useEffect(() => { persistState(LS_GOAL, goal); }, [goal]);
   useEffect(() => { persistState(LS_CROPS, selection); }, [selection]);
   useEffect(() => { persistState(LS_BEDS, beds); }, [beds]);
   useEffect(() => { persistState(LS_SOIL, soilState); }, [soilState]);
