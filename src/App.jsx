@@ -3916,6 +3916,31 @@ function GrowingPlanTab({
     setGraceError("");
     setGraceSaving(true);
     try {
+      // R2-L3 (code-review 2026-06-10 round 2): licenceKeyMissing is
+      // computed at mount only. If the licence email's ?key= link was opened
+      // in ANOTHER tab (which activated + stored the key), pasting the key
+      // here would fire a fresh bare-key activate and burn a second LS
+      // device slot for one physical device. Re-read localStorage first: if
+      // a key is already stored, validate it with its stored instance
+      // (non-mutating on the server) instead of activating fresh.
+      const storedKey = loadState(LS_KEY, "");
+      if (storedKey) {
+        const storedInstance = loadState(LS_INSTANCE, "");
+        const r = await validateKeyRemote(storedKey, storedInstance);
+        if (r?.valid) {
+          if (r.instance_id) persistState(LS_INSTANCE, r.instance_id);
+          clearLS(LS_PENDING); // key verified - grace window no longer needed
+          setLicenceKeyMissing(false);
+          setGraceKey("");
+          return;
+        }
+        if (r?.transient) {
+          setGraceError(r?.error || "We couldn't reach the licence server. Try again.");
+          return;
+        }
+        // Stored key definitively rejected - fall through to a fresh
+        // activation of the key the user just pasted.
+      }
       const result = typeof onActivateKey === "function"
         ? await onActivateKey(graceKey)
         : { ok: false, error: "Key entry is unavailable right now. Use the link in your purchase email instead." };
@@ -6370,12 +6395,16 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
             {/* L7 closure 2026-06-10: mobile padding (not font-size) lifts the
                 tap height from ~28px to >=44px (Apple HIG, same rule as every
                 other interactive element in the app). Desktop keeps the
-                compact 6px padding so the masthead row height is unchanged. */}
+                compact 6px padding so the masthead row height is unchanged.
+                R2-I1: minHeight 44 pins the target deterministically -
+                padding + 13px font lands at 43.6-44.4px depending on the
+                engine's computed line-height. */}
             <a href="/about.html" style={{
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
               fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
               display: "inline-flex", alignItems: "center",
+              minHeight: isMobile ? 44 : undefined,
               borderBottom: "1px solid transparent",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
@@ -6387,6 +6416,7 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
               fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
               display: "inline-flex", alignItems: "center",
+              minHeight: isMobile ? 44 : undefined,
               borderBottom: "1px solid transparent",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
