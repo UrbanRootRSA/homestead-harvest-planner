@@ -268,7 +268,11 @@ async function validateLicence(key, instanceId) {
       }
       console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
     }
-    if (expectedStoreId && meta.store_id != null && String(meta.store_id) !== String(expectedStoreId)) {
+    // Fail CLOSED (code-review 2026-06-10 M1): `meta.store_id != null` guard
+    // removed — a response missing store_id now rejects instead of silently
+    // skipping the store gate. The env-var side keeps the warn-and-skip
+    // hybrid in preview/dev above.
+    if (expectedStoreId && String(meta.store_id) !== String(expectedStoreId)) {
       return { ok: false, reason: "store_mismatch" };
     }
 

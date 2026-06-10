@@ -169,6 +169,40 @@ export default async function handler(req, res) {
     if (instanceId) {
       ls = await callLs(LS_VALIDATE, { license_key: key, instance_id: instanceId });
     } else {
+      // Pre-/activate store gate (code-review 2026-06-10 H2; FaminePrep /
+      // Grow Room / Vertica / Aero cross-product pattern): LS_ACTIVATE
+      // succeeds for a valid key from ANY LemonSqueezy store and burns one
+      // of that key's activation slots before the post-activation store
+      // check below can reject it. A multi-product customer pasting e.g.
+      // their Aero-Calc key here would burn a slot on their legitimate
+      // other-product licence. Do a non-mutating LS_VALIDATE first, read
+      // meta.store_id, and reject wrong-store keys BEFORE activating. Costs
+      // one extra LS round-trip per fresh activation. The post-/activate
+      // check below stays as defence-in-depth and covers the instanceId
+      // branch, which doesn't pass through this pre-check.
+      const preCheck = await callLs(LS_VALIDATE, { license_key: key });
+      if (preCheck.status >= 500) {
+        return res.status(502).json({ valid: false, error: "Licence server unreachable. Try again." });
+      }
+      // Bail early on a confirmed-bad key (e.g. "license_key not found") so
+      // the fail-closed store compare below can't mislabel it as a
+      // wrong-product key, and an invalid key costs 1 LS round-trip not 2.
+      if (preCheck.json && preCheck.json.error) {
+        return res.status(200).json({
+          valid: false,
+          error: normaliseLsError(String(preCheck.json.error)),
+          retry_activation: false,
+        });
+      }
+      // Fail CLOSED (code-review 2026-06-10 M1): no `!= null` escape hatch.
+      // If LS ever drops meta.store_id, String(undefined) !== expected
+      // rejects - a noisy reject on LS API drift beats a silent store-gate
+      // bypass.
+      const expectedStoreIdPre = process.env.LEMONSQUEEZY_STORE_ID;
+      const preMeta = (preCheck.json && preCheck.json.meta) || {};
+      if (expectedStoreIdPre && String(preMeta.store_id) !== String(expectedStoreIdPre)) {
+        return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
+      }
       const name = (instanceName && instanceName.length <= 64)
         ? instanceName
         : `browser-${Math.random().toString(36).slice(2, 10)}`;
@@ -229,7 +263,11 @@ export default async function handler(req, res) {
       }
       console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
     }
-    if (expectedStoreId && meta.store_id != null && String(meta.store_id) !== String(expectedStoreId)) {
+    // Fail CLOSED (code-review 2026-06-10 M1): `meta.store_id != null` guard
+    // removed — a response missing store_id now rejects instead of silently
+    // skipping the store gate. The env-var side keeps the warn-and-skip
+    // hybrid in preview/dev above.
+    if (expectedStoreId && String(meta.store_id) !== String(expectedStoreId)) {
       return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
     }
 
