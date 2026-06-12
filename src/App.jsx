@@ -95,6 +95,29 @@ const GRACE_WINDOW_MS = 48 * 60 * 60 * 1000;
 const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/6aecd238-c4b2-41a1-9a05-255dc8bfc822";
 const PRICE_USD = "39.99";
 
+// GATE-1 (2026-06-12, ported from Vertica 0e542d2 / Grow Room's zero-class
+// handleUnlock): lemon.js attaches its click listeners DIRECTLY to
+// `.lemonsqueezy-button` elements in a one-time scan when the window 'load'
+// event fires (its d() walker; no document-level delegation, and nothing ever
+// calls Refresh()). The paywall overlay's Buy anchor mounts after that scan
+// and the pricing-tile anchor is re-rendered past it, so neither ever had a
+// listener: clicks fell through to the href, a full-page hosted checkout
+// where the in-app Checkout.Success handler (the hhp_pending 48-h grace
+// write) can never fire. Open the overlay programmatically instead, and keep
+// the `lemonsqueezy-button` class OFF both anchors so a future lemon.js scan
+// can never double-attach. Deliberately do NOT string-append "?embed=1":
+// lemon.js's Url.Open already sets embed=1 safely via the URL API (its
+// l(e, true) path), and naive concat would break if CHECKOUT_URL ever carried
+// its own query string. When lemon.js is blocked or not yet loaded we skip
+// preventDefault so the anchor's intact href navigates to the hosted checkout
+// as the graceful fallback.
+function openCheckoutOverlay(e) {
+  if (typeof window !== "undefined" && window.LemonSqueezy) {
+    e.preventDefault();
+    window.LemonSqueezy.Url.Open(CHECKOUT_URL);
+  }
+}
+
 // Closed allowlist of currency symbols the UI knows how to render. Hoisted here
 // (round-1 M3 closure 2026-05-18) so the localStorage clamp at currency-state
 // init can structurally allowlist the value rather than accept any ≤3-char
@@ -3347,7 +3370,7 @@ function PricingSection() {
             ))}
           </ul>
 
-          <a href={CHECKOUT_URL} className="lemonsqueezy-button"
+          <a href={CHECKOUT_URL} onClick={openCheckoutOverlay}
             style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               marginTop: 28, padding: "16px 24px", minHeight: 56,
@@ -3613,7 +3636,7 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
 
         <a
           href={CHECKOUT_URL}
-          className="lemonsqueezy-button"
+          onClick={openCheckoutOverlay}
           style={{
             display: "inline-block",
             padding: "14px 28px", borderRadius: T.radiusPill,

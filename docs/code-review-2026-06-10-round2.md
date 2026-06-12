@@ -141,3 +141,21 @@ One genuinely new HIGH was found while tracing the C1 trust boundary one level d
 2. **R2-L1** — one-word COOP alignment with siblings, or a popup-leg Live-Buy test. ✔ DONE `21f6f24`
 3. **R2-L2 / R2-L3 / R2-I1** — batch into the next hygiene PR; none is customer-visible today. ✔ DONE `344b808` / `1a3e241`
 4. **R2-I2** — observe/perform one real fresh activation; closes the only unverified assumption in H2. — OPEN
+
+---
+
+## GATE-1 port — 2026-06-12
+
+**Finding (cross-product, root cause verified on Vertica `0e542d2` by the post-deploy Buy-overlay gate):** lemon.js attaches its overlay click listeners DIRECTLY to `.lemonsqueezy-button` elements in a one-time scan at the window `load` event (its `d()` walker; no document-level delegation, and nothing in the app calls `Refresh()`). Homestead had exactly two class uses — the pricing-tile "Get full access" anchor (App.jsx:3350) and the paywall-overlay Buy CTA (App.jsx:3616). The paywall anchor mounts after the scan (overlay opens on locked-tab click) and the pricing anchor is re-rendered past it, so neither ever had a listener: clicks followed the href to the full-page hosted checkout. Purchases complete there, but the in-app `Checkout.Success` eventHandler (the `hhp_pending` 48-h grace write at App.jsx ~7338) can never fire, so buyers returned to a still-locked app until the licence-key email arrived. Pre-existing since launch.
+
+**Fix (commit on `fix/gate1-buy-overlay`, faithful port of Vertica `0e542d2`):**
+- Module-scope `openCheckoutOverlay(e)` next to `CHECKOUT_URL`: when `window.LemonSqueezy` exists, `preventDefault()` + `window.LemonSqueezy.Url.Open(CHECKOUT_URL)`; when absent (lemon.js blocked / not yet loaded), no `preventDefault` so the intact `href` navigates to the hosted checkout as the graceful fallback. No `"?embed=1"` string-concat — `Url.Open` sets `embed=1` via the URL API, and concat would break a query-carrying URL.
+- Both anchors wired via `onClick={openCheckoutOverlay}`; the `lemonsqueezy-button` class removed from both so a future lemon.js scan can never double-attach.
+
+**CSS override disposition:** NONE existed. Grep confirms zero product CSS rules target `.lemonsqueezy-button` anywhere in the repo (unlike Vertica's PaywallModal override block). The global element-selector `a:focus-visible` rule (App.jsx ~7633) keeps the focus ring on both anchors; the inline styles fully define their appearance. Nothing removed, nothing retargeted.
+
+**Setup-wiring second check (Vertica `aeb42a0` trySetup / Grow :2795 class of bug): ALREADY ROBUST — untouched.** Homestead's SDK effect (App.jsx ~7324-7370) already implements the full retry pattern: guards on `typeof window.createLemonSqueezy === "function"`, calls `createLemonSqueezy()` before `Setup({ eventHandler })`, polls every 250 ms when the defer-loaded SDK isn't ready yet, and gives up after 8 s (CSP-blocked / offline — CTA then works as a plain link, which is exactly the helper's fallback leg). `Checkout.Success` writes `hhp_pending`, flips `paid`, and closes the overlay. With GATE-1 fixed, that handler is now reachable in-app.
+
+**Build:** 393.69 kB raw / 111.32 kB gz, 33 modules (was 393.61 / 111.28 at main tip `3e84661`) — +0.08 kB raw / +0.04 kB gz, the helper plus the onClick wiring.
+
+**Verification still owed (manual, post-deploy):** the mandatory Live-Buy overlay gate from CLAUDE.md §21 — click both Buy CTAs on the deployed site, confirm the overlay opens in ~1.5 s with $39.99 and zero console/CSP errors, and close without purchase.
