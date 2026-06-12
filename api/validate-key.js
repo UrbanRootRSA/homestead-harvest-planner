@@ -206,6 +206,21 @@ export default async function handler(req, res) {
           retry_activation: false,
         });
       }
+      // SEC-4 (2026-06-12, Grow 3264c1a / Vertica 6d30289 port): R2-H1
+      // residual one layer deeper - an LS HTTP **200** whose body carries
+      // neither a business error (handled above) nor any recognisable verdict
+      // shape (boolean `valid` / a `license_key` object) is an upstream
+      // contract break (maintenance/WAF JSON behind a 200, non-JSON body →
+      // {} via the .catch, shape drift), NOT a licence verdict. Previously it
+      // fell through to the store compare below (String(undefined) !==
+      // expected) → fabricated definitive 200 "different product" - which
+      // the C1-hardened client trusts and wipes hhp_key/hhp_instance.
+      // 502 → validateKeyRemote flags transient → key kept. Genuine 200
+      // verdicts (any body with license_key or boolean valid, incl.
+      // valid:false and store_id mismatches) keep exact current behaviour.
+      if (!preCheck.json || (typeof preCheck.json.valid !== "boolean" && !preCheck.json.license_key)) {
+        return res.status(502).json({ valid: false, error: "Licence server returned an unexpected response. Try again." });
+      }
       // Fail CLOSED (code-review 2026-06-10 M1): no `!= null` escape hatch.
       // If LS ever drops meta.store_id, String(undefined) !== expected
       // rejects - a noisy reject on LS API drift beats a silent store-gate
@@ -278,6 +293,20 @@ export default async function handler(req, res) {
       });
     }
 
+    // SEC-4 (2026-06-12, Grow 3264c1a / Vertica 6d30289 port): same
+    // verdict-shape gate as the pre-check site. A 200 body with no error
+    // (handled above), no boolean `valid`, and no `license_key` object
+    // (json {} from an unparseable 200 body, or LS shape drift) previously
+    // fell through to `isActive` false → fabricated definitive 200 "not
+    // active" → client mount-wipe of hhp_key/hhp_instance, then a re-paste
+    // burns one of the customer's 3 LS activation slots. 502 → transient.
+    // Genuine LS rejections are untouched: inactive/expired/disabled bodies
+    // all carry license_key.status, and /activate successes carry
+    // license_key + instance (no boolean `valid` - the !js.license_key
+    // disjunct covers that leg).
+    if (typeof js.valid !== "boolean" && !js.license_key) {
+      return res.status(502).json({ valid: false, error: "Licence server returned an unexpected response. Try again." });
+    }
     const status = lk.status || (js.valid ? "active" : null);
     const isActive = status === "active" || js.valid === true;
     if (!isActive) {
