@@ -245,12 +245,36 @@ async function validateLicence(key, instanceId) {
   try {
     const ls = await callLs(LS_VALIDATE, { license_key: key, instance_id: instanceIdForLs });
     if (ls.status >= 500) {
-      // LS unreachable - fail closed for paid endpoints.
+      // LS unreachable - fail closed for paid endpoints, but flag transient:
+      // the handler maps it to a retryable 503, not the definitive 401 whose
+      // copy tells a paying customer to re-enter a key that is fine.
       console.error("[generate] LS unreachable during validation:", ls.status);
-      return { ok: false, reason: "ls_unreachable" };
+      return { ok: false, reason: "ls_unreachable", transient: true };
     }
     const js = ls.json || {};
+    // Verdict-consistency port (2026-06-12) of the validate-key.js R2-H1 +
+    // SEC-4 gates, same ambiguous-upstream classes one endpoint over:
+    //  - non-200 without a business error (LS-edge 429/403 WAF HTML → json
+    //    {}, JSON:API errors[] shape) is an upstream anomaly, not a verdict.
+    //    Non-200 WITH .error (LS 404 key-not-found) stays definitive below.
+    //  - HTTP 200 whose body has no error, no boolean `valid`, and no
+    //    `license_key` object (maintenance JSON behind a 200, shape drift)
+    //    previously fell through `isActive` into a definitive-looking
+    //    "licence_inactive" → 401.
+    // Both now return transient → handler 503 ("try again"), still
+    // fail-closed: no generation happens on an ambiguous licence state.
+    // Neither path reaches the cache write below, so ambiguous results can
+    // never poison the 1h hhp:lk:ok cache - only definitive-valid results
+    // are ever cached (negative verdicts were never cached either).
+    if (ls.status !== 200 && !js.error) {
+      console.error("[generate] LS ambiguous non-200 during validation:", ls.status);
+      return { ok: false, reason: "ls_ambiguous_status", transient: true };
+    }
     if (js.error) return { ok: false, reason: "ls_api_error" };
+    if (typeof js.valid !== "boolean" && !js.license_key) {
+      console.error("[generate] LS 200 with non-verdict body during validation");
+      return { ok: false, reason: "ls_no_verdict", transient: true };
+    }
     const lk = js.license_key || {};
     const status = lk.status || (js.valid ? "active" : null);
     const isActive = status === "active" || js.valid === true;
@@ -681,6 +705,18 @@ export default async function handler(req, res) {
   const licenceResult = await validateLicence(licenseKey, instanceId);
   if (!licenceResult.ok) {
     console.warn("[generate] licence validation failed:", licenceResult.reason);
+    // Verdict-consistency (2026-06-12): ambiguous LS upstream states (5xx /
+    // timeout, non-200 without business error, 200 with non-verdict body)
+    // are operational failures, not licence verdicts. The 401 copy told a
+    // paying customer to re-enter a perfectly good key during an LS blip.
+    // 503 keeps the endpoint fail-closed (no generation) but reads as the
+    // retryable condition it is. 503 (not 502) so Vercel logs distinguish
+    // licence-leg failures from the Anthropic-leg 502s further down. The
+    // status split leaks no per-key gate info: transient fires for ALL keys
+    // during an LS incident, and `reason` still never reaches the body.
+    if (licenceResult.transient) {
+      return res.status(503).json({ ok: false, error: "The licence server is temporarily unavailable. Please try again in a moment." });
+    }
     return res.status(401).json({ ok: false, error: "Your licence couldn't be verified. Please re-enter your key on the home page." });
   }
 
