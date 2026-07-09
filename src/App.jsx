@@ -6855,7 +6855,7 @@ function AppFooter() {
           alignItems: "center", justifyContent: "space-between",
           fontSize: 12, color: T.tx3,
         }}>
-          <div>© {year} Urban Root. Pay once, use forever.</div>
+          <div>© {year} <a href="https://urban-root.com" target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "underline", textUnderlineOffset: 2 }}>Urban Root</a>. Pay once, use forever.</div>
         </div>
       </div>
     </footer>
