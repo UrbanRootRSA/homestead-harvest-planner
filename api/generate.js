@@ -68,7 +68,16 @@ let redis = null;
 try {
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
-  if (url && token) redis = new Redis({ url, token });
+  if (url && token) {
+    redis = new Redis({ url, token });
+  } else {
+    // Aero-Calc security audit 2026-07-10 L1: missing env vars used to boot
+    // silently with rate limiting, the 1h licence cache, AND canonical-
+    // instance binding all OFF (redis stays null, zero log output) — an
+    // unthrottled path to Anthropic spend. Log loudly here; the handler
+    // fails closed in production below.
+    console.error("[generate] Upstash env vars missing — rate limiting, licence cache, and instance binding DISABLED");
+  }
 } catch (e) {
   console.warn("[generate] Upstash init failed:", e?.message);
 }
@@ -106,6 +115,8 @@ function hashKey(key) {
 }
 
 async function rateLimitOK(suffix, max, windowSec) {
+  // !redis is dev/preview-only: the 2026-07-10 L1 handler gate fails closed
+  // (503) in production before any limiter runs.
   if (!redis) return true;
   try {
     const key = `hhp:rl:generate:${suffix}`;
@@ -669,6 +680,22 @@ export default async function handler(req, res) {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error("[generate] ANTHROPIC_API_KEY missing");
     return res.status(500).json({ ok: false, error: "Plan generator is not configured. Try again shortly." });
+  }
+
+  // Aero-Calc security audit 2026-07-10 L1: if the Upstash client never
+  // initialised (env vars missing at boot), rate limiting, the licence
+  // cache, AND canonical-instance binding are all OFF — no generation may
+  // proceed on that footing. Production fails CLOSED here, BEFORE the
+  // licence gate and the Anthropic call; dev/preview warns and continues so
+  // local dev without Upstash still works. Transient Redis call failures on
+  // a constructed client keep their deliberate fail-open in rateLimitOK and
+  // the instance-binding try/catches.
+  if (!redis) {
+    if (process.env.VERCEL_ENV === "production") {
+      console.error("[CRITICAL] Upstash not configured — refusing to generate in production");
+      return res.status(503).json({ ok: false, error: "The plan generator is temporarily unavailable. Please try again shortly." });
+    }
+    console.warn("[WARN] Upstash not configured — rate limiting, licence cache, and instance binding disabled in non-production");
   }
 
   let body;

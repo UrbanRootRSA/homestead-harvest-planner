@@ -3,7 +3,9 @@
 // Security layers (ordered by rejection cost - cheapest first):
 //   1. Method check (POST only)
 //   2. Origin / Referer allowlist - stops this endpoint from being a public oracle
-//   3. Upstash Redis rate limit per IP (fails open if Upstash env is missing)
+//   3. Upstash Redis rate limit per IP (fails CLOSED in production if the
+//      Upstash env vars are missing — Aero-Calc audit 2026-07-10 L1; only
+//      TRANSIENT Redis call failures on a constructed client fail open)
 //   4. Payload shape validation
 //   5. LemonSqueezy activate/validate call
 //   6. Store-ID check (optional env var LEMONSQUEEZY_STORE_ID) - rejects keys from
@@ -49,6 +51,11 @@ try {
   const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
   if (url && token) {
     redis = new Redis({ url, token });
+  } else {
+    // Aero-Calc security audit 2026-07-10 L1: missing env vars used to boot
+    // silently with rate limiting OFF (redis stays null, zero log output).
+    // Log loudly here; the handler fails closed in production below.
+    console.error("[validate-key] Upstash env vars missing — rate limiting DISABLED");
   }
 } catch (e) {
   console.warn("[validate-key] Upstash init failed:", e?.message);
@@ -83,6 +90,8 @@ function hashKey(key) {
 }
 
 async function rateLimitOK(suffix, max, windowSec) {
+  // !redis is dev/preview-only: the 2026-07-10 L1 handler gate fails closed
+  // (503) in production before any limiter runs.
   if (!redis) return true;
   try {
     const key = `hhp:rl:validate-key:${suffix}`;
@@ -141,6 +150,22 @@ export default async function handler(req, res) {
   }
   if (!isAllowedOrigin(req)) {
     return res.status(403).json({ valid: false, error: "Origin not allowed" });
+  }
+
+  // Aero-Calc security audit 2026-07-10 L1: if the Upstash client never
+  // initialised (env vars missing at boot), the per-IP AND per-licence rate
+  // limits are OFF for the whole deploy. Same hybrid as the store_id gate
+  // below: production fails CLOSED (503 — validateKeyRemote treats non-200
+  // as transient and keeps stored keys), dev/preview warns and continues so
+  // local work without Upstash still functions. Transient Redis call
+  // failures on a constructed client keep their deliberate fail-open in
+  // rateLimitOK.
+  if (!redis) {
+    if (process.env.VERCEL_ENV === "production") {
+      console.error("[CRITICAL] Upstash not configured — refusing to validate in production");
+      return res.status(503).json({ error: "Service temporarily unavailable. Try again shortly." });
+    }
+    console.warn("[WARN] Upstash not configured — rate limiting disabled in non-production");
   }
 
   const ip = getIp(req);
