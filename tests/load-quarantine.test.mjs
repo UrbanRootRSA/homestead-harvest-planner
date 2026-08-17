@@ -227,6 +227,15 @@ const quietConsole = { warn: () => {}, error: () => {}, log: () => {} };
 const CORRUPT_PREFIX = 'hhp.corrupt.';
 const failures = [];
 
+// One browser tab: a storage stub, a hook runtime, and the real declarations
+// evaluated against both. usePersistOnChange closes over useRef/useEffect, so
+// the runtime has to be handed in when the module is built, not afterwards.
+function tab(store) {
+  const rt = makeHookRuntime();
+  const api = make(store, quietConsole, rt.useRef, rt.useEffect);
+  return { api, rt };
+}
+
 // Stand-in state for the keys whose initializers live inside App() and cannot be
 // brace-extracted. The sanitizers those initializers run were verified clean by
 // the sweep and are not what this harness tests: what it tests is whether the
@@ -274,8 +283,7 @@ function row(label, live, quarantined, verdict) {
 {
   const RAW = '{';
   const store = makeStorage({ [LS_VALUES.LS_BEDS]: RAW });
-  const api = make(store, quietConsole);
-  const rt = makeHookRuntime();
+  const { api, rt } = tab(store);
   const state = boot(api, rt);
 
   const live = store.getItem(LS_VALUES.LS_BEDS);
@@ -309,8 +317,7 @@ function row(label, live, quarantined, verdict) {
     seeds[LS_VALUES[lsName]] = raws[lsName];
   }
   const store = makeStorage(seeds);
-  const api = make(store, quietConsole);
-  const rt = makeHookRuntime();
+  const { api, rt } = tab(store);
   boot(api, rt);
 
   let lost = 0;
@@ -341,8 +348,7 @@ function row(label, live, quarantined, verdict) {
   const stored = [{ ...{}, id: 'bed_x', shape: 'rect', lengthFt: 12, widthFt: 4, depthIn: 12, diameterFt: 4, outerLengthFt: 8, outerWidthFt: 6, cutoutLengthFt: 4, cutoutWidthFt: 3, qty: 2 }];
   const RAW = JSON.stringify(stored);
   const store = makeStorage({ [LS_VALUES.LS_BEDS]: RAW });
-  const api = make(store, quietConsole);
-  const rt = makeHookRuntime();
+  const { api, rt } = tab(store);
   const state = boot(api, rt);
 
   const afterMount = store.getItem(LS_VALUES.LS_BEDS);
@@ -377,8 +383,7 @@ function row(label, live, quarantined, verdict) {
 {
   const RAW = '{';
   const store = makeStorage({ [LS_VALUES.LS_BEDS]: RAW });
-  const api = make(store, quietConsole);
-  const rt = makeHookRuntime();
+  const { api, rt } = tab(store);
   const state = boot(api, rt, { strict: true });
 
   const live = store.getItem(LS_VALUES.LS_BEDS);
@@ -409,10 +414,10 @@ function row(label, live, quarantined, verdict) {
 
 {
   const store = makeStorage({});
-  const api = make(store, quietConsole);
-  const rt = makeHookRuntime();
+  const { api, rt } = tab(store);
   const state = boot(api, rt);
   const copies = store.keys().filter((k) => k.startsWith(CORRUPT_PREFIX));
+  const afterMount = store.getItem(LS_VALUES.LS_BEDS);
 
   const next = { ...state, LS_BEDS: [{ ...api.DEFAULT_BED(), lengthFt: 9 }] };
   rt.render(() => {
@@ -421,7 +426,7 @@ function row(label, live, quarantined, verdict) {
   const afterEdit = store.getItem(LS_VALUES.LS_BEDS);
 
   row('fresh install: nothing stored',
-    store.getItem(LS_VALUES.LS_BEDS) === null ? 'still absent on mount' : 'written on mount',
+    afterMount === null ? 'still absent on mount' : 'defaults written on mount',
     copies.length ? copies[0] : '(none)',
     afterEdit === JSON.stringify(next.LS_BEDS) ? 'edit persisted' : 'EDIT LOST');
 
@@ -436,8 +441,7 @@ function row(label, live, quarantined, verdict) {
 {
   const RAW = '{';
   const store = makeStorage({ [LS_VALUES.LS_BEDS]: RAW }, { full: true });
-  const api = make(store, quietConsole);
-  const rt = makeHookRuntime();
+  const { api, rt } = tab(store);
   let threw = null;
   try { boot(api, rt); } catch (e) { threw = e; }
 
@@ -461,8 +465,8 @@ function row(label, live, quarantined, verdict) {
   const RAW = '{"beds":[{"shape":"rect"';
   const store = makeStorage({ [LS_VALUES.LS_BEDS]: RAW });
   for (let i = 0; i < 5; i += 1) {
-    const api = make(store, quietConsole);
-    boot(api, makeHookRuntime());
+    const { api, rt } = tab(store);
+    boot(api, rt);
   }
   const copies = store.keys().filter((k) => k.startsWith(CORRUPT_PREFIX));
   row('five reloads of the same unreadable key',

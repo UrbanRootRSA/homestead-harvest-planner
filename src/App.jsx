@@ -84,6 +84,13 @@ const LS_PRESERVATION = "hhp_preservation";
 // is orphaned by design (and the rehydrator actively deletes it).
 const LS_PLAN_V2 = "hhp_plan_v2";
 
+// Fleet-sweep MEDIUM 2026-08-17 (docs/fleet-sweep-loadstate-errorboundary-
+// 2026-08-17.md). Every key above is written back from state, so a key whose
+// JSON cannot be parsed used to have its default committed over the user's
+// bytes on the first render. Unreadable bytes are copied under this prefix
+// before anything falls back. Ported from Shift-Fit src/storage.js:415-465.
+const LS_CORRUPT_PREFIX = "hhp.corrupt.";
+
 // Paywall storage (Session 4). hhp_paid is NOT read on mount - state machine
 // is paid:false / validating:true until the server confirms. See engineering-
 // patterns.md §8. hhp_pending is the Checkout.Success timestamp for the 48-h
@@ -570,13 +577,69 @@ function persistState(key, data) {
     return false;
   }
 }
-function loadState(key, fallback) {
+// Fleet-sweep MEDIUM 2026-08-17: reuse a copy already taken. Nothing here
+// deletes the live key, so loadState walks this path again on every reload; a
+// fresh copy per reload would push the origin towards its storage quota, and
+// persistState swallows quota errors, so what the user would actually see is
+// their real edits quietly no longer saving.
+function findQuarantinedCopy(raw) {
   try {
-    const raw = localStorage.getItem(key);
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LS_CORRUPT_PREFIX) && localStorage.getItem(k) === raw) return k;
+    }
+  } catch { /* enumeration blocked - fall through and write a fresh copy */ }
+  return null;
+}
+// Copy the unreadable payload to `hhp.corrupt.<key>.<timestamp>`. The original
+// is left exactly where it is: a browser that cannot write is no reason to
+// destroy the one readable record, and usePersistOnChange below keeps the first
+// render from overwriting it.
+function quarantineRaw(key, raw) {
+  if (findQuarantinedCopy(raw)) return;
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    localStorage.setItem(`${LS_CORRUPT_PREFIX}${key}.${stamp}`, raw);
+  } catch { /* storage full or disabled - leave the original untouched */ }
+}
+function loadState(key, fallback) {
+  // raw is declared OUTSIDE the try so the catch can still see the bytes that
+  // failed to parse. Declared inside, the catch has nothing left to copy.
+  let raw = null;
+  try {
+    raw = localStorage.getItem(key);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     return parsed == null ? fallback : parsed;
-  } catch { return fallback; }
+  } catch {
+    if (raw != null) quarantineRaw(key, raw);
+    return fallback;
+  }
+}
+
+// Fleet-sweep MEDIUM 2026-08-17: persist a slice when it CHANGES, never on
+// mount. The persist block in App() used to run one unconditional effect per
+// key after the first render, so every page load rewrote every key from state,
+// and a key that failed to parse had its default committed over the user's
+// bytes before they touched anything. That is the amplifier half of the
+// finding; the quarantine above is the other half. Sibling shape: MoneyCat
+// src/App.jsx usePersistentState (:363-383).
+//
+// Two departures from that sibling, both deliberate:
+//   - one ref PER KEY. A single ref shared by fifteen effects is spent by
+//     whichever effect runs first, and the other fourteen write anyway.
+//   - the guard compares the VALUE, not a first-run flag. main.jsx renders
+//     <App/> inside StrictMode, which unmounts and re-mounts every effect once
+//     in development, and that second run spends a first-run flag.
+// A genuine A -> B -> A round trip still writes at each hop: every hop changes
+// the value.
+function usePersistOnChange(key, value) {
+  const lastPersisted = useRef(value);
+  useEffect(() => {
+    if (lastPersisted.current === value) return;
+    lastPersisted.current = value;
+    persistState(key, value);
+  }, [key, value]);
 }
 function clearLS(key) {
   try { localStorage.removeItem(key); } catch { /* noop */ }
@@ -7154,34 +7217,41 @@ export default function App() {
   const [prefillKey, setPrefillKey] = useState(""); // pre-fills the licence input from ?key= URLs
   const [activating, setActivating] = useState(false); // true while the Activate form is submitting
 
-  // Persist settings
-  useEffect(() => { persistState(LS_METRIC, metric); }, [metric]);
-  useEffect(() => { persistState(LS_CURRENCY, currency); }, [currency]);
-  useEffect(() => { persistState(LS_FAMILY, familySize); }, [familySize]);
-  useEffect(() => { persistState(LS_GOAL, goal); }, [goal]);
-  useEffect(() => { persistState(LS_CROPS, selection); }, [selection]);
-  useEffect(() => { persistState(LS_BEDS, beds); }, [beds]);
-  useEffect(() => { persistState(LS_SOIL, soilState); }, [soilState]);
-  useEffect(() => { persistState(LS_COMPANION, companionSelection); }, [companionSelection]);
-  useEffect(() => { persistState(LS_HEMISPHERE, hemisphere); }, [hemisphere]);
-  useEffect(() => { persistState(LS_PRODUCE_TARGET, producePerPerson); }, [producePerPerson]);
-  useEffect(() => { persistState(LS_PLANTING, plantingState); }, [plantingState]);
-  useEffect(() => { persistState(LS_CROP_DB, cropDbState); }, [cropDbState]);
-  useEffect(() => { persistState(LS_COST_SAVINGS, costSavings); }, [costSavings]);
-  useEffect(() => { persistState(LS_PRESERVATION, preservation); }, [preservation]);
+  // Persist settings. Every one of these goes through usePersistOnChange, which
+  // skips the mount pass - see its comment for why a page load must not rewrite
+  // a key it could not read (fleet-sweep MEDIUM 2026-08-17). Adding a new
+  // persisted key here means adding a usePersistOnChange line, never a bare
+  // useEffect: tests/load-quarantine.test.mjs fails the build-gate if one
+  // appears in this block.
+  usePersistOnChange(LS_METRIC, metric);
+  usePersistOnChange(LS_CURRENCY, currency);
+  usePersistOnChange(LS_FAMILY, familySize);
+  usePersistOnChange(LS_GOAL, goal);
+  usePersistOnChange(LS_CROPS, selection);
+  usePersistOnChange(LS_BEDS, beds);
+  usePersistOnChange(LS_SOIL, soilState);
+  usePersistOnChange(LS_COMPANION, companionSelection);
+  usePersistOnChange(LS_HEMISPHERE, hemisphere);
+  usePersistOnChange(LS_PRODUCE_TARGET, producePerPerson);
+  usePersistOnChange(LS_PLANTING, plantingState);
+  usePersistOnChange(LS_CROP_DB, cropDbState);
+  usePersistOnChange(LS_COST_SAVINGS, costSavings);
+  usePersistOnChange(LS_PRESERVATION, preservation);
   // V2 paywall retrofit 2026-04-20 (Finding A): persist ONLY the inputs +
   // status fingerprint + timestamp, NEVER the plan body. The derived subset
   // is rebuilt on every change; it must not contain a key named `plan` or
   // any plan-body field. If you ever find yourself adding `plan: …` here,
   // you have regressed the paywall fix - read CLAUDE_CODE_FIX_PROMPT_V2_
   // HOMESTEAD_PAYWALL.md first.
-  useEffect(() => {
-    persistState(LS_PLAN_V2, {
-      inputs: planState.inputs,
-      generatedAt: planState.generatedAt,
-      cropFingerprint: planState.cropFingerprint,
-    });
-  }, [planState]);
+  // The memo gives this payload one identity per planState, which is the
+  // identity usePersistOnChange compares. Without it the payload would be a new
+  // object every render and the guard would never hold.
+  const planPersisted = useMemo(() => ({
+    inputs: planState.inputs,
+    generatedAt: planState.generatedAt,
+    cropFingerprint: planState.cropFingerprint,
+  }), [planState]);
+  usePersistOnChange(LS_PLAN_V2, planPersisted);
 
   // If a long-lived browser session crosses Jan 1, bump the planting
   // referenceYear to the new calendar year so the timeline doesn't silently
