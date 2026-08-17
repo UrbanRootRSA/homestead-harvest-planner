@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/load-quarantine.test.mjs",
+    "test": "node tests/load-quarantine.test.mjs && node tests/paywall-mount-chain.test.mjs",
     "rasterize-og": "node scripts/rasterize-og.mjs"
   },
   "dependencies": {
