@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "node tests/load-quarantine.test.mjs",
     "rasterize-og": "node scripts/rasterize-og.mjs"
   },
   "dependencies": {
