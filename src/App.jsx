@@ -7298,6 +7298,13 @@ export default function App() {
       if (key) persistState(LS_KEY, key);
       if (instanceId) persistState(LS_INSTANCE, instanceId);
       clearLS(LS_PENDING); // grace window no longer needed once we have a key
+      // M-3 (security audit 2026-08-17): a rejected ?key= earlier in this
+      // chain now HOLDS its message and falls through instead of returning,
+      // so every success leg has to close it - otherwise a customer whose own
+      // stored key just unlocked the app reads "we couldn't verify that
+      // licence key" over a paid render. Vertica :2318-2323 is the same close.
+      setKeyError("");
+      setPrefillKey("");
       setPaid(true);
       setValidating(false);
     };
@@ -7315,38 +7322,55 @@ export default function App() {
     (async () => {
       try {
         // 1. URL ?key= takes precedence (email link, post-checkout redirect).
+        // M-3 (security audit 2026-08-17): the URL-key verdict is HELD in
+        // these locals, not committed to the UI here. This leg used to
+        // `return` on a rejection, so one bad ?key= link dropped a paying
+        // customer to the free tier for that whole page load - their own
+        // stored key was never consulted. The held error is committed at the
+        // deny leg (step 4), after the stored key and the grace window have
+        // each had their turn.
+        let urlKeyError = null;
+        let urlKeyPrefill = "";
         const params = new URLSearchParams(window.location.search);
         const urlKey = params.get("key");
         if (urlKey) {
-          // SECURITY: do NOT read LS_INSTANCE on the URL-key path. The URL
-          // ?key= value is attacker-controllable; sending the legit customer's
-          // instance_id with it leaks the instance and primes the cleanup-
-          // write slot-burn attack. Both gates required (read + cleanup-write).
-          // Pattern: workspace memory `feedback_url_key_instance_trust.md`.
-          const r = await attempt(urlKey, "", { skipStoredInstance: true });
-          if (cancelled) return;
-          stripKeyFromUrl();
-          if (r?.valid) {
-            commitPaid(urlKey, r.instance_id);
-            return;
+          // M-1 (security audit 2026-08-17): refuse a URL key outright when a
+          // DIFFERENT licence is already stored on this device. commitPaid
+          // overwrites hhp_key AND hhp_instance in one breath, so without this
+          // guard one click on a mailed ?key=<attacker-key> silently replaces
+          // the victim's licence and their pointer to their own activated
+          // instance; the forced re-paste that follows weeks later is a fresh
+          // bare-key activation and burns another of their 3 LS slots. The
+          // guard fires BEFORE attempt() because it is the SUCCESSFUL
+          // validation of the foreign key that triggers the overwrite. Shape
+          // ported from FaminePrep crisis-prep-paywall.jsx, which has shipped
+          // this guard since its Finding B closure.
+          const conflictingKey = loadState(LS_KEY, "");
+          if (conflictingKey && conflictingKey !== urlKey) {
+            stripKeyFromUrl();
+            urlKeyError = "A different licence is already stored on this device. Clear it before activating a new one.";
+            // Deliberately NO prefill here: a foreign key must not sit one
+            // click from activation in the customer's own licence input.
+          } else {
+            // SECURITY: do NOT read LS_INSTANCE on the URL-key path. The URL
+            // ?key= value is attacker-controllable; sending the legit customer's
+            // instance_id with it leaks the instance and primes the cleanup-
+            // write slot-burn attack. Both gates required (read + cleanup-write).
+            // Pattern: workspace memory `feedback_url_key_instance_trust.md`.
+            const r = await attempt(urlKey, "", { skipStoredInstance: true });
+            if (cancelled) return;
+            stripKeyFromUrl();
+            if (r?.valid) {
+              commitPaid(urlKey, r.instance_id);
+              return;
+            }
+            urlKeyError = r?.error || "We couldn't verify that licence key.";
+            urlKeyPrefill = urlKey;
           }
-          // Surface the error so the user understands why they're not unlocked.
-          setKeyError(r?.error || "We couldn't verify that licence key.");
-          setPrefillKey(urlKey);
-          setPaid(false);
-          setValidating(false);
-          // Send them to the paywall UI instead of silently dropping on Home.
-          // Sync the URL hash too so bookmark/copy-link/refresh after a bad
-          // ?key= all land back on the paywall, not at "/" with stale state -
-          // audit #H3.
-          if (window.location.hash.slice(1) !== "growing-plan") {
-            window.history.replaceState({ tab: "growing-plan" }, "", "#growing-plan");
-          }
-          setTab("growing-plan");
-          return;
         }
 
         // 2. Stored key from a previous session.
+        let storedKeyError = null;
         const storedKey = loadState(LS_KEY, "");
         const storedInstance = loadState(LS_INSTANCE, "");
         if (storedKey) {
@@ -7365,7 +7389,12 @@ export default function App() {
           // for this session (the render gate never fails open); the paywall
           // overlay explains why if they open it.
           if (r?.transient) {
-            setKeyError("We couldn't reach the licence server to verify your saved key. It's still saved on this device - reload to try again.");
+            // Held, not committed: the grace window below may still unlock
+            // this session, and an unlocked customer must not be shown a
+            // licence error. Committed at the deny leg (step 4), where it
+            // outranks any held URL-key message - this one is about the
+            // customer's OWN saved key.
+            storedKeyError = "We couldn't reach the licence server to verify your saved key. It's still saved on this device - reload to try again.";
           } else {
             // Stored key definitively rejected (revoked / refunded /
             // disabled) - wipe silently. User sees paywall, not an error -
@@ -7391,6 +7420,9 @@ export default function App() {
           // grant, keep the stamp, and let the next load re-evaluate it once
           // the clock has caught up. The 48-hour upper bound is unchanged.
           if (age < GRACE_WINDOW_MS) {
+            // Success leg: close any held/stale licence message (see commitPaid).
+            setKeyError("");
+            setPrefillKey("");
             setPaid(true);
             setValidating(false);
             return;
@@ -7401,6 +7433,23 @@ export default function App() {
         // 4. No entry path matched. Not paid.
         setPaid(false);
         setValidating(false);
+        // M-3: the one place a held licence message reaches the UI. A
+        // transient stored-key failure outranks a URL-key rejection - it is
+        // about the customer's own saved key and tells them it is intact.
+        if (storedKeyError || urlKeyError) {
+          setKeyError(storedKeyError || urlKeyError);
+        }
+        if (urlKeyError) {
+          if (urlKeyPrefill) setPrefillKey(urlKeyPrefill);
+          // Send them to the paywall UI instead of silently dropping on Home.
+          // Sync the URL hash too so bookmark/copy-link/refresh after a bad
+          // ?key= all land back on the paywall, not at "/" with stale state -
+          // audit #H3.
+          if (window.location.hash.slice(1) !== "growing-plan") {
+            window.history.replaceState({ tab: "growing-plan" }, "", "#growing-plan");
+          }
+          setTab("growing-plan");
+        }
       } catch (e) {
         // Narrow log to message+code only. Logging the raw exception object can
         // pull request init / cause-chain payloads (including the licence key
