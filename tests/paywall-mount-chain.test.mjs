@@ -13,6 +13,10 @@
 //   L-2  a NEGATIVE grace age (clock ran ahead at checkout, then corrected
 //        back) fell past the grant and wiped hhp_pending - locking out a
 //        customer who had just paid and had no licence email yet.
+//   R-1a re-audit (../../docs/security-reaudit-paywall-fixes-2026-08-17.md):
+//        the first L-2 fix dropped the `age >= 0` floor along with the wipe, so
+//        a future-dated stamp then GRANTED for as long as it was dated. Both
+//        edges are the finding. Future-dated: deny, keep. Expired: deny, clear.
 //
 // The harness drives the REAL mount chain out of the shipped source: every
 // declaration it needs is brace-extracted from src/App.jsx at run time, and the
@@ -458,40 +462,61 @@ group('M-3', 'a rejected ?key= must not block the stored key or the grace window
 
 // ═══════════════════════════════════════════ L-2: grace window, both edges
 
-group('L-2', 'clock skew must not destroy a paid customer\'s grace window');
+group('L-2', 'the 48 h window is bounded at BOTH edges, and only ONE clears');
 
 {
   // The reported case: the device clock ran 2 h ahead when Checkout.Success
   // stamped hhp_pending, and has since been corrected backwards.
+  //
+  // R-1a (re-audit 2026-08-17): this case has TWO halves and the first fix
+  // traded one for the other. The window has not started yet, so it may not
+  // grant - a negative age is always < GRACE_WINDOW_MS, so granting on it makes
+  // "48 hours" mean "as long as the stamp is dated". But it is also not spent,
+  // and it is the only evidence a customer who has no licence email yet has
+  // paid, so it may not be wiped either. Deny, KEEP, let it age into range.
   const stamp = Date.now() + 2 * HOUR;
   const r = await mount({ store: seed({ pending: stamp }), plan: [] });
 
-  check('L-2.1', 'a future-dated stamp still grants the grace window', r.paid === true && r.validating === false);
-  check('L-2.2', 'and the stamp is NOT wiped', r.pending === String(stamp), `hhp_pending=${r.pending}`);
+  check('L-2.1', 'a future-dated stamp does NOT grant', r.everPaid === false && r.validating === false);
+  check('L-2.2', 'and the just-paid stamp is NOT wiped', r.pending === String(stamp), `hhp_pending=${r.pending}`);
   check('L-2.3', 'no validator call was needed', r.calls.length === 0);
 }
 
 {
-  // The upper bound must be exactly where it was.
+  // The tampered end of the same edge: set hhp_pending far enough ahead and the
+  // unbounded window never closes. Same verdict as the 2 h skew, same reason -
+  // the chain cannot tell a broken clock from a hand-edited value, so it treats
+  // both as "not yet", which costs an attacker everything and a customer nothing.
+  const stamp = Date.now() + 10 * 365 * 24 * HOUR;
+  const r = await mount({ store: seed({ pending: stamp }), plan: [] });
+
+  check('L-2.4', 'a +10-year stamp grants nothing', r.everPaid === false && r.validating === false);
+  check('L-2.5', 'and it is still not wiped (a deny is not an expiry)', r.pending === String(stamp), `hhp_pending=${r.pending}`);
+}
+
+{
+  // The upper bound must be exactly where it was, and this is the ONE edge that
+  // clears: a spent window is evidence of nothing. Keep this case honest - a
+  // "never wipe" over-correction of L-2.2/L-2.5 turns it red.
   const stamp = Date.now() - 49 * HOUR;
   const r = await mount({ store: seed({ pending: stamp }), plan: [] });
 
-  check('L-2.4', 'an expired window does not grant', r.everPaid === false && r.validating === false);
-  check('L-2.5', 'and the expired stamp is cleared', r.pending === null, `hhp_pending=${r.pending}`);
+  check('L-2.6', 'an expired window does not grant', r.everPaid === false && r.validating === false);
+  check('L-2.7', 'and the expired stamp IS cleared', r.pending === null, `hhp_pending=${r.pending}`);
 }
 
 {
   const stamp = Date.now() - 1 * HOUR;
   const r = await mount({ store: seed({ pending: stamp }), plan: [] });
-  check('L-2.6', 'a fresh purchase grants (control)', r.paid === true);
-  check('L-2.7', 'and keeps its stamp (control)', r.pending === String(stamp));
+  check('L-2.8', 'a fresh purchase grants (control)', r.paid === true);
+  check('L-2.9', 'and keeps its stamp (control)', r.pending === String(stamp));
 }
 
 {
   // Garbage in the slot must not grant. loadState quarantines the bytes and
   // returns the fallback, so Number(0) fails the > 0 gate.
   const r = await mount({ store: { hhp_pending: 'tomorrow' }, plan: [] });
-  check('L-2.8', 'an unparseable stamp grants nothing', r.everPaid === false && r.validating === false);
+  check('L-2.10', 'an unparseable stamp grants nothing', r.everPaid === false && r.validating === false);
 }
 
 // ═══════════════════════════════════════════════════ canon + source shape
@@ -523,12 +548,12 @@ group('canon', 'portfolio invariants this chain must keep');
 // Source-shape guards. The runtime cases above prove the behaviour of the
 // chain the harness drives; these pin the lines a future edit is most likely
 // to undo, in the file itself. Comments are stripped first: the fix's own
-// comment quotes the `age >= 0` it removed, and a guard that its own
-// documentation can satisfy is not a guard.
+// comment quotes both `age >= 0` and the clear it guards, and a check its own
+// documentation can satisfy is not a check.
 {
   const CODE = EFFECT.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  check('shape.1', 'the mount chain no longer gates the grace window on `age >= 0`', !/age\s*>=\s*0/.test(CODE));
-  check('shape.2', 'the 48 h upper bound is still there', /age\s*<\s*GRACE_WINDOW_MS/.test(CODE));
+  check('shape.1', 'the grant is gated on BOTH edges of the window', /age\s*>=\s*0\s*&&\s*age\s*<\s*GRACE_WINDOW_MS/.test(CODE));
+  check('shape.2', 'only an EXPIRED window clears the stamp', /age\s*>=\s*GRACE_WINDOW_MS\)\s*clearLS\(LS_PENDING\)/.test(CODE));
   const copy = (SRC.match(/A different licence is already stored on this device/g) || []).length;
   check('shape.3', 'the conflict-guard copy string ships exactly once', copy === 1, `${copy} occurrence(s)`);
   const conflictAt = CODE.indexOf('conflictingKey');

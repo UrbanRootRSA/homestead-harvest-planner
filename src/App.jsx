@@ -7411,15 +7411,18 @@ export default function App() {
         const pending = Number(loadState(LS_PENDING, 0));
         if (Number.isFinite(pending) && pending > 0) {
           const age = Date.now() - pending;
-          // L-2 (security audit 2026-08-17): the `age >= 0 &&` that used to
-          // gate this fell through to the clearLS below whenever the age came
-          // out NEGATIVE - a device whose clock ran ahead at checkout and was
-          // then corrected backwards. That destroyed the grace window of a
-          // customer who had just paid and had no licence email yet, with no
-          // recovery. A negative age is clock skew, not an expired window:
-          // grant, keep the stamp, and let the next load re-evaluate it once
-          // the clock has caught up. The 48-hour upper bound is unchanged.
-          if (age < GRACE_WINDOW_MS) {
+          // L-2 + R-1a (security audit + re-audit 2026-08-17): the window is
+          // bounded at BOTH edges, and only ONE of them clears the stamp.
+          // A NEGATIVE age is a device whose clock ran ahead at checkout and
+          // was then corrected backwards. That window has not started, so it
+          // may not grant: a negative age is always < GRACE_WINDOW_MS, which
+          // made "48 hours" mean "as long as the stamp is dated". But it is
+          // not spent either, and it is the only evidence a customer who has
+          // no licence email yet has paid, so the clearLS below must not eat
+          // it - that destroys their access with no recovery. Deny, keep, and
+          // let it age into range on the next load. Clearing is reserved for a
+          // genuinely expired window. Same shape as Grow Room and Vertica.
+          if (age >= 0 && age < GRACE_WINDOW_MS) {
             // Success leg: close any held/stale licence message (see commitPaid).
             setKeyError("");
             setPrefillKey("");
@@ -7427,7 +7430,7 @@ export default function App() {
             setValidating(false);
             return;
           }
-          clearLS(LS_PENDING);
+          if (age >= GRACE_WINDOW_MS) clearLS(LS_PENDING);
         }
 
         // 4. No entry path matched. Not paid.
