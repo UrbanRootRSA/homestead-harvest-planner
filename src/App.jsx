@@ -7382,7 +7382,15 @@ export default function App() {
         const pending = Number(loadState(LS_PENDING, 0));
         if (Number.isFinite(pending) && pending > 0) {
           const age = Date.now() - pending;
-          if (age >= 0 && age < GRACE_WINDOW_MS) {
+          // L-2 (security audit 2026-08-17): the `age >= 0 &&` that used to
+          // gate this fell through to the clearLS below whenever the age came
+          // out NEGATIVE - a device whose clock ran ahead at checkout and was
+          // then corrected backwards. That destroyed the grace window of a
+          // customer who had just paid and had no licence email yet, with no
+          // recovery. A negative age is clock skew, not an expired window:
+          // grant, keep the stamp, and let the next load re-evaluate it once
+          // the clock has caught up. The 48-hour upper bound is unchanged.
+          if (age < GRACE_WINDOW_MS) {
             setPaid(true);
             setValidating(false);
             return;
