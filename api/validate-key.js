@@ -133,7 +133,16 @@ async function callLs(endpoint, params) {
 // messages. LS error wording is not contractually stable; if they ever surface
 // internal staff-debug strings (e.g. account IDs) verbatim-passing leaks them
 // to the client. The four buckets cover all current LS error states.
+// A-1 (security re-audit 2026-08-17): the device-limit bucket, and the same
+// regex the handler uses to keep that verdict out of the client's wipe path.
+// It must be tested FIRST: LemonSqueezy's limit wording can contain "invalid",
+// which the /not found|invalid/i bucket below would otherwise swallow, telling
+// a customer their key was not found when it is fine and the pool is just full.
+const ACTIVATION_LIMIT_RE = /activation limit|activation_limit/i;
+const ACTIVATION_LIMIT_MESSAGE = "This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support.";
+
 function normaliseLsError(errStr) {
+  if (ACTIVATION_LIMIT_RE.test(errStr)) return ACTIVATION_LIMIT_MESSAGE;
   if (/expired/i.test(errStr)) return "This licence key has expired.";
   if (/disabled/i.test(errStr)) return "This licence key has been disabled.";
   if (/instance/i.test(errStr)) return "This device is no longer activated. Try re-entering your licence key.";
@@ -246,6 +255,28 @@ export default async function handler(req, res) {
       if (!preCheck.json || (typeof preCheck.json.valid !== "boolean" && !preCheck.json.license_key)) {
         return res.status(502).json({ valid: false, error: "Licence server returned an unexpected response. Try again." });
       }
+      // A-1 (security re-audit 2026-08-17,
+      // ../../docs/security-reaudit-paywall-fixes-2026-08-17.md): stop a full
+      // device pool here, and say so in a flag rather than only in words.
+      // Without this the call reached LS_ACTIVATE, LS rejected it with an
+      // activation-limit error, and that error fell to the definitive bottom
+      // return - which the client trusts and answers by DELETING the stored
+      // licence. The key is fine; only the pool is full. No attacker is needed
+      // to reach it: clearing browser data, an ITP eviction after seven days
+      // without interaction, or a fourth device all land here. The client keys
+      // its wipe on "valid:false and not transient", never on message text, so
+      // a nicer error string alone would change nothing.
+      // (Grow Room api/validate-key.js is the reference for this block.)
+      const lkPre = (preCheck.json && preCheck.json.license_key) || {};
+      const usagePre = Number(lkPre.activation_usage);
+      const limitPre = Number(lkPre.activation_limit);
+      if (Number.isFinite(usagePre) && Number.isFinite(limitPre) && limitPre > 0 && usagePre >= limitPre) {
+        return res.status(200).json({
+          valid: false,
+          error: `This licence key has reached its device activation limit (${limitPre}/${limitPre}). Deactivate an old device in your LemonSqueezy account, or contact support.`,
+          activation_limit_reached: true,
+        });
+      }
       // Fail CLOSED (code-review 2026-06-10 M1): no `!= null` escape hatch.
       // If LS ever drops meta.store_id, String(undefined) !== expected
       // rejects - a noisy reject on LS API drift beats a silent store-gate
@@ -311,10 +342,17 @@ export default async function handler(req, res) {
       // slice(0,200). Future LS API changes can no longer leak internal info.
       const errStr = String(js.error || "");
       const looksLikeStaleInstance = Boolean(instanceId) && /instance/i.test(errStr);
+      // A-1: the pre-check above can only read the counters LS gave it, so it
+      // loses a race - two devices at 2 of 3 both pass it and LS rejects one of
+      // them HERE. Unflagged, that rejection is a definitive valid:false and
+      // the client deletes a licence that is fine. Flagging on LS's own wording
+      // errs toward keeping a licence we might have deleted, which is the safe
+      // direction of this finding.
       return res.status(200).json({
         valid: false,
         error: normaliseLsError(errStr),
         retry_activation: looksLikeStaleInstance,
+        activation_limit_reached: ACTIVATION_LIMIT_RE.test(errStr),
       });
     }
 

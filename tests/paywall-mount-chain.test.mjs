@@ -217,6 +217,17 @@ const OK = (instance) => ({ status: 200, body: { valid: true, instance_id: insta
 const REVOKED = { status: 200, body: { valid: false, error: 'This licence key is not active.' } };
 const OUTAGE = { status: 502, body: { valid: false, error: 'Licence server error. Please try again.' } };
 const RATE_LIMITED = { status: 429, body: { valid: false, error: 'Too many attempts. Please wait a minute.' } };
+// A-1: the shape the server now returns from its activation-limit pre-check.
+// The licence is VALID; only the device pool is full. It arrives as an HTTP-200
+// valid:false, which is the exact shape the chain answers by wiping.
+const POOL_FULL = {
+  status: 200,
+  body: {
+    valid: false,
+    error: 'This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support.',
+    activation_limit_reached: true,
+  },
+};
 
 function seed(parts) {
   const store = {};
@@ -239,7 +250,9 @@ async function drain(isSettled) {
   return false;
 }
 
+let mountCount = 0;
 async function mount({ url = 'https://thehomesteadplan.com/', store = {}, plan = [] }) {
+  mountCount += 1;
   const storage = makeStorage(store);
   const { fetchStub, calls } = makeServer(plan);
   const api = make(storage, quietConsole, fetchStub);
@@ -519,6 +532,69 @@ group('L-2', 'the 48 h window is bounded at BOTH edges, and only ONE clears');
   check('L-2.10', 'an unparseable stamp grants nothing', r.everPaid === false && r.validating === false);
 }
 
+// ═══════════════════════════ A-1: a full device pool is not a bad licence key
+
+group('A-1', 'a full activation pool must not delete a valid licence');
+
+{
+  // No attacker required. The customer clears their browser data, or Safari's
+  // ITP deletes script-writable storage after seven days without interaction,
+  // or they open the app on a fourth device. The stored key is validated with
+  // no instance, the server answers "limit reached", and the chain reads a
+  // definitive valid:false and DELETES the key they paid for. They then have to
+  // find the purchase email AND free a slot, and their first re-paste fails too.
+  const r = await mount({
+    store: seed({ key: KEY_MINE }),
+    plan: [POOL_FULL],
+  });
+
+  check('A-1.1', 'the licence key is KEPT', r.storedKey === KEY_MINE, `hhp_key=${JSON.stringify(r.storedKey)}`);
+  check('A-1.2', 'nothing is unlocked (this device really has no slot)', r.everPaid === false && r.validating === false);
+  check('A-1.3', 'the customer is told why', typeof r.keyError === 'string' && /activation limit/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
+  check('A-1.4', 'and the message names the remedy', typeof r.keyError === 'string' && /deactivate|contact support/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
+}
+
+{
+  // Same verdict reached through the stale-instance retry: the first call is
+  // rejected on the (key, instance) pair, the chain drops the pointer and
+  // re-validates bare, and THAT call is the one that hits the pre-check. The
+  // wipe sits below both legs, so the exemption has to cover the retry result.
+  const r = await mount({
+    store: seed({ key: KEY_MINE, instance: 'inst-dead' }),
+    plan: [
+      { status: 200, body: { valid: false, error: 'This device is no longer activated.', retry_activation: true } },
+      POOL_FULL,
+    ],
+  });
+
+  check('A-1.5', 'the retry ran bare', r.calls.length === 2 && r.calls[1].instance_id === undefined, `calls=${JSON.stringify(r.calls)}`);
+  check('A-1.6', 'the licence key survives the retry leg too', r.storedKey === KEY_MINE, `hhp_key=${JSON.stringify(r.storedKey)}`);
+  check('A-1.7', 'and the reason still reaches the customer', typeof r.keyError === 'string' && /activation limit/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
+}
+
+{
+  // The exemption must not swallow the real revocation: a definitive verdict
+  // with no flag still de-licenses. Without this case a "never wipe"
+  // over-correction of A-1.1 would read as a pass.
+  const r = await mount({
+    store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+    plan: [REVOKED],
+  });
+  check('A-1.8', 'a genuinely revoked key is still wiped', r.storedKey === null && r.storedInstance === null);
+}
+
+{
+  // A full pool must not cost the customer a live grace window either: they may
+  // have bought minutes ago on a device that has no slot yet.
+  const stamp = Date.now() - 1 * HOUR;
+  const r = await mount({
+    store: { ...seed({ key: KEY_MINE }), hhp_pending: String(stamp) },
+    plan: [POOL_FULL],
+  });
+  check('A-1.9', 'the grace window still unlocks', r.paid === true);
+  check('A-1.10', 'and the licence key is still kept', r.storedKey === KEY_MINE);
+}
+
 // ═══════════════════════════════════════════════════ canon + source shape
 
 group('canon', 'portfolio invariants this chain must keep');
@@ -561,6 +637,118 @@ group('canon', 'portfolio invariants this chain must keep');
   check('shape.4', 'the conflict guard is read BEFORE attempt(urlKey', conflictAt !== -1 && attemptAt !== -1 && conflictAt < attemptAt);
 }
 
+// ═══════════════════════════════ A-1 server half: the pre-check that emits it
+//
+// The client cases above prove the chain honours the flag. This proves the flag
+// is ever RAISED: the real handler is imported and driven through a scripted
+// LemonSqueezy, so the LS call SEQUENCE is asserted, not assumed. A pool-full
+// key must be caught on the pre-check and never reach /activate - reaching it
+// would burn nothing (LS refuses) but would answer with an error that falls to
+// the definitive bottom return, which is the wipe this batch is closing.
+
+group('A-1s', 'the server raises activation_limit_reached before /activate');
+
+{
+  const realWarn = console.warn;
+  const realError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+  const handler = (await import('../api/validate-key.js')).default;
+  console.warn = realWarn;
+  console.error = realError;
+
+  process.env.LEMONSQUEEZY_STORE_ID = '348457';
+  delete process.env.VERCEL_ENV;
+
+  const LS_META = { store_id: 348457 };
+  const realFetch = globalThis.fetch;
+
+  async function runServer(body, script) {
+    const legs = [];
+    globalThis.fetch = async (url, init) => {
+      const leg = String(url).includes('/activate') ? 'activate' : 'validate';
+      legs.push({ leg, body: String(init.body) });
+      const step = script[leg];
+      if (!step) throw new Error(`unscripted LS call: ${leg}`);
+      return { ok: step.status === 200, status: step.status, json: async () => step.body };
+    };
+    const out = { status: 0, body: null };
+    const res = {
+      setHeader() {},
+      status(c) { out.status = c; return this; },
+      json(b) { out.body = b; return this; },
+    };
+    const w = console.warn; const e = console.error;
+    console.warn = () => {}; console.error = () => {};
+    try {
+      await handler({ method: 'POST', headers: { origin: 'https://thehomesteadplan.com', 'x-real-ip': '203.0.113.9' }, body }, res);
+    } finally {
+      console.warn = w; console.error = e;
+      globalThis.fetch = realFetch;
+    }
+    return { ...out, legs };
+  }
+
+  {
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 200, body: { valid: true, license_key: { status: 'active', activation_limit: 3, activation_usage: 3 }, meta: LS_META } },
+    });
+    check('A-1s.1', 'a full pool never reaches /activate', r.legs.length === 1 && r.legs[0].leg === 'validate', `legs=${JSON.stringify(r.legs.map((l) => l.leg))}`);
+    check('A-1s.2', 'and the verdict carries the flag', r.status === 200 && r.body.valid === false && r.body.activation_limit_reached === true, JSON.stringify(r.body));
+    check('A-1s.3', 'the message names the remedy', typeof r.body.error === 'string' && /deactivate|contact support/i.test(r.body.error), JSON.stringify(r.body.error));
+  }
+
+  {
+    // Head-room left: the pre-check must not stand between a legitimate first
+    // activation and its slot.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 200, body: { valid: true, license_key: { status: 'active', activation_limit: 3, activation_usage: 1 }, meta: LS_META } },
+      activate: { status: 200, body: { activated: true, license_key: { status: 'active' }, instance: { id: 'inst-new' }, meta: LS_META } },
+    });
+    check('A-1s.4', 'a key with slots left still activates', r.legs.map((l) => l.leg).join('+') === 'validate+activate', `legs=${JSON.stringify(r.legs.map((l) => l.leg))}`);
+    check('A-1s.5', 'and grants', r.body.valid === true && r.body.instance_id === 'inst-new', JSON.stringify(r.body));
+  }
+
+  {
+    // LS omitting the counters (or sending junk) must not fabricate a limit.
+    // Number(undefined) is NaN, and NaN >= NaN is false, so the gate is skipped.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } },
+      activate: { status: 200, body: { activated: true, license_key: { status: 'active' }, instance: { id: 'inst-new' }, meta: LS_META } },
+    });
+    check('A-1s.6', 'absent counters do not fabricate a limit', r.body.valid === true, JSON.stringify(r.body));
+  }
+
+  {
+    // The race the pre-check cannot see: two devices at 2 of 3 both pass it and
+    // LS rejects one of them at /activate. That rejection used to be a plain
+    // definitive valid:false, i.e. a wipe.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 200, body: { valid: true, license_key: { status: 'active', activation_limit: 3, activation_usage: 2 }, meta: LS_META } },
+      activate: { status: 400, body: { activated: false, error: 'License key activation limit reached.' } },
+    });
+    check('A-1s.7', 'an LS-side limit rejection is flagged too', r.body.activation_limit_reached === true, JSON.stringify(r.body));
+    check('A-1s.8', 'and reads as a limit, not as "could not be validated"', /activation limit/i.test(r.body.error || ''), JSON.stringify(r.body.error));
+  }
+
+  {
+    // The bucket order: LS wording that carries BOTH "invalid" and the limit
+    // must land in the limit bucket, not the not-found one.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 400, body: { valid: false, error: 'invalid: activation_limit reached for this license key' } },
+    });
+    check('A-1s.9', 'the limit bucket is tested before not-found/invalid', /activation limit/i.test(r.body.error || ''), JSON.stringify(r.body.error));
+  }
+
+  {
+    // A real dead key must stay definitive, or the client stops wiping anything.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 404, body: { valid: false, error: 'license_key not found' } },
+    });
+    check('A-1s.10', 'a dead key is still a plain definitive reject', r.body.valid === false && !r.body.activation_limit_reached, JSON.stringify(r.body));
+  }
+}
+
 // --------------------------------------------------------------------- report
 
 const w = Math.max(...rows.map((r) => `${r.id} ${r.label}`.length));
@@ -579,5 +767,7 @@ if (failures.length) {
   process.exit(1);
 }
 const cases = rows.filter((r) => r.verdict).length;
-console.log(`paywall mount chain: ${cases}/${cases} assertions OK across 15 mounts.`);
+// Counted, not typed: a hardcoded mount count goes stale the first time a case
+// is added and then misreports how much was actually exercised.
+console.log(`paywall mount chain: ${cases}/${cases} assertions OK across ${mountCount} mounts.`);
 process.exit(0);

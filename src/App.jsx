@@ -7395,6 +7395,23 @@ export default function App() {
             // outranks any held URL-key message - this one is about the
             // customer's OWN saved key.
             storedKeyError = "We couldn't reach the licence server to verify your saved key. It's still saved on this device - reload to try again.";
+          } else if (r?.activation_limit_reached) {
+            // A-1 (security re-audit 2026-08-17,
+            // ../../docs/security-reaudit-paywall-fixes-2026-08-17.md): a full
+            // device pool is NOT a bad key. The licence is valid; every slot is
+            // simply in use. It arrives as an HTTP-200 valid:false, which is
+            // the one shape the branch below answers by deleting the licence -
+            // so the product deleted the thing the customer paid for, and their
+            // first re-paste failed too because the pool was still full. No
+            // attacker needed: clearing browser data, Safari's ITP evicting
+            // script-writable storage after seven days, or a fourth device all
+            // land here. Keep the key AND the instance pointer, stay locked
+            // (this device genuinely has no slot), and hold the server's
+            // message, which names the remedy. It is held rather than shown
+            // here for the same reason the transient message is: the grace
+            // window below may still unlock this session, and an unlocked
+            // customer must not be shown a licence error.
+            storedKeyError = r?.error || "This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support.";
           } else {
             // Stored key definitively rejected (revoked / refunded /
             // disabled) - wipe silently. User sees paywall, not an error -
