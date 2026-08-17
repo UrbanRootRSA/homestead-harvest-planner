@@ -354,18 +354,28 @@ group('M-1', 'a ?key= link may not overwrite a DIFFERENT stored licence');
 }
 
 {
-  // The customer's OWN email link, with the same key already stored: not a
-  // conflict. This is the case a naive "is a key stored?" guard would break.
+  // N-1 (security re-audit 2026-08-17,
+  // ../../docs/security-reaudit-paywall-fixes-2026-08-17.md).
+  //
+  // The customer's OWN email link, with the same key already stored. Not a
+  // conflict, and until N-1 it ran the URL-key leg - which sends NO instance_id
+  // by design, so the server took the fresh-device path and /activate minted a
+  // second instance against the same licence. The LemonSqueezy purchase email
+  // is the only link many customers keep, so they use it as a bookmark and burn
+  // one of three slots per click, silently. Deferring to the stored-key leg
+  // revalidates the identical key WITH the instance attached: same unlock, no
+  // slot consumed, and nothing to explain to the customer.
   const r = await mount({
     url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
     store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
     plan: [OK('inst-fresh')],
   });
 
-  check('M-1.12', 'the same key from a URL is not treated as a conflict', r.paid === true);
-  check('M-1.13', 'it validated on the URL-key path', r.calls.length === 1 && r.calls[0].key === KEY_MINE);
-  check('M-1.14', 'and it sent NO stored instance_id (gate 1)', r.calls[0].instance_id === undefined, `instance_id=${JSON.stringify(r.calls[0] && r.calls[0].instance_id)}`);
-  check('M-1.15', 'the fresh instance is stored', r.storedInstance === 'inst-fresh');
+  check('N-1.1', 'the same key from a URL is not treated as a conflict', r.paid === true);
+  check('N-1.2', 'exactly one validation ran', r.calls.length === 1 && r.calls[0].key === KEY_MINE, `calls=${JSON.stringify(r.calls)}`);
+  check('N-1.3', 'and it CARRIED the stored instance_id (a bare call activates a second one)', r.calls[0].instance_id === 'inst-mine', `instance_id=${JSON.stringify(r.calls[0] && r.calls[0].instance_id)}`);
+  check('N-1.4', 'the deferral is silent (no refusal shown for the customer\'s own key)', r.keyError === '' || r.keyError === null, `keyError=${JSON.stringify(r.keyError)}`);
+  check('N-1.5', 'the key is still stripped from the address bar', !r.href.includes('key='), r.href);
 }
 
 {
@@ -387,26 +397,26 @@ group('M-1', 'a ?key= link may not overwrite a DIFFERENT stored licence');
 group('M-3', 'a rejected ?key= must not block the stored key or the grace window');
 
 {
-  // NOTE on fixtures: once M-1 lands, a junk ?key= with a DIFFERENT key stored
-  // is refused BEFORE the server is called, so that scenario exercises the
-  // conflict guard (M-1.1-1.6 above already assert it falls through). The
-  // rejection-then-fall-through that M-1 does NOT shadow is the customer
-  // clicking their OWN email link during a blip on the licence server: the
-  // URL-key leg fails, and the stored-key leg - which carries the instance and
-  // is a different request - still has to get its turn.
+  // NOTE on fixtures: with both M-1 and N-1 in, a ?key= link is only ever sent
+  // to the server when NOTHING is stored - a different key is refused, the same
+  // key defers. So the fall-through M-3 exists for is: a customer who paid
+  // minutes ago, has no licence key yet, and clicks a link during a blip on the
+  // licence server. The URL-key leg fails and the 48 h grace still has to get
+  // its turn, without a licence error left floating over the unlocked render.
+  const stamp = Date.now() - 2 * HOUR;
   const r = await mount({
     url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
-    store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
-    plan: [OUTAGE, OK('inst-mine')],
+    store: { hhp_pending: String(stamp) },
+    plan: [OUTAGE],
   });
 
-  check('M-3.1', 'the stored key WAS validated after the URL-key failure', r.calls.length === 2 && r.calls[1].key === KEY_MINE, `calls=${JSON.stringify(r.calls.map((c) => c.key))}`);
-  check('M-3.2', 'the second call carries the stored instance_id', r.calls[1] && r.calls[1].instance_id === 'inst-mine', `instance_id=${JSON.stringify(r.calls[1] && r.calls[1].instance_id)}`);
+  check('M-3.1', 'the URL key was the only thing validated', r.calls.length === 1 && r.calls[0].key === KEY_MINE, `calls=${JSON.stringify(r.calls.map((c) => c.key))}`);
+  check('M-3.2', 'and it sent NO instance_id (gate 1)', r.calls[0].instance_id === undefined, `instance_id=${JSON.stringify(r.calls[0] && r.calls[0].instance_id)}`);
   check('M-3.3', 'the customer is unlocked for this load', r.paid === true && r.validating === false);
   check('M-3.4', 'the stale URL-key error is closed on the success leg', r.keyError === '', `keyError=${JSON.stringify(r.keyError)}`);
   check('M-3.5', 'the stale prefill is closed too', r.prefillKey === '', `prefillKey=${JSON.stringify(r.prefillKey)}`);
   check('M-3.6', 'they are not bounced to the paywall tab', r.tab === null, `tab=${JSON.stringify(r.tab)}`);
-  check('M-3.7', 'the stored key survived the whole chain', r.storedKey === KEY_MINE && r.storedInstance === 'inst-mine');
+  check('M-3.7', 'the grace stamp survived the whole chain', r.pending === String(stamp), `hhp_pending=${r.pending}`);
 }
 
 {
@@ -424,19 +434,20 @@ group('M-3', 'a rejected ?key= must not block the stored key or the grace window
 }
 
 {
-  // Own email link, key already revoked, and the stored-key retry then trips
-  // the per-IP rate limit the first call just charged. Two verdicts, and the
-  // customer must be told about the one that concerns their own device.
+  // Own email link, and the deferred stored-key validation trips the per-IP
+  // rate limit. Under N-1 that is ONE request, not two: the link no longer
+  // spends a rate-limit token of its own before the stored key gets its turn,
+  // which is a second, quieter cost of the old behaviour.
   const r = await mount({
     url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
     store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
-    plan: [REVOKED, RATE_LIMITED],
+    plan: [RATE_LIMITED],
   });
 
   check('M-3.11', 'a 429 never wipes the stored key', r.storedKey === KEY_MINE && r.storedInstance === 'inst-mine');
-  check('M-3.12', 'the transient message wins over the URL-key rejection', typeof r.keyError === 'string' && /still saved on this device/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
+  check('M-3.12', 'the customer is told their key is intact', typeof r.keyError === 'string' && /still saved on this device/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
   check('M-3.13', 'the rate limit does not fail the paywall open', r.everPaid === false && r.validating === false);
-  check('M-3.14', "the customer's own key is still pre-filled for a retry", r.prefillKey === KEY_MINE, `prefillKey=${JSON.stringify(r.prefillKey)}`);
+  check('M-3.14', 'the link cost no second rate-limit token', r.calls.length === 1, `calls=${JSON.stringify(r.calls.map((c) => c.key))}`);
 }
 
 {

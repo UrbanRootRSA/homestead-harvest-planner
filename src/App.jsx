@@ -7345,12 +7345,27 @@ export default function App() {
           // validation of the foreign key that triggers the overwrite. Shape
           // ported from FaminePrep crisis-prep-paywall.jsx, which has shipped
           // this guard since its Finding B closure.
+          // N-1 (security re-audit 2026-08-17,
+          // ../../docs/security-reaudit-paywall-fixes-2026-08-17.md): defer on
+          // ANY stored key, not only a different one. The URL-key leg below
+          // validates under skipStoredInstance, so it sends no instance_id and
+          // the server takes the fresh-device path: LS_ACTIVATE mints a NEW
+          // instance and consumes one of three slots. The LemonSqueezy purchase
+          // email is the only link many customers keep, so they use it as a
+          // bookmark and burn a slot on every re-click while believing they are
+          // on one device. Step 2 revalidates the identical key WITH the
+          // instance attached, which unlocks the same way, consumes nothing,
+          // and spends one rate-limit token instead of two. Only the DIFFERENT
+          // key case is a refusal and says so; a same-key deferral is the
+          // customer's own licence winning, so it stays silent.
           const conflictingKey = loadState(LS_KEY, "");
-          if (conflictingKey && conflictingKey !== urlKey) {
+          if (conflictingKey) {
             stripKeyFromUrl();
-            urlKeyError = "A different licence is already stored on this device. Clear it before activating a new one.";
-            // Deliberately NO prefill here: a foreign key must not sit one
-            // click from activation in the customer's own licence input.
+            if (conflictingKey !== urlKey) {
+              urlKeyError = "A different licence is already stored on this device. Clear it before activating a new one.";
+              // Deliberately NO prefill here: a foreign key must not sit one
+              // click from activation in the customer's own licence input.
+            }
           } else {
             // SECURITY: do NOT read LS_INSTANCE on the URL-key path. The URL
             // ?key= value is attacker-controllable; sending the legit customer's
