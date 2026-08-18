@@ -4132,6 +4132,19 @@ function GrowingPlanTab({
           setGraceError(r?.error || "We couldn't reach the licence server. Try again.");
           return;
         }
+        // L-1 (fleet-sweep audit 2026-08-18,
+        // ../docs/audit-sweep-families-2026-08-18.md): a full device pool is
+        // valid:false with `transient` falsy, so it used to fall past both
+        // branches into the comment below - which then activated the pasted key
+        // bare, on the strength of a claim that is not true. The stored key was
+        // never rejected; every slot is simply in use. Same branch, same order
+        // as the stored-key boot leg (search: "A-1 (security re-audit"). Nothing
+        // here wipes, and the server's own pre-check refuses to spend a slot, so
+        // this is about telling the customer the truth one round-trip sooner.
+        if (r?.activation_limit_reached) {
+          setGraceError(r?.error || "This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support.");
+          return;
+        }
         // Stored key definitively rejected - fall through to a fresh
         // activation of the key the user just pasted.
       }

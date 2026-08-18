@@ -104,6 +104,16 @@ function sliceDecl(src, name) {
   throw new Error(`unterminated declaration while extracting: ${name}`);
 }
 
+// A declaration that lives inside a component is indented, so sliceDecl's
+// ^-anchored regex cannot see it. Find the keyword, then hand the tail to the
+// same walker - no second copy of the string/comment state machine.
+function sliceMethod(src, name) {
+  const re = new RegExp(`^[ \\t]+(const|let)\\s+${name}\\b`, 'm');
+  const m = re.exec(src);
+  if (!m) return null;
+  return sliceDecl(src.slice(m.index + m[0].indexOf(m[1])), name);
+}
+
 function bail(msg) {
   console.error(`${msg}\n(the harness is out of step with ${SRC_PATH})`);
   process.exit(1);
@@ -126,6 +136,14 @@ for (const marker of ['const attempt =', 'const commitPaid =', 'GRACE_WINDOW_MS'
   if (!EFFECT.includes(marker)) bail(`the sliced mount effect is missing "${marker}"`);
 }
 
+// L-1: the grace panel's own re-validate leg. It is a component method, not a
+// declaration in the mount effect, so it needs its own slice.
+const GRACE_SAVE = sliceMethod(SRC, 'saveGraceKey');
+if (!GRACE_SAVE) bail('could not slice saveGraceKey out of the source');
+for (const marker of ['validateKeyRemote(', 'onActivateKey', 'setGraceError']) {
+  if (!GRACE_SAVE.includes(marker)) bail(`the sliced saveGraceKey is missing "${marker}"`);
+}
+
 function buildModule() {
   const picked = [];
   for (const name of REQUIRED) {
@@ -146,7 +164,12 @@ function __mountPaywall(useEffect, window, setPaid, setValidating, setKeyError, 
 ${EFFECT}
 }
 
-return { ${picked.map((p) => p.name).join(', ')}, __mountPaywall };
+function __graceSave(graceSaving, graceKey, onActivateKey, setGraceError, setGraceSaving, setLicenceKeyMissing, setGraceKey) {
+${GRACE_SAVE}
+  return saveGraceKey;
+}
+
+return { ${picked.map((p) => p.name).join(', ')}, __mountPaywall, __graceSave };
 `;
   return new Function('localStorage', 'console', 'fetch', body);
 }
@@ -936,6 +959,88 @@ group('A-1s', 'the server raises activation_limit_reached before /activate');
     check('H-1w.4', 'control: a dead key is still wiped', gone2.storedKey === null && gone2.storedInstance === null,
       `hhp_key=${JSON.stringify(gone2.storedKey)} hhp_instance=${JSON.stringify(gone2.storedInstance)}`);
   }
+}
+
+// ══════════════════════════════ L-1: the grace panel's own re-validate leg
+//
+// docs/audit-sweep-families-2026-08-18.md, L-1. saveGraceKey branches on
+// `valid` and `transient` only. A pool-full verdict is valid:false with
+// transient falsy, so it fell past both into a comment that says "stored key
+// definitively rejected" and fired a fresh BARE-key activation of whatever the
+// customer had just pasted. The stored key was never rejected; the device pool
+// was simply full. Nothing is wiped on this leg and the server's A-1 pre-check
+// refuses to burn a slot, so the cost is one wasted round-trip and a comment
+// that asserts something untrue - but the leg is one `else if` away from the
+// boot leg it is supposed to mirror.
+
+group('L-1', 'the grace panel must not answer a full pool with a fresh activation');
+
+async function runGrace({ store, plan, graceKey = KEY_MINE }) {
+  const storage = makeStorage(store);
+  const { fetchStub, calls } = makeServer(plan);
+  const api = make(storage, quietConsole, fetchStub);
+  const out = { graceError: null, saving: [], missing: null, cleared: false, activations: [] };
+  const save = api.__graceSave(
+    false,
+    graceKey,
+    async (k) => { out.activations.push(k); return { ok: false, error: 'the stub refused a fresh activation' }; },
+    (v) => { out.graceError = v; },
+    (v) => { out.saving.push(v); },
+    (v) => { out.missing = v; },
+    (v) => { if (v === '') out.cleared = true; },
+  );
+  await save();
+  const read = (k) => {
+    const raw = storage.getItem(k);
+    if (raw == null) return null;
+    try { return JSON.parse(raw); } catch { return raw; }
+  };
+  return { ...out, calls, storedKey: read('hhp_key'), storedInstance: read('hhp_instance'), pending: storage.getItem('hhp_pending') };
+}
+
+{
+  const r = await runGrace({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [POOL_FULL] });
+  check('L-1.1', 'a full pool does not fire a fresh bare-key activation',
+    r.activations.length === 0, `onActivateKey calls=${JSON.stringify(r.activations)}`);
+  check('L-1.2', 'and the customer reads the pool-full message, not a generic refusal',
+    /activation limit/i.test(String(r.graceError || '')), `graceError=${JSON.stringify(r.graceError)}`);
+  check('L-1.3', 'and the message names the remedy',
+    /deactivate|contact support/i.test(String(r.graceError || '')), `graceError=${JSON.stringify(r.graceError)}`);
+  check('L-1.4', 'and the licence is still on the device',
+    r.storedKey === KEY_MINE && r.storedInstance === 'inst-mine',
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('L-1.5', 'and exactly one round-trip was spent, not two',
+    r.calls.length === 1, `calls=${r.calls.length}`);
+  check('L-1.6', 'and the Save button is released again',
+    r.saving.length >= 2 && r.saving[r.saving.length - 1] === false, JSON.stringify(r.saving));
+}
+
+{
+  // Control: a transient failure already had its branch and must keep it.
+  const r = await runGrace({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [OUTAGE] });
+  check('L-1.c1', 'control: a transient failure still holds, with no activation',
+    r.activations.length === 0 && /try again/i.test(String(r.graceError || '')),
+    `graceError=${JSON.stringify(r.graceError)} activations=${r.activations.length}`);
+}
+
+{
+  // Control: the whole point of the leg. A stored key that validates unlocks
+  // without touching onActivateKey, and closes the grace window behind it.
+  const r = await runGrace({ store: seed({ key: KEY_MINE, instance: 'inst-mine', pending: Date.now() }), plan: [OK('inst-refreshed')] });
+  check('L-1.c2', 'control: a stored key that validates unlocks and clears the grace stamp',
+    r.missing === false && r.cleared && r.pending === null && r.activations.length === 0,
+    `missing=${r.missing} cleared=${r.cleared} pending=${JSON.stringify(r.pending)}`);
+  check('L-1.c3', 'control: and the refreshed instance is persisted',
+    r.storedInstance === 'inst-refreshed', `hhp_instance=${JSON.stringify(r.storedInstance)}`);
+}
+
+{
+  // Control the other way: a genuinely rejected stored key must STILL fall
+  // through to a fresh activation of the pasted key, or the new branch has
+  // swallowed the leg's whole purpose.
+  const r = await runGrace({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [REVOKED] });
+  check('L-1.c4', 'control: a revoked stored key still falls through to a fresh activation',
+    r.activations.length === 1 && r.activations[0] === KEY_MINE, `activations=${JSON.stringify(r.activations)}`);
 }
 
 // --------------------------------------------------------------------- report
