@@ -298,6 +298,11 @@ const SOIL_MIXES = [
   },
 ];
 
+// Canonical ceiling for a soil-component price, per CU FT — the unit the app
+// stores. The Field beside it shows a price per litre in metric mode, so it
+// converts this bound with the value (audit 2026-08-17 L-5, same shape as H-1).
+const SOIL_PRICE_MAX_PER_CUFT = 999;
+
 // US retail bag sizes. Metric (L) threaded through the unit toggle below.
 const BAG_SIZES_CUFT = [1, 1.5, 2];
 const BAG_SIZES_L = [40, 50, 75]; // common UK/AU/ZA compost and topsoil bag sizes
@@ -305,6 +310,29 @@ const BAG_SIZES_L = [40, 50, 75]; // common UK/AU/ZA compost and topsoil bag siz
 // Per-bed quantity cap. Hoisted so the LS sanitiser (loadState path) and the
 // Counter UI cap stay in lock-step - audit #M3.
 const MAX_BEDS_PER_GROUP = 20;
+
+// Canonical bed bounds, in the units the app STORES (feet, inches), named once
+// so BedEditor's Field props and the hhp_beds loader read the SAME number -
+// audit 2026-08-17 H-1. They previously matched only because two independent
+// sets of literals happened to agree, and both were imperial while the Field
+// beside them displayed centimetres. BedEditor converts these for display
+// alongside the value; the loader clamps the stored value against them as-is.
+const BED_LENGTH_FT_MIN = 0.5;
+const BED_LENGTH_FT_MAX = 100;
+const BED_WIDTH_FT_MIN = 0.5;
+const BED_WIDTH_FT_MAX = 50;
+const BED_DIAMETER_FT_MIN = 0.5;
+const BED_DIAMETER_FT_MAX = 50;
+const BED_OUTER_LENGTH_FT_MIN = 1;
+const BED_OUTER_LENGTH_FT_MAX = 100;
+const BED_OUTER_WIDTH_FT_MIN = 1;
+const BED_OUTER_WIDTH_FT_MAX = 50;
+const BED_CUTOUT_LENGTH_FT_MIN = 0;
+const BED_CUTOUT_LENGTH_FT_MAX = 99;
+const BED_CUTOUT_WIDTH_FT_MIN = 0;
+const BED_CUTOUT_WIDTH_FT_MAX = 49;
+const BED_DEPTH_IN_MIN = 4;
+const BED_DEPTH_IN_MAX = 48;
 
 // Module-level counter guarantees unique ids per session AND a per-mount
 // timestamp prefix so a future "import beds from another session" feature
@@ -1733,7 +1761,10 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
             const commitPrice = (v) => {
               if (v === displayPrice) return;
               const cuftPrice = metric ? v * CUFT_TO_L : v;
-              setComponentPrice(c.key, Math.max(0, cuftPrice));
+              // Canonical re-clamp, the H-1 pattern: the Field's max is shown
+              // in the display unit, so the ceiling has to be re-imposed in
+              // $/cu ft after the conversion back - audit 2026-08-17 L-5.
+              setComponentPrice(c.key, Math.max(0, Math.min(SOIL_PRICE_MAX_PER_CUFT, cuftPrice)));
             };
             const pctValue = Number(((mixPctOverrides[c.key] ?? c.pct) * 100).toFixed(1));
             return (
@@ -1766,7 +1797,11 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
                 <Field label={`Price per ${unitVol}`} unit={currency}
                   value={displayPrice}
                   onChange={commitPrice}
-                  min={0} max={999} step={0.1} />
+                  min={0}
+                  max={metric
+                    ? Number((SOIL_PRICE_MAX_PER_CUFT / CUFT_TO_L).toFixed(3))
+                    : SOIL_PRICE_MAX_PER_CUFT}
+                  step={0.1} />
               </div>
             );
           })}
@@ -1894,20 +1929,37 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
   const dDepth = metric ? IN_TO_CM : 1;
   const unitLen = metric ? "m" : "ft";
   const unitDepth = metric ? "cm" : "in";
+  // A bound has to travel in the same unit as the value it bounds - audit
+  // 2026-08-17 H-1. These bounds used to be imperial literals sitting beside a
+  // converted value, so in metric mode Field.commit clamped centimetres against
+  // an inch ceiling: a 60 cm bed snapped to 48 (18.9 in) and the Soil tab then
+  // ordered 21% too little soil, while Length accepted 100 m as if it were the
+  // declared 100 ft. ProduceTargetField (the Fields just above) already
+  // converted its bounds with its value; this is the same shape. Rounded to the
+  // precision the Field renders so a bound and a displayed value can never
+  // disagree in the last decimal.
+  const bLen = (ft) => (metric ? Number((ft * dLen).toFixed(2)) : ft);
+  const bDepth = (inches) => (metric ? Number((inches * dDepth).toFixed(1)) : inches);
   // Skip-if-equal guards. Each commit takes the canonical ft/in value of the
   // field being committed; if the user blurred without editing, the display
   // round-trip would otherwise drift the canonical by ~0.06% per cycle and
   // compound across length/width/depth/diameter/cutouts (8 fields/bed) -
   // audit #H2.
-  const commitLen = (raw, canonicalFt) => {
+  // The canonical re-clamp below is the other half of H-1: the displayed bound
+  // is rounded for the box, so converting an on-the-bound entry back can land a
+  // hair outside the real bound. Clamping in ft/in after the conversion (as
+  // ProduceTargetField does in lb) keeps the two from ever disagreeing.
+  const commitLen = (raw, canonicalFt, minFt, maxFt) => {
     const displayedNow = Number((canonicalFt * dLen).toFixed(2));
     if (raw === displayedNow) return canonicalFt;
-    return metric ? raw / FT_TO_M : raw;
+    const asFt = metric ? raw / FT_TO_M : raw;
+    return Math.max(minFt, Math.min(maxFt, asFt));
   };
   const commitDepth = (raw, canonicalIn) => {
     const displayedNow = Number((canonicalIn * dDepth).toFixed(1));
     if (raw === displayedNow) return canonicalIn;
-    return metric ? raw / IN_TO_CM : raw;
+    const asIn = metric ? raw / IN_TO_CM : raw;
+    return Math.max(BED_DEPTH_IN_MIN, Math.min(BED_DEPTH_IN_MAX, asIn));
   };
 
   return (
@@ -1949,44 +2001,44 @@ function BedEditor({ bed, index, onChange, onRemove, isMobile, metric }) {
           <>
             <Field label="Length" unit={unitLen}
               value={Number((bed.lengthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ lengthFt: commitLen(v, bed.lengthFt) })}
-              min={0.5} max={100} step={0.5} />
+              onChange={(v) => onChange({ lengthFt: commitLen(v, bed.lengthFt, BED_LENGTH_FT_MIN, BED_LENGTH_FT_MAX) })}
+              min={bLen(BED_LENGTH_FT_MIN)} max={bLen(BED_LENGTH_FT_MAX)} step={0.5} />
             <Field label="Width" unit={unitLen}
               value={Number((bed.widthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ widthFt: commitLen(v, bed.widthFt) })}
-              min={0.5} max={50} step={0.5} />
+              onChange={(v) => onChange({ widthFt: commitLen(v, bed.widthFt, BED_WIDTH_FT_MIN, BED_WIDTH_FT_MAX) })}
+              min={bLen(BED_WIDTH_FT_MIN)} max={bLen(BED_WIDTH_FT_MAX)} step={0.5} />
           </>
         )}
         {bed.shape === "circle" && (
           <Field label="Diameter" unit={unitLen}
             value={Number((bed.diameterFt * dLen).toFixed(2))}
-            onChange={(v) => onChange({ diameterFt: commitLen(v, bed.diameterFt) })}
-            min={0.5} max={50} step={0.5} />
+            onChange={(v) => onChange({ diameterFt: commitLen(v, bed.diameterFt, BED_DIAMETER_FT_MIN, BED_DIAMETER_FT_MAX) })}
+            min={bLen(BED_DIAMETER_FT_MIN)} max={bLen(BED_DIAMETER_FT_MAX)} step={0.5} />
         )}
         {bed.shape === "lshape" && (
           <>
             <Field label="Outer length" unit={unitLen}
               value={Number((bed.outerLengthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ outerLengthFt: commitLen(v, bed.outerLengthFt) })}
-              min={1} max={100} step={0.5} />
+              onChange={(v) => onChange({ outerLengthFt: commitLen(v, bed.outerLengthFt, BED_OUTER_LENGTH_FT_MIN, BED_OUTER_LENGTH_FT_MAX) })}
+              min={bLen(BED_OUTER_LENGTH_FT_MIN)} max={bLen(BED_OUTER_LENGTH_FT_MAX)} step={0.5} />
             <Field label="Outer width" unit={unitLen}
               value={Number((bed.outerWidthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ outerWidthFt: commitLen(v, bed.outerWidthFt) })}
-              min={1} max={50} step={0.5} />
+              onChange={(v) => onChange({ outerWidthFt: commitLen(v, bed.outerWidthFt, BED_OUTER_WIDTH_FT_MIN, BED_OUTER_WIDTH_FT_MAX) })}
+              min={bLen(BED_OUTER_WIDTH_FT_MIN)} max={bLen(BED_OUTER_WIDTH_FT_MAX)} step={0.5} />
             <Field label="Cutout length" unit={unitLen}
               value={Number((bed.cutoutLengthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ cutoutLengthFt: commitLen(v, bed.cutoutLengthFt) })}
-              min={0} max={99} step={0.5} />
+              onChange={(v) => onChange({ cutoutLengthFt: commitLen(v, bed.cutoutLengthFt, BED_CUTOUT_LENGTH_FT_MIN, BED_CUTOUT_LENGTH_FT_MAX) })}
+              min={bLen(BED_CUTOUT_LENGTH_FT_MIN)} max={bLen(BED_CUTOUT_LENGTH_FT_MAX)} step={0.5} />
             <Field label="Cutout width" unit={unitLen}
               value={Number((bed.cutoutWidthFt * dLen).toFixed(2))}
-              onChange={(v) => onChange({ cutoutWidthFt: commitLen(v, bed.cutoutWidthFt) })}
-              min={0} max={49} step={0.5} />
+              onChange={(v) => onChange({ cutoutWidthFt: commitLen(v, bed.cutoutWidthFt, BED_CUTOUT_WIDTH_FT_MIN, BED_CUTOUT_WIDTH_FT_MAX) })}
+              min={bLen(BED_CUTOUT_WIDTH_FT_MIN)} max={bLen(BED_CUTOUT_WIDTH_FT_MAX)} step={0.5} />
           </>
         )}
         <Field label="Depth" unit={unitDepth}
           value={Number((bed.depthIn * dDepth).toFixed(1))}
           onChange={(v) => onChange({ depthIn: commitDepth(v, bed.depthIn) })}
-          min={4} max={48} step={1} />
+          min={bDepth(BED_DEPTH_IN_MIN)} max={bDepth(BED_DEPTH_IN_MAX)} step={1} />
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, color: T.tx2, marginBottom: 6 }}>
             How many like this?
@@ -5602,6 +5654,10 @@ const COST_SAVINGS_FIELDS = [
 const DEFAULT_SETUP_COSTS = {
   beds: 120, soil: 80, seeds: 35, tools: 40, irrigation: 25,
 };
+// Canonical ceiling for a grocery price, per LB — the unit the app stores. The
+// Field beside it shows a price per kg in metric mode, so it converts this
+// bound with the value (audit 2026-08-17 L-5, same shape as H-1).
+const GROCERY_PRICE_MAX_PER_LB = 500;
 
 // Shared empty-state banner for paid tabs that depend on the
 // Self-Sufficiency crop selection. Rendered when baseResults.perCrop is
@@ -5966,9 +6022,16 @@ function CostSavingsCalculator({
                             : Number(r.pricePerLb.toFixed(2));
                           if (v === displayedNow) return;
                           const asLb = metric ? v * LB_TO_KG : v;
-                          updatePrice(r.cropId, Math.max(0, Number(asLb.toFixed(6))));
+                          // Canonical re-clamp, the H-1 pattern: the Field's
+                          // max is shown per kg in metric, so the ceiling has
+                          // to be re-imposed in $/lb after the conversion back
+                          // - audit 2026-08-17 L-5.
+                          updatePrice(r.cropId, Math.max(0, Math.min(GROCERY_PRICE_MAX_PER_LB, Number(asLb.toFixed(6)))));
                         }}
-                        min={0} max={500} />
+                        min={0}
+                        max={metric
+                          ? Number((GROCERY_PRICE_MAX_PER_LB / LB_TO_KG).toFixed(2))
+                          : GROCERY_PRICE_MAX_PER_LB} />
                     </div>
                     <div style={{
                       height: 12, borderRadius: 6, background: T.card,
@@ -7003,14 +7066,16 @@ export default function App() {
           return {
             ...def,
             ...b,
-            lengthFt:       sanitizeNum(b.lengthFt,       def.lengthFt,       0.5, 100),
-            widthFt:        sanitizeNum(b.widthFt,        def.widthFt,        0.5, 50),
-            depthIn:        sanitizeNum(b.depthIn,        def.depthIn,        4,   48),
-            diameterFt:     sanitizeNum(b.diameterFt,     def.diameterFt,     0.5, 50),
-            outerLengthFt:  sanitizeNum(b.outerLengthFt,  def.outerLengthFt,  1,   100),
-            outerWidthFt:   sanitizeNum(b.outerWidthFt,   def.outerWidthFt,   1,   50),
-            cutoutLengthFt: sanitizeNum(b.cutoutLengthFt, def.cutoutLengthFt, 0,   99),
-            cutoutWidthFt:  sanitizeNum(b.cutoutWidthFt,  def.cutoutWidthFt,  0,   49),
+            // Same named bounds BedEditor's Fields use (audit 2026-08-17 H-1),
+            // so the editor and the loader can no longer drift apart.
+            lengthFt:       sanitizeNum(b.lengthFt,       def.lengthFt,       BED_LENGTH_FT_MIN,        BED_LENGTH_FT_MAX),
+            widthFt:        sanitizeNum(b.widthFt,        def.widthFt,        BED_WIDTH_FT_MIN,         BED_WIDTH_FT_MAX),
+            depthIn:        sanitizeNum(b.depthIn,        def.depthIn,        BED_DEPTH_IN_MIN,         BED_DEPTH_IN_MAX),
+            diameterFt:     sanitizeNum(b.diameterFt,     def.diameterFt,     BED_DIAMETER_FT_MIN,      BED_DIAMETER_FT_MAX),
+            outerLengthFt:  sanitizeNum(b.outerLengthFt,  def.outerLengthFt,  BED_OUTER_LENGTH_FT_MIN,  BED_OUTER_LENGTH_FT_MAX),
+            outerWidthFt:   sanitizeNum(b.outerWidthFt,   def.outerWidthFt,   BED_OUTER_WIDTH_FT_MIN,   BED_OUTER_WIDTH_FT_MAX),
+            cutoutLengthFt: sanitizeNum(b.cutoutLengthFt, def.cutoutLengthFt, BED_CUTOUT_LENGTH_FT_MIN, BED_CUTOUT_LENGTH_FT_MAX),
+            cutoutWidthFt:  sanitizeNum(b.cutoutWidthFt,  def.cutoutWidthFt,  BED_CUTOUT_WIDTH_FT_MIN,  BED_CUTOUT_WIDTH_FT_MAX),
             // Round-3 H2: clampInt is (v, min, max); the prior 4-arg call silently
             // discarded MAX_BEDS_PER_GROUP, clamping every loaded qty to 1.
             qty:            Math.round(sanitizeNum(b.qty, def.qty, 1, MAX_BEDS_PER_GROUP)),
