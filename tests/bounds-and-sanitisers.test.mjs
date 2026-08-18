@@ -109,6 +109,7 @@ function bail(msg) {
 // Every bound the fix names, plus the unit factors and the volume formula the
 // consequence is measured through.
 const NAMES = [
+  'sanitizeNum', 'clampInt', 'importedNumber',
   'FT_TO_M', 'IN_TO_CM', 'LB_TO_KG', 'CUFT_TO_L',
   'SOIL_PRICE_MAX_PER_CUFT', 'GROCERY_PRICE_MAX_PER_LB',
   'BED_LENGTH_FT_MIN', 'BED_LENGTH_FT_MAX',
@@ -428,6 +429,115 @@ group('L-5', 'a price bound converts with the price it bounds');
   const kgMax = Number((api.GROCERY_PRICE_MAX_PER_LB / api.LB_TO_KG).toFixed(2));
   check('L-5.3', 'the metric grocery ceiling is the lb ceiling per kg', near(kgMax, 1102.31, 0.01), `max=${kgMax}/kg`);
   check('L-5.4', 'and both canonical ceilings are re-imposed on commit', /Math\.min\(SOIL_PRICE_MAX_PER_CUFT/.test(SRC) && /Math\.min\(GROCERY_PRICE_MAX_PER_LB/.test(SRC), 'a commit path is missing its canonical clamp');
+}
+
+// ═══════════════════ M-1 / M-2: junk lands on the DEFAULT, never on the minimum
+
+group('M-1', 'sanitizeNum reaches its declared default for every junk value');
+
+// The twelve values the audit measured. `undefined` is the control: an absent
+// field behaved correctly the whole time, and the divergence between it and
+// `null` is what the finding is.
+const JUNK = [
+  ['null', null], ["''", ''], ['[]', []], ['false', false], ["' '", ' '],
+  ["'x'", 'x'], ['{}', {}], ["'5abc'", '5abc'], ['true', true], ["['5']", ['5']],
+  ['NaN', NaN], ['undefined', undefined],
+];
+
+// Every triple the hhp_beds loader passes, lifted from the source so a future
+// field is covered without editing this list. def comes from DEFAULT_BED.
+const LOADER_TRIPLES = [];
+{
+  const defaults = new Function(`${sliceDecl(SRC, 'BED_ID_SESSION')}
+${sliceDecl(SRC, 'bedIdCounter')}
+${sliceDecl(SRC, 'DEFAULT_BED')}
+return DEFAULT_BED();`)();
+  const scope = { ...BED_CONSTS };
+  const ev = (e) => new Function(...Object.keys(scope), `return (${e});`)(...Object.values(scope));
+  for (const m of SRC.matchAll(/(\w+):\s*(?:Math\.round\()?sanitizeNum\(\s*b\.\w+,\s*def\.\w+,\s*([^,]+),\s*([^)]+)\)/g)) {
+    LOADER_TRIPLES.push({ field: m[1], def: defaults[m[1]], min: ev(m[2].trim()), max: ev(m[3].trim()) });
+  }
+}
+if (LOADER_TRIPLES.length !== 9) bail(`expected 9 sanitizeNum triples in the hhp_beds loader, found ${LOADER_TRIPLES.length}`);
+
+{
+  const landedOnMin = [];
+  const landedElsewhere = [];
+  for (const { field, def, min, max } of LOADER_TRIPLES) {
+    for (const [label, v] of JUNK) {
+      const out = api.sanitizeNum(v, def, min, max);
+      if (out === def) continue;
+      if (out === min) landedOnMin.push(`${field}(${label})→${out}`);
+      else landedElsewhere.push(`${field}(${label})→${out}`);
+    }
+  }
+  check('M-1.1', `all ${JUNK.length} junk values on all 9 bed fields land on the declared default`,
+    landedOnMin.length === 0 && landedElsewhere.length === 0,
+    [...landedOnMin, ...landedElsewhere].slice(0, 6).join(', '));
+  check('M-1.2', 'in particular null no longer behaves differently from an absent field',
+    LOADER_TRIPLES.every(({ def, min, max }) => api.sanitizeNum(null, def, min, max) === api.sanitizeNum(undefined, def, min, max)),
+    'null and undefined still diverge');
+}
+
+{
+  // The other half of the contract: a REAL number is not junk. Out of range
+  // clamps to the nearest bound, in range passes through, and a numeric string
+  // is repaired rather than discarded.
+  const t = LOADER_TRIPLES.find((x) => x.field === 'depthIn');
+  check('M-1.3', 'a real in-range number is untouched', api.sanitizeNum(18, t.def, t.min, t.max) === 18);
+  check('M-1.4', 'a real number above the max clamps to the max', api.sanitizeNum(9000, t.def, t.min, t.max) === t.max);
+  check('M-1.5', 'a real number below the min clamps to the min', api.sanitizeNum(-9000, t.def, t.min, t.max) === t.min);
+  check('M-1.6', 'a numeric string is repaired, not discarded', api.sanitizeNum('18.5', t.def, t.min, t.max) === 18.5);
+  check('M-1.7', 'a real zero survives where the field allows it', api.sanitizeNum(0, 4, 0, 99) === 0);
+  // Round-trip: a clean bed must come out of the loader byte-identical.
+  const clean = { lengthFt: 12, widthFt: 4, depthIn: 18, diameterFt: 4, outerLengthFt: 8, outerWidthFt: 6, cutoutLengthFt: 4, cutoutWidthFt: 3, qty: 2 };
+  const after = {};
+  for (const { field, def, min, max } of LOADER_TRIPLES) after[field] = api.sanitizeNum(clean[field], def, min, max);
+  check('M-1.8', 'a clean stored bed round-trips unchanged', JSON.stringify(after) === JSON.stringify(clean), JSON.stringify(after));
+}
+
+group('M-2', 'clampInt takes a fallback, and every call site passes one');
+
+{
+  const junkToDefault = JUNK.every(([, v]) => api.clampInt(v, 4, 1, 12) === 4);
+  check('M-2.1', 'every junk familySize lands on 4, not on the minimum of 1', junkToDefault,
+    JUNK.filter(([, v]) => api.clampInt(v, 4, 1, 12) !== 4).map(([l]) => l).join(', '));
+  check('M-2.2', 'a real family size still clamps into 1-12', api.clampInt(50, 4, 1, 12) === 12 && api.clampInt(0, 4, 1, 12) === 1 && api.clampInt(6, 4, 1, 12) === 6);
+  check('M-2.3', 'and still rounds to an integer', api.clampInt(5.6, 4, 1, 12) === 6 && api.clampInt('5.4', 4, 1, 12) === 5);
+  // The produce target, whose junk value pinned the KPI at 100%.
+  const ppp = (v) => api.sanitizeNum(v, 300, 50, 800);
+  check('M-2.4', 'every junk produce target lands on 300 lb, not on the 50 lb minimum', JUNK.every(([, v]) => ppp(v) === 300),
+    JUNK.filter(([, v]) => ppp(v) !== 300).map(([l]) => l).join(', '));
+  // referenceYear: same helper, and the pre-gate that used to coerce is gone.
+  const Y = 2026;
+  check('M-2.5', 'a junk reference year is this year, not last year', JUNK.every(([, v]) => api.clampInt(v, Y, Y - 1, Y + 2) === Y),
+    JUNK.filter(([, v]) => api.clampInt(v, Y, Y - 1, Y + 2) !== Y).map(([l]) => l).join(', '));
+}
+
+{
+  // A guard lives where it is CALLED. A stale three-argument call would read
+  // the caller's `min` as the fallback and the `max` as the min, silently, so
+  // the call sites are asserted by shape as well as the helper by behaviour.
+  const calls = [...SRC.matchAll(/\bclampInt\(/g)].map((m) => {
+    let i = m.index + m[0].length;
+    let depth = 1;
+    let args = 1;
+    while (i < SRC.length && depth > 0) {
+      const c = SRC[i];
+      if (c === '(' || c === '[' || c === '{') depth += 1;
+      else if (c === ')' || c === ']' || c === '}') depth -= 1;
+      else if (c === ',' && depth === 1) args += 1;
+      i += 1;
+    }
+    return args;
+  });
+  check('M-2.6', `every clampInt call site passes 4 arguments (${calls.length} found)`,
+    calls.length > 0 && calls.every((n) => n === 4), `arg counts: ${calls.join(', ')}`);
+  check('M-2.7', 'both sanitisers route through the one junk gate',
+    /const sanitizeNum[\s\S]{0,400}?importedNumber\(v\)/.test(SRC) && /const clampInt[\s\S]{0,600}?importedNumber\(v\)/.test(SRC),
+    'a sanitiser still coerces with a bare Number(v)');
+  check('M-2.8', 'and no hand-rolled fourth copy has reappeared',
+    !/Number\.isFinite\(Number\(/.test(SRC), 'a Number.isFinite(Number(...)) guard is back in the source');
 }
 
 // --------------------------------------------------------------------- report

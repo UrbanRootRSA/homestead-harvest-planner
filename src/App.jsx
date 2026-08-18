@@ -374,24 +374,57 @@ const PLANTING_DATE_DEFAULT_CROPS = [
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Utilities ──
 // ═══════════════════════════════════════════════════════════════════════════
-// NaN-coerced inputs return `min` (NOT a caller-supplied fallback — no
-// fallback parameter exists). When you need an explicit fallback distinct
-// from min, use sanitizeNum(v, fallback, min, max) below.
-const clampInt = (v, min, max) => {
-  const n = Math.round(Number(v));
-  if (!Number.isFinite(n)) return min;
+// Is this stored value a number at all? Every numeric field that arrives from
+// localStorage passes through one of the two sanitisers below, and both start
+// here - audit 2026-08-17 M-1/M-2.
+//
+// Both sanitisers used to read Number(v) and test the result for finiteness,
+// which is the Number(null) === 0 trap: null, "", [], false and " " all coerce
+// to a finite 0, so the fallback branch was dead for them and the clamp then
+// lifted that 0 to the field's MINIMUM. Measured: a stored familySize of null
+// became 1 and a stored produce target of "" became 50 lb, which together
+// pinned the hero self-sufficiency KPI at 100.0% where the honest answer was
+// 47.8%, and shrank the garden area sent to /api/generate from 277 to 81 sq ft.
+// A field simply ABSENT behaved correctly throughout; that undefined-vs-null
+// divergence was the bug.
+//
+// Ported from ARX Vault's importedNumber (Asset-Register/src/App.jsx:2107).
+// Only a number or a non-empty string may pass: Number(true) is 1, Number([])
+// is 0 and Number(['5']) is 5, so a boolean, an array or an object would each
+// land a plausible figure the customer never entered. A numeric STRING is
+// repaired rather than discarded, because a hand-edited payload quotes its
+// numbers and "12" was always meant to be 12.
+const importedNumber = (v) => {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v !== "string" || v.trim() === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+// Sanitise any numeric field loaded from localStorage / import. Junk lands on
+// `fallback`. A REAL number outside [min, max] is a different fact - the
+// quantity is real, the field just cannot express it - so it takes the nearest
+// bound (Vault's importedNumberIn, Asset-Register/src/App.jsx:2120). Use this
+// for every numeric field in every schema loader: one corrupt entry spread into
+// a defaults object otherwise cascades a wrong number through every downstream
+// calculation.
+const sanitizeNum = (v, fallback, min = -Infinity, max = Infinity) => {
+  const n = importedNumber(v);
+  if (n === null) return fallback;
   return Math.max(min, Math.min(max, n));
 };
 
-// Sanitise any numeric field loaded from localStorage / import. Returns the
-// fallback when the value isn't a finite number, otherwise clamps to [min, max].
-// Use this for every numeric field in every schema loader - a single corrupt
-// entry spread into a defaults object otherwise cascades NaN through every
-// downstream calculation.
-const sanitizeNum = (v, fallback, min = -Infinity, max = Infinity) => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
+// The integer form. This used to take (v, min, max) with NO fallback parameter,
+// documented as deliberate, so every unparseable value landed on `min`. It has
+// one now and the signature is (v, fallback, min, max) - both call sites pass
+// it, and the suite asserts no three-argument call survives, because a stale
+// one would silently read the fallback as the minimum. (The mirror of the
+// round-3 H2 bug, where a four-argument call hit a three-argument signature.)
+const clampInt = (v, fallback, min, max) => {
+  const n = importedNumber(v);
+  if (n === null) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 };
 
 const fmtInt = (n) => {
@@ -7019,16 +7052,24 @@ export default function App() {
     const h = loadState(LS_HEMISPHERE, "north");
     return h === "south" ? "south" : "north";
   });
-  const [producePerPerson, setProducePerPerson] = useState(() => {
-    const raw = loadState(LS_PRODUCE_TARGET, DEFAULT_PRODUCE_PER_PERSON_LBS);
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return DEFAULT_PRODUCE_PER_PERSON_LBS;
-    return Math.max(MIN_PRODUCE_PER_PERSON_LBS, Math.min(MAX_PRODUCE_PER_PERSON_LBS, n));
-  });
+  // Was a third hand-rolled copy of the sanitiser, and carried the same
+  // Number("") === 0 hole: a stored "" landed on the 50 lb MINIMUM, not the
+  // 300 lb default, and the hero KPI then read 100% against a 200 lb household
+  // target - audit 2026-08-17 M-2. One helper, one behaviour.
+  const [producePerPerson, setProducePerPerson] = useState(() => sanitizeNum(
+    loadState(LS_PRODUCE_TARGET, DEFAULT_PRODUCE_PER_PERSON_LBS),
+    DEFAULT_PRODUCE_PER_PERSON_LBS,
+    MIN_PRODUCE_PER_PERSON_LBS,
+    MAX_PRODUCE_PER_PERSON_LBS,
+  ));
 
   // Calculator state
+  // (v, fallback, min, max). The fallback matches the loadState default, so a
+  // key that is absent and a key that holds junk both give a family of 4 -
+  // before, junk gave a family of 1 - audit 2026-08-17 M-2. Bounds match the
+  // Counter at the use site (1-12).
   const [familySize, setFamilySize] = useState(() =>
-    clampInt(loadState(LS_FAMILY, 4), 1, 12));
+    clampInt(loadState(LS_FAMILY, 4), 4, 1, 12));
   // M4 closure 2026-06-10: goal was the only calculator input that didn't
   // persist - a reload silently reset the 0.5x/0.75x/1.0x demand multiplier
   // to "Fresh + some preserving", shrinking every plant count, the hero KPI,
@@ -7148,9 +7189,11 @@ export default function App() {
       selectedCrops: Array.isArray(saved.selectedCrops)
         ? saved.selectedCrops.filter((id) => CROPS[id])
         : defaults.selectedCrops,
-      referenceYear: Number.isFinite(Number(saved.referenceYear))
-        ? clampInt(Number(saved.referenceYear), thisYear - 1, thisYear + 2)
-        : thisYear,
+      // The pre-gate this replaces called Number() on the stored value first,
+      // which is the hole itself: null, "", [] and false all coerced to a
+      // finite 0, passed the gate, and were clamped to thisYear - 1. clampInt
+      // now takes the raw value and the same `thisYear` the else branch used.
+      referenceYear: clampInt(saved.referenceYear, thisYear, thisYear - 1, thisYear + 2),
       sowMethodChoice: typeof saved.sowMethodChoice === "object" && saved.sowMethodChoice
         ? Object.fromEntries(Object.entries(saved.sowMethodChoice).filter(
             ([id, m]) => CROPS[id] && (m === "transplant" || m === "direct")
