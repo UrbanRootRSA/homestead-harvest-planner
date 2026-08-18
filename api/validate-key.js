@@ -141,6 +141,31 @@ async function callLs(endpoint, params) {
 const ACTIVATION_LIMIT_RE = /activation limit|activation_limit/i;
 const ACTIVATION_LIMIT_MESSAGE = "This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support.";
 
+// H-1 (fleet-sweep audit 2026-08-18,
+// ../docs/audit-sweep-families-2026-08-18.md): which upstream statuses may
+// carry a licence VERDICT at all. The R2-H1 guards below ask only whether the
+// BODY looks like a business error, so an LS-edge throttle or WAF refusal that
+// happened to serialise any `error` string skipped the 502 and fell into the
+// definitive bail - HTTP 200 valid:false, which the client answers by DELETING
+// hhp_key and hhp_instance, silently, on a licence that is fine. Whether a
+// paying customer kept their licence depended on which body shape LS's edge
+// chose to send.
+// LemonSqueezy states verdicts on 200 and business errors on 200/400/404 -
+// tests/paywall-mount-chain.test.mjs pins all three (A-1s.7 a 400 "activation
+// limit reached", A-1s.10 a 404 "license_key not found"). Every other status is
+// its EDGE, not its licence API: 429 is a throttle, 403 a refusal, 401 an auth
+// fault. None of them is a statement about a key. Keep the set closed rather
+// than listing edge statuses - a status LS has never used is not a verdict
+// either. Reference: Crypto-Heatmap api/validate-key.js (`f977e59` 429,
+// `214cd29` 403).
+const LS_VERDICT_STATUSES = new Set([200, 400, 404]);
+// A server fault must never read as a verdict on the customer's key.
+function lsEdgeMessage(status) {
+  return status === 429
+    ? "Licence server busy. Try again in a minute."
+    : "Licence server temporarily unavailable. Try again shortly.";
+}
+
 function normaliseLsError(errStr) {
   if (ACTIVATION_LIMIT_RE.test(errStr)) return ACTIVATION_LIMIT_MESSAGE;
   if (/expired/i.test(errStr)) return "This licence key has expired.";
@@ -229,6 +254,14 @@ export default async function handler(req, res) {
       // flow to the definitive bail below, exactly as before.
       if (preCheck.status !== 200 && !(preCheck.json && preCheck.json.error)) {
         return res.status(502).json({ valid: false, error: "Licence server unreachable. Try again." });
+      }
+      // H-1: the other half of the same question. The guard above catches an
+      // unrecognisable BODY; this one catches an unrecognisable STATUS, which
+      // an `error` string cannot promote into a verdict. It sits BELOW so the
+      // empty-body case keeps its own message and every audited control row
+      // stays byte-identical.
+      if (!LS_VERDICT_STATUSES.has(preCheck.status)) {
+        return res.status(502).json({ valid: false, error: lsEdgeMessage(preCheck.status) });
       }
       // Bail early on a confirmed-bad key (e.g. "license_key not found") so
       // the fail-closed store compare below can't mislabel it as a
@@ -337,6 +370,11 @@ export default async function handler(req, res) {
     // (e.g. 404 "license_key not found") stay definitive exactly as before.
     if (ls.status !== 200 && !js.error) {
       return res.status(502).json({ valid: false, error: "Licence server unreachable. Try again." });
+    }
+    // H-1: same pair as the pre-check leg. This site covers BOTH the
+    // stored-instance validate (every mount of a paid device) and /activate.
+    if (!LS_VERDICT_STATUSES.has(ls.status)) {
+      return res.status(502).json({ valid: false, error: lsEdgeMessage(ls.status) });
     }
 
     // LS returns error strings inline when invalid.

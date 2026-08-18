@@ -822,6 +822,120 @@ group('A-1s', 'the server raises activation_limit_reached before /activate');
     });
     check('A-1w.4', 'a dead key on the same leg is still wiped', gone.storedKey === null, `hhp_key=${JSON.stringify(gone.storedKey)}`);
   }
+
+  // ════════════════════════════ H-1: which LS statuses may carry a VERDICT
+  //
+  // docs/audit-sweep-families-2026-08-18.md, H-1. Both R2-H1 guards read
+  // "a non-200 WITHOUT a recognised business error is an anomaly", so a
+  // throttle or a WAF refusal that happened to serialise ANY `error` string
+  // skipped the 502 and fell into the definitive bail below it - HTTP 200
+  // valid:false, which the client answers by DELETING hhp_key + hhp_instance.
+  // Coverage depended on which body shape the upstream happened to send.
+  //
+  // The rule: LemonSqueezy states verdicts on 200 and business errors on
+  // 200/400/404 - all three are pinned by the A-1s cases above (A-1s.7 is a
+  // 400 activation-limit rejection, A-1s.10 a 404 "license_key not found").
+  // Every other status is its edge, and an edge is never a verdict.
+
+  group('H-1s', 'an LS status that is not a verdict may never become one');
+
+  // Each of the three legs that consumes an LS response, against each of the
+  // edge statuses LS's own guard comments name (429/403) plus one more (401)
+  // to prove the rule is a class and not two special cases.
+  const EDGE_BODY = {
+    401: { error: 'Unauthorized' },
+    403: { error: 'Forbidden' },
+    429: { error: 'Too many requests. Please slow down.' },
+  };
+  const HEALTHY_PRE = { status: 200, body: { valid: true, license_key: { status: 'active', activation_limit: 3, activation_usage: 1 }, meta: LS_META } };
+
+  for (const status of [429, 403, 401]) {
+    const body = EDGE_BODY[status];
+
+    // Leg 1 - the bare-key pre-check: a pasted key, a ?key= link, or a stored
+    // key with no instance. This is the leg a first-time customer takes.
+    const pre = await runServer({ key: KEY_MINE }, { validate: { status, body } });
+    check(`H-1s.${status}a`, `an LS ${status} with an error body is transient on the pre-check leg`,
+      pre.status === 502, `http=${pre.status} ${JSON.stringify(pre.body)}`);
+    check(`H-1s.${status}b`, 'and never reached /activate',
+      pre.legs.length === 1 && pre.legs[0].leg === 'validate', `legs=${JSON.stringify(pre.legs.map((l) => l.leg))}`);
+    check(`H-1s.${status}c`, 'and the copy blames the server, never the key',
+      typeof pre.body.error === 'string' && !/not found|invalid|could not be validated|different product|not active/i.test(pre.body.error),
+      JSON.stringify(pre.body.error));
+
+    // Leg 2 - the stored-instance validate leg: every mount of a paid device.
+    const stored = await runServer({ key: KEY_MINE, instance_id: 'inst-mine' }, { validate: { status, body } });
+    check(`H-1s.${status}d`, `an LS ${status} is transient on the stored-instance leg too`,
+      stored.status === 502, `http=${stored.status} ${JSON.stringify(stored.body)}`);
+
+    // Leg 3 - /activate itself, reached only after a healthy pre-check.
+    const act = await runServer({ key: KEY_MINE }, { validate: HEALTHY_PRE, activate: { status, body } });
+    check(`H-1s.${status}e`, `an LS ${status} is transient on the /activate leg too`,
+      act.status === 502 && act.legs.length === 2, `http=${act.status} legs=${act.legs.length} ${JSON.stringify(act.body)}`);
+  }
+
+  // Controls. Every one of these is a row of the audit's measured table and
+  // must come out of the fix byte-identical - including the message, which is
+  // why the status guard sits BELOW the empty-body guard rather than above it.
+  {
+    const noBody = await runServer({ key: KEY_MINE }, { validate: { status: 429, body: {} } });
+    check('H-1s.c1', 'control: an LS 429 with no error body was already transient',
+      noBody.status === 502 && noBody.body.error === 'Licence server unreachable. Try again.',
+      `http=${noBody.status} ${JSON.stringify(noBody.body)}`);
+
+    const fivexx = await runServer({ key: KEY_MINE }, { validate: { status: 503, body: { error: 'Service Unavailable' } } });
+    check('H-1s.c2', 'control: an LS 503 stays transient with its own message',
+      fivexx.status === 502 && fivexx.body.error === 'Licence server unreachable. Try again.',
+      `http=${fivexx.status} ${JSON.stringify(fivexx.body)}`);
+
+    const dead = await runServer({ key: KEY_MINE }, { validate: { status: 404, body: { valid: false, error: 'license_key not found' } } });
+    check('H-1s.c3', 'control: a 404 "not found" is STILL definitive, or nothing ever gets wiped',
+      dead.status === 200 && dead.body.valid === false && !dead.body.activation_limit_reached,
+      `http=${dead.status} ${JSON.stringify(dead.body)}`);
+
+    const full = await runServer({ key: KEY_MINE }, { validate: { status: 400, body: { valid: false, error: 'invalid: activation_limit reached for this license key' } } });
+    check('H-1s.c4', 'control: a 400 activation-limit rejection is STILL a flagged verdict',
+      full.status === 200 && full.body.activation_limit_reached === true,
+      `http=${full.status} ${JSON.stringify(full.body)}`);
+
+    const good = await runServer({ key: KEY_MINE }, {
+      validate: HEALTHY_PRE,
+      activate: { status: 200, body: { activated: true, license_key: { status: 'active' }, instance: { id: 'inst-new' }, meta: LS_META } },
+    });
+    check('H-1s.c5', 'control: a healthy key still activates and is granted',
+      good.status === 200 && good.body.valid === true && good.body.instance_id === 'inst-new',
+      `http=${good.status} ${JSON.stringify(good.body)}`);
+  }
+
+  group('H-1w', 'the wire case: an LS throttle must not de-license a paying customer');
+
+  {
+    // The whole harm, end to end: the REAL handler's answer to an LS 429 goes
+    // into the REAL mount chain, seeded with a stored, activated licence.
+    const r = await runServer({ key: KEY_MINE, instance_id: 'inst-mine' }, {
+      validate: { status: 429, body: { error: 'Too many requests. Please slow down.' } },
+    });
+    const kept = await mount({
+      store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+      plan: [{ status: r.status, body: r.body }],
+    });
+    check('H-1w.1', 'the licence survives an LS throttle', kept.storedKey === KEY_MINE, `hhp_key=${JSON.stringify(kept.storedKey)}`);
+    check('H-1w.2', 'and so does the instance pointer', kept.storedInstance === 'inst-mine', `hhp_instance=${JSON.stringify(kept.storedInstance)}`);
+    check('H-1w.3', 'and the customer is told it is the server, not their key',
+      /still saved on this device/i.test(String(kept.keyError || '')), `keyError=${JSON.stringify(kept.keyError)}`);
+
+    // Control: the same leg must still wipe a genuinely dead key, or the
+    // softening has grown wide enough to keep revoked licences alive.
+    const dead = await runServer({ key: KEY_MINE, instance_id: 'inst-mine' }, {
+      validate: { status: 404, body: { valid: false, error: 'license_key not found' } },
+    });
+    const gone2 = await mount({
+      store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+      plan: [{ status: dead.status, body: dead.body }],
+    });
+    check('H-1w.4', 'control: a dead key is still wiped', gone2.storedKey === null && gone2.storedInstance === null,
+      `hhp_key=${JSON.stringify(gone2.storedKey)} hhp_instance=${JSON.stringify(gone2.storedInstance)}`);
+  }
 }
 
 // --------------------------------------------------------------------- report
