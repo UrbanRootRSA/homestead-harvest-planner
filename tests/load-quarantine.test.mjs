@@ -479,6 +479,55 @@ function row(label, live, quarantined, verdict) {
   }
 }
 
+// ------------------------------------- 7b. two corruptions, one millisecond
+// L-2 of ../docs/audit-sweep-families-2026-08-18.md, and item 11 of the
+// workspace fleet ledger. The stamp is millisecond-resolution with no
+// step-past-taken-keys, so two DIFFERENT unparseable payloads for one key
+// inside a single millisecond share a storage key, and the second write
+// destroys the first - with exactly the write that exists to stop bytes being
+// destroyed. Near-unreachable: it needs a third-party writer racing the mount,
+// because each key is read once per mount and a re-read of the same bytes is
+// de-duplicated by content (case 5). Cheap to close.
+// Reference: Property-Portfolio/src/storage.js (Mortar).
+
+if (fixPresent.includes('quarantineRaw')) {
+  const store = makeStorage({});
+  const { api } = tab(store);
+  const RAW_A = '{"beds":[{"len":8}';
+  const RAW_B = '{"beds":[{"len":4}';
+  const RealDate = Date;
+  // Freeze the clock. The collision only exists inside one millisecond, so on a
+  // real clock this case would pass for the wrong reason.
+  const FROZEN = RealDate.parse('2026-08-18T15:43:58.380Z');
+  globalThis.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [FROZEN])); }
+    static now() { return FROZEN; }
+  };
+  try {
+    api.quarantineRaw(LS_VALUES.LS_BEDS, RAW_A);
+    api.quarantineRaw(LS_VALUES.LS_BEDS, RAW_B);
+  } finally {
+    globalThis.Date = RealDate;
+  }
+
+  const copies = store.keys().filter((k) => k.startsWith(CORRUPT_PREFIX));
+  const keptA = scan(store, RAW_A).length > 0;
+  const keptB = scan(store, RAW_B).length > 0;
+  row('two corruptions of one key, clock frozen',
+    'n/a',
+    `${copies.length} cop${copies.length === 1 ? 'y' : 'ies'}`,
+    keptA && keptB ? 'both recoverable' : `${keptA ? '' : 'FIRST LOST '}${keptB ? '' : 'SECOND LOST'}`.trim());
+
+  if (!keptA) failures.push('stamp collision: the FIRST payload was overwritten and is unrecoverable');
+  if (!keptB) failures.push('stamp collision: the SECOND payload never reached storage');
+  if (copies.length !== 2) failures.push(`stamp collision: ${copies.length} quarantine copies for 2 distinct payloads`);
+  for (const k of copies) {
+    if (!k.startsWith(`${CORRUPT_PREFIX}${LS_VALUES.LS_BEDS}.`)) {
+      failures.push(`stamp collision: quarantine key ${k} no longer names the key it came from, so support cannot ask for it`);
+    }
+  }
+}
+
 // ------------------------------------------------------- 8. source-shape guard
 // Runtime proof covers the mechanism the harness drives. This covers the block
 // itself: after the fix no persisted key may go through a bare effect, or the

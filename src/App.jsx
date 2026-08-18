@@ -680,7 +680,17 @@ function quarantineRaw(key, raw) {
   if (findQuarantinedCopy(raw)) return;
   try {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    localStorage.setItem(`${LS_CORRUPT_PREFIX}${key}.${stamp}`, raw);
+    // L-2 (fleet-sweep audit 2026-08-18, ../docs/audit-sweep-families-2026-08-18.md):
+    // the stamp is millisecond-resolution, so two DIFFERENT unparseable payloads
+    // for one key inside one millisecond share a storage key - and the second
+    // write would destroy the first with exactly the write that exists to stop
+    // bytes being destroyed. Step past a taken key instead. Bounded, because an
+    // unbounded loop over a Storage that never frees a name would hang the load.
+    // Reference: Property-Portfolio/src/storage.js (Mortar).
+    const base = `${LS_CORRUPT_PREFIX}${key}.${stamp}`;
+    let copyKey = base;
+    for (let n = 1; localStorage.getItem(copyKey) !== null && n <= 99; n += 1) copyKey = `${base}.${n}`;
+    localStorage.setItem(copyKey, raw);
   } catch { /* storage full or disabled - leave the original untouched */ }
 }
 function loadState(key, fallback) {
