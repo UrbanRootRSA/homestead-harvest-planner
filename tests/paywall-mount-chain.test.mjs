@@ -1043,6 +1043,58 @@ async function runGrace({ store, plan, graceKey = KEY_MINE }) {
     r.activations.length === 1 && r.activations[0] === KEY_MINE, `activations=${JSON.stringify(r.activations)}`);
 }
 
+// ═════════════════════ M-1: why the ?key= strip must stay AFTER its await
+//
+// docs/audit-sweep-families-2026-08-18.md, M-1, suggested TWO changes: redact
+// the analytics payload (done, src/main.jsx + tests/analytics-redaction.test.mjs)
+// and hoist stripKeyFromUrl() above `await attempt(...)` to match the sibling
+// branch one block up. The hoist must NOT be made, and this case is the reason.
+//
+// The mount effect has an empty dep array, so React StrictMode runs it
+// mount -> unmount -> mount in development, and the body re-reads the key out of
+// window.location.search on EVERY run. The body is synchronous up to its first
+// await. Strip before that await and run 1 - which is cancelled and commits
+// nothing - deletes the key that run 2, the surviving run, depends on: the
+// purchase-email link then silently does nothing and the customer lands on the
+// paywall holding a valid licence. Strip after the await and run 1's
+// `if (cancelled) return` fires first, so the key is still there for run 2.
+// The sibling branch is safe to strip early only because it never awaits.
+
+group('M-1o', 'the ?key= link must survive a StrictMode double mount');
+
+{
+  const win = makeWindow(`https://thehomesteadplan.com/?key=${KEY_MINE}`);
+  const store = makeStorage({});
+  const noop = () => {};
+
+  // Run 1: starts, reaches its first await, then React unmounts it.
+  const s1 = makeServer([OK('inst-1')]);
+  const api1 = make(store, quietConsole, s1.fetchStub);
+  let cleanup1 = null;
+  api1.__mountPaywall((fn) => { cleanup1 = fn(); }, win, noop, noop, noop, noop, noop);
+  check('M-1o.0', 'run 1 reached its await with the key still in the URL',
+    typeof cleanup1 === 'function' && s1.calls.length === 1,
+    `cleanup=${typeof cleanup1} calls=${s1.calls.length}`);
+  if (typeof cleanup1 === 'function') cleanup1();
+
+  // Run 2: the surviving mount, on the same window and the same storage.
+  const s2 = makeServer([OK('inst-2')]);
+  const api2 = make(store, quietConsole, s2.fetchStub);
+  const log2 = [];
+  let settled2 = false;
+  const rec2 = (n) => (v) => { log2.push([n, v]); if (n === 'setValidating' && v === false) settled2 = true; };
+  mountCount += 1;
+  api2.__mountPaywall((fn) => fn(), win, rec2('setPaid'), rec2('setValidating'), rec2('setKeyError'), rec2('setPrefillKey'), rec2('setTab'));
+  await drain(() => settled2);
+
+  check('M-1o.1', 'the second run still finds the URL key and unlocks',
+    log2.some(([n, v]) => n === 'setPaid' && v === true), JSON.stringify(log2));
+  check('M-1o.2', 'and what it validated is the key from the link',
+    s2.calls.length === 1 && s2.calls[0].key === KEY_MINE, JSON.stringify(s2.calls));
+  check('M-1o.3', 'and the address bar is clean once the chain settles',
+    !String(win.location.href).includes(KEY_MINE), win.location.href);
+}
+
 // --------------------------------------------------------------------- report
 
 const w = Math.max(...rows.map((r) => `${r.id} ${r.label}`.length));
