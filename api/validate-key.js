@@ -159,6 +159,17 @@ const ACTIVATION_LIMIT_MESSAGE = "This licence key has reached its device activa
 // either. Reference: Crypto-Heatmap api/validate-key.js (`f977e59` 429,
 // `214cd29` 403).
 const LS_VERDICT_STATUSES = new Set([200, 400, 404]);
+// May this response state a verdict at all? Only on a status LS states verdicts
+// on - with ONE exemption: a full device pool. That verdict keeps the licence,
+// burns no slot and names a remedy the customer can act on (A-1), so honouring
+// it on an unexpected status errs toward keeping a licence, which is the safe
+// direction of this whole family. Refusing it would answer a genuinely full pool
+// with "reload to try again", which never frees a slot. It cannot reopen H-1
+// either way: the flag is exactly what keeps the client out of its wipe branch,
+// and only an UNFLAGGED definitive valid:false gets there.
+function lsMayStateVerdict(status, errStr) {
+  return LS_VERDICT_STATUSES.has(status) || ACTIVATION_LIMIT_RE.test(String(errStr || ""));
+}
 // A server fault must never read as a verdict on the customer's key.
 function lsEdgeMessage(status) {
   return status === 429
@@ -260,7 +271,7 @@ export default async function handler(req, res) {
       // an `error` string cannot promote into a verdict. It sits BELOW so the
       // empty-body case keeps its own message and every audited control row
       // stays byte-identical.
-      if (!LS_VERDICT_STATUSES.has(preCheck.status)) {
+      if (!lsMayStateVerdict(preCheck.status, preCheck.json && preCheck.json.error)) {
         return res.status(502).json({ valid: false, error: lsEdgeMessage(preCheck.status) });
       }
       // Bail early on a confirmed-bad key (e.g. "license_key not found") so
@@ -373,7 +384,7 @@ export default async function handler(req, res) {
     }
     // H-1: same pair as the pre-check leg. This site covers BOTH the
     // stored-instance validate (every mount of a paid device) and /activate.
-    if (!LS_VERDICT_STATUSES.has(ls.status)) {
+    if (!lsMayStateVerdict(ls.status, js.error)) {
       return res.status(502).json({ valid: false, error: lsEdgeMessage(ls.status) });
     }
 

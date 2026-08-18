@@ -928,6 +928,30 @@ group('A-1s', 'the server raises activation_limit_reached before /activate');
     check('H-1s.c5', 'control: a healthy key still activates and is granted',
       good.status === 200 && good.body.valid === true && good.body.instance_id === 'inst-new',
       `http=${good.status} ${JSON.stringify(good.body)}`);
+
+    // The audit's A6 row, and the one exemption to the status rule. A full
+    // device pool is the one verdict that is safe to honour on ANY status: it
+    // keeps the licence, burns no slot, and names a remedy the customer can act
+    // on. Refusing it because the status is odd would answer a genuinely full
+    // pool with "reload to try again", which never frees a slot - Growroom's
+    // wrong-lever copy defect. It cannot reopen H-1 either way, because the
+    // flag is exactly what keeps the client out of its wipe branch.
+    const limitOn429 = await runServer({ key: KEY_MINE }, {
+      validate: { status: 429, body: { error: 'License key activation limit reached.' } },
+    });
+    check('H-1s.c6', 'control: activation-limit wording is still a flagged verdict, whatever the status',
+      limitOn429.status === 200 && limitOn429.body.valid === false && limitOn429.body.activation_limit_reached === true,
+      `http=${limitOn429.status} ${JSON.stringify(limitOn429.body)}`);
+    check('H-1s.c7', 'and it still reads as a limit, not as an outage',
+      /activation limit/i.test(String(limitOn429.body.error || '')), JSON.stringify(limitOn429.body.error));
+
+    const limitOnActivate = await runServer({ key: KEY_MINE }, {
+      validate: HEALTHY_PRE,
+      activate: { status: 403, body: { activated: false, error: 'License key activation limit reached.' } },
+    });
+    check('H-1s.c8', 'control: same exemption on the /activate leg',
+      limitOnActivate.status === 200 && limitOnActivate.body.activation_limit_reached === true,
+      `http=${limitOnActivate.status} ${JSON.stringify(limitOnActivate.body)}`);
   }
 
   group('H-1w', 'the wire case: an LS throttle must not de-license a paying customer');
@@ -958,6 +982,21 @@ group('A-1s', 'the server raises activation_limit_reached before /activate');
     });
     check('H-1w.4', 'control: a dead key is still wiped', gone2.storedKey === null && gone2.storedInstance === null,
       `hhp_key=${JSON.stringify(gone2.storedKey)} hhp_instance=${JSON.stringify(gone2.storedInstance)}`);
+
+    // And the exemption, end to end: a full pool announced on an odd status
+    // still keeps the licence AND still tells the customer what to do about it.
+    const limit = await runServer({ key: KEY_MINE, instance_id: 'inst-mine' }, {
+      validate: { status: 429, body: { error: 'License key activation limit reached.' } },
+    });
+    const full = await mount({
+      store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+      plan: [{ status: limit.status, body: limit.body }],
+    });
+    check('H-1w.5', 'a full pool on an odd status keeps the licence',
+      full.storedKey === KEY_MINE && full.storedInstance === 'inst-mine',
+      `hhp_key=${JSON.stringify(full.storedKey)} hhp_instance=${JSON.stringify(full.storedInstance)}`);
+    check('H-1w.6', 'and the customer reads the remedy, not "reload to try again"',
+      /activation limit/i.test(String(full.keyError || '')), `keyError=${JSON.stringify(full.keyError)}`);
   }
 }
 
