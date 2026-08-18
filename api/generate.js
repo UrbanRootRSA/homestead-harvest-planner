@@ -135,6 +135,29 @@ async function rateLimitOK(suffix, max, windowSec) {
 // raw key in Redis).
 const LICENCE_CACHE_TTL_SEC = 3600;
 
+// H-1 (fleet-sweep audit 2026-08-18,
+// ../docs/audit-sweep-families-2026-08-18.md): which upstream statuses may carry
+// a licence VERDICT at all.
+//
+// MIRROR of api/validate-key.js (search there for LS_VERDICT_STATUSES). The two
+// handlers are deliberately self-contained - they already keep their own copies
+// of callLs, hashKey, rateLimitOK and the store gate - so this is a mirror, not
+// an import. Change one, change the twin.
+//
+// LemonSqueezy states verdicts on 200 and business errors on 200/400/404;
+// validate-key's suite pins all three. Every other status is its edge: 429 a
+// throttle, 403 a refusal, 401 an auth fault. None of them says anything about a
+// key. Without this, an edge response that happened to carry an `error` string
+// skipped the transient return below and became `reason: "ls_api_error"`, which
+// the handler answers with a 401 telling a paying customer to re-enter a key
+// that is perfectly good. The one exemption is a full device pool, which is a
+// real verdict whatever the status.
+const LS_VERDICT_STATUSES = new Set([200, 400, 404]);
+const ACTIVATION_LIMIT_RE = /activation limit|activation_limit/i;
+function lsMayStateVerdict(status, errStr) {
+  return LS_VERDICT_STATUSES.has(status) || ACTIVATION_LIMIT_RE.test(String(errStr || ""));
+}
+
 // 3-device cap binding (Fix 3 2026-04-21):
 // Store a canonical instance_id per licence hash in Upstash. generate.js will
 // force-use this canonical instance when validating against LS, so clearing
@@ -280,6 +303,15 @@ async function validateLicence(key, instanceId) {
     if (ls.status !== 200 && !js.error) {
       console.error("[generate] LS ambiguous non-200 during validation:", ls.status);
       return { ok: false, reason: "ls_ambiguous_status", transient: true };
+    }
+    // H-1: the other half of the same question. The guard above catches an
+    // unrecognisable BODY; this one catches an unrecognisable STATUS, which an
+    // `error` string cannot promote into a verdict. It sits BELOW so the
+    // empty-body case keeps its own reason, and ABOVE the cache write, so an
+    // ambiguous result still cannot poison the 1 h positive cache.
+    if (!lsMayStateVerdict(ls.status, js.error)) {
+      console.error("[generate] LS non-verdict status during validation:", ls.status);
+      return { ok: false, reason: "ls_edge_status", transient: true };
     }
     if (js.error) return { ok: false, reason: "ls_api_error" };
     if (typeof js.valid !== "boolean" && !js.license_key) {
