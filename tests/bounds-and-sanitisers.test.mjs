@@ -31,6 +31,7 @@
 // and those braces used to end the slice at the end of the signature.
 
 import { readFileSync } from 'node:fs';
+import { CROPS } from '../src/data/crops.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -109,7 +110,9 @@ function bail(msg) {
 // Every bound the fix names, plus the unit factors and the volume formula the
 // consequence is measured through.
 const NAMES = [
-  'sanitizeNum', 'clampInt', 'importedNumber',
+  'sanitizeNum', 'clampInt', 'importedNumber', 'hasKey',
+  'PATH_BUFFER', 'DEFAULT_PRODUCE_PER_PERSON_LBS',
+  'GOAL_MULTIPLIER', 'FREQUENCY_FACTOR', 'ZONE_FROST_DATES', 'computeResults',
   'FT_TO_M', 'IN_TO_CM', 'LB_TO_KG', 'CUFT_TO_L',
   'SOIL_PRICE_MAX_PER_CUFT', 'GROCERY_PRICE_MAX_PER_LB',
   'BED_LENGTH_FT_MIN', 'BED_LENGTH_FT_MAX',
@@ -145,7 +148,7 @@ if (!fieldCommitText || !fieldCommitText.includes('Math.max(min, Math.min(max, n
   bail('the Field.commit slice does not clamp; the extractor is out of step');
 }
 
-const api = new Function(`${picked.map((p) => p.text).join('\n\n')}
+const api = new Function('CROPS', `${picked.map((p) => p.text).join('\n\n')}
 
 // Field.commit, verbatim, with the self-heal line that precedes it in Field().
 function makeFieldCommit({ raw, value, min = 0, max = 9999, onChange }) {
@@ -168,7 +171,7 @@ function makeBedEditor(metric) {
 }
 
 return { ${picked.map((p) => p.n).join(', ')}, makeFieldCommit, makeBedEditor };
-`)();
+`)(CROPS);
 
 // ------------------------------------------------------------ assertions
 
@@ -538,6 +541,101 @@ group('M-2', 'clampInt takes a fallback, and every call site passes one');
     'a sanitiser still coerces with a bare Number(v)');
   check('M-2.8', 'and no hand-rolled fourth copy has reappeared',
     !/Number\.isFinite\(Number\(/.test(SRC), 'a Number.isFinite(Number(...)) guard is back in the source');
+}
+
+// ═══════════════ M-3: a prototype-named key must not survive a load gate
+
+group('M-3', 'a stored key that names an Object.prototype member is not a known key');
+
+// The six names a plain object literal answers truthily for, plus ordinary junk
+// and a real crop as controls.
+const PROTO_KEYS = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__', 'isPrototypeOf'];
+
+// The state initializers live inside App() and cannot be brace-extracted, so
+// the gates are lifted from the source between two stable anchors and evaluated.
+const LOADERS_FROM = SRC.indexOf('// Calculator state');
+const LOADERS_TO = SRC.indexOf('// ── Paywall state');
+if (LOADERS_FROM === -1 || LOADERS_TO === -1 || LOADERS_TO < LOADERS_FROM) bail('could not locate the state-initializer region');
+const LOADERS = SRC.slice(LOADERS_FROM, LOADERS_TO);
+
+{
+  // Raw truthiness, so the reason the gates were wrong is on the record.
+  const inheritedTruthy = PROTO_KEYS.filter((k) => CROPS[k]);
+  check('M-3.1', 'the maps really do answer truthily for all six prototype names', inheritedTruthy.length === 6, `${inheritedTruthy.length} of 6`);
+  check('M-3.2', 'and hasKey answers no for every one of them', PROTO_KEYS.every((k) => api.hasKey(CROPS, k) === false),
+    PROTO_KEYS.filter((k) => api.hasKey(CROPS, k)).join(', '));
+  check('M-3.3', 'while a real crop is still a known key', api.hasKey(CROPS, 'tomato') === true);
+  check('M-3.4', 'JSON.parse makes __proto__ an ordinary own key, which is why it was reachable',
+    Object.prototype.hasOwnProperty.call(JSON.parse('{"__proto__":"weekly"}'), '__proto__') === true);
+}
+
+{
+  // The crop gate, as written in the source, applied to a poisoned hhp_crops.
+  const m = /if \((.+?)\) clean\[k\] = v;/.exec(LOADERS);
+  if (!m) bail('could not locate the hhp_crops gate in the state-initializer region');
+  const gate = new Function('CROPS', 'FREQUENCY_FACTOR', 'hasKey', 'k', 'v', `return Boolean(${m[1]});`);
+  const survivors = PROTO_KEYS.filter((k) => gate(CROPS, api.FREQUENCY_FACTOR, api.hasKey, k, 'weekly'));
+  check('M-3.5', 'no prototype-named crop id survives the hhp_crops gate', survivors.length === 0, survivors.join(', '));
+  check('M-3.6', 'a real crop still survives it', gate(CROPS, api.FREQUENCY_FACTOR, api.hasKey, 'tomato', 'weekly') === true);
+  check('M-3.7', 'and a prototype-named FREQUENCY value is refused too', !gate(CROPS, api.FREQUENCY_FACTOR, api.hasKey, 'tomato', 'constructor'));
+  check('M-3.8', 'ordinary junk is still filtered', !gate(CROPS, api.FREQUENCY_FACTOR, api.hasKey, 'banana', 'weekly'));
+}
+
+{
+  // The crash itself: computeResults runs inside the root App useMemo, so a
+  // throw here is the whole app replaced by the ErrorBoundary, and reloading
+  // re-reads the same key. Drive the poisoned payload through the gate and then
+  // through the engine, exactly as a page load does.
+  let threw = null;
+  let result = null;
+  try {
+    const clean = {};
+    for (const [k, v] of Object.entries(JSON.parse('{"constructor":"weekly","toString":"weekly","tomato":"weekly"}'))) {
+      if (api.hasKey(CROPS, k) && api.hasKey(api.FREQUENCY_FACTOR, v)) clean[k] = v;
+    }
+    result = api.computeResults(clean, 4, 'fresh_preserving', 300);
+  } catch (e) { threw = e; }
+  check('M-3.9', 'a poisoned hhp_crops no longer throws inside the root useMemo', threw === null, threw && `${threw.constructor.name}: ${threw.message}`);
+  check('M-3.10', 'and the real crop in the same payload still plans', result && result.perCrop.length === 1 && result.totalPlants > 0, result && `perCrop=${result.perCrop.length}`);
+  check('M-3.11', 'the KPI is a real number, not NaN', result && Number.isFinite(result.selfSufficiencyPct), result && `${result.selfSufficiencyPct}`);
+}
+
+{
+  // The softer variants the audit measured: a prototype-named goal used to
+  // return a FUNCTION from the multiplier map and take every figure to NaN, and
+  // a prototype-named zone returned a function whose .lastSpring is undefined.
+  const goalGate = /return (hasKey\(GOAL_MULTIPLIER[^;]+|GOAL_MULTIPLIER[^;]+) : "fresh_preserving";/.exec(LOADERS);
+  if (!goalGate) bail('could not locate the hhp_goal gate');
+  const goalOf = new Function('GOAL_MULTIPLIER', 'hasKey', 'g', `return ${goalGate[1]} : "fresh_preserving";`);
+  const zoneGate = /zone: (.+?) \? saved\.zone : 7,/.exec(LOADERS);
+  if (!zoneGate) bail('could not locate the hhp_planting zone gate');
+  const zoneOk = new Function('ZONE_FROST_DATES', 'hasKey', 'saved', `return Boolean(${zoneGate[1]});`);
+  const badGoals = PROTO_KEYS.filter((k) => goalOf(api.GOAL_MULTIPLIER, api.hasKey, k) !== 'fresh_preserving');
+  const badZones = PROTO_KEYS.filter((k) => zoneOk(api.ZONE_FROST_DATES, api.hasKey, { zone: k }));
+  check('M-3.12', 'a prototype-named goal falls back to fresh_preserving', badGoals.length === 0, badGoals.join(', '));
+  check('M-3.13', 'a real goal is still honoured', goalOf(api.GOAL_MULTIPLIER, api.hasKey, 'full_year') === 'full_year');
+  check('M-3.14', 'a prototype-named zone falls back to 7', badZones.length === 0, badZones.join(', '));
+  check('M-3.15', 'a real zone is still honoured', zoneOk(api.ZONE_FROST_DATES, api.hasKey, { zone: 9 }) === true);
+}
+
+{
+  // Coverage by source shape: a tenth loader added later must not read a map
+  // by an untrusted key without the gate.
+  const gates = (LOADERS.match(/hasKey\(/g) || []).length;
+  check('M-3.16', `every load gate reads through hasKey (${gates} calls)`, gates >= 10, `only ${gates}`);
+  const bare = [...LOADERS.matchAll(/(?:CROPS|GOAL_MULTIPLIER|FREQUENCY_FACTOR|ZONE_FROST_DATES)\[/g)];
+  // One bare read is legitimate: preservationOptionsFor(CROPS[id]) sits one
+  // line below `if (!hasKey(CROPS, id)) continue;`.
+  const unguarded = bare.filter((m) => {
+    const lineStart = LOADERS.lastIndexOf('\n', m.index) + 1;
+    const prevLine = LOADERS.slice(LOADERS.lastIndexOf('\n', lineStart - 2) + 1, lineStart);
+    const thisLine = LOADERS.slice(lineStart, LOADERS.indexOf('\n', m.index));
+    return !thisLine.includes('hasKey(') && !prevLine.includes('hasKey(');
+  });
+  check('M-3.17', 'no unguarded map lookup remains in the state initializers', unguarded.length === 0,
+    unguarded.map((m) => LOADERS.slice(m.index - 30, m.index + 20).trim()).join(' | '));
+  check('M-3.18', 'and the render-path destructure is guarded too',
+    /Array\.isArray\(crop\.yieldPerPlantLbs\)/.test(SRC), 'computeResults still destructures the raw field');
 }
 
 // --------------------------------------------------------------------- report

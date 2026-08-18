@@ -427,6 +427,26 @@ const clampInt = (v, fallback, min, max) => {
   return Math.max(min, Math.min(max, Math.round(n)));
 };
 
+// Does this map really have this key? Use it for EVERY lookup whose key comes
+// from localStorage - audit 2026-08-17 M-3.
+//
+// CROPS, GOAL_MULTIPLIER, FREQUENCY_FACTOR and ZONE_FROST_DATES are plain object
+// literals, so they inherit Object.prototype and MAP[key] is truthy for
+// "constructor", "toString", "valueOf", "hasOwnProperty", "__proto__" and
+// "isPrototypeOf". Every loader gate below was a truthiness read on an
+// untrusted key, and JSON.parse turns "__proto__" into an ordinary own property,
+// so all six were reachable. Measured: {"constructor":"weekly"} in hhp_crops
+// passed the crop gate and threw inside computeResults, which runs in the root
+// App useMemo - so the ErrorBoundary replaced the WHOLE app, and its only
+// affordance is a reload, which re-read the same key and crashed again. The
+// documented escape, clearing site data, also deletes hhp_key and hhp_instance
+// and costs the customer a LemonSqueezy activation slot.
+//
+// hasOwnProperty.call, not Object.hasOwn: the latter is ES2022 and this project
+// builds on Vite's default es2020 target, which transpiles syntax and never
+// polyfills a library method.
+const hasKey = (map, key) => Object.prototype.hasOwnProperty.call(map, key);
+
 const fmtInt = (n) => {
   if (!Number.isFinite(n)) return "-";
   return Math.round(n).toLocaleString();
@@ -1124,7 +1144,10 @@ function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = 
     if (!crop || !frequency) continue;
     const freqMult = FREQUENCY_FACTOR[frequency] ?? 0.5;
     const annualNeedLbs = crop.avgConsumptionLbsPerPersonYear * familySize * goalMult * freqMult;
-    const [yieldLow, yieldHigh] = crop.yieldPerPlantLbs;
+    // Defence in depth for the gates above: a destructure on the render path
+    // is one malformed crop entry away from blanking the whole app through
+    // the root useMemo - audit 2026-08-17 M-3.
+    const [yieldLow, yieldHigh] = Array.isArray(crop.yieldPerPlantLbs) ? crop.yieldPerPlantLbs : [0, 0];
     // Plan plant count from the LOW end of the yield range (conservative).
     const plantsNeeded = yieldLow > 0 ? Math.ceil(annualNeedLbs / yieldLow) : 0;
     const spaceSqFt = plantsNeeded * crop.spacingSqFt;
@@ -7078,7 +7101,7 @@ export default function App() {
   // pattern as hemisphere.
   const [goal, setGoal] = useState(() => {
     const g = loadState(LS_GOAL, "fresh_preserving");
-    return GOAL_MULTIPLIER[g] ? g : "fresh_preserving";
+    return hasKey(GOAL_MULTIPLIER, g) ? g : "fresh_preserving";
   });
   const [selection, setSelection] = useState(() => {
     const saved = loadState(LS_CROPS, null);
@@ -7086,7 +7109,7 @@ export default function App() {
       // Sanitize: only known crops, only known frequencies
       const clean = {};
       for (const [k, v] of Object.entries(saved)) {
-        if (CROPS[k] && FREQUENCY_FACTOR[v]) clean[k] = v;
+        if (hasKey(CROPS, k) && hasKey(FREQUENCY_FACTOR, v)) clean[k] = v;
       }
       if (Object.keys(clean).length > 0) return clean;
     }
@@ -7159,8 +7182,8 @@ export default function App() {
   const [companionSelection, setCompanionSelection] = useState(() => {
     const saved = loadState(LS_COMPANION, null);
     if (Array.isArray(saved?.bed)) {
-      const valid = saved.bed.filter((id) => CROPS[id]);
-      if (valid.length > 0) return { bed: valid, focus: CROPS[saved.focus] ? saved.focus : "tomato" };
+      const valid = saved.bed.filter((id) => hasKey(CROPS, id));
+      if (valid.length > 0) return { bed: valid, focus: hasKey(CROPS, saved.focus) ? saved.focus : "tomato" };
     }
     return { bed: ["tomato", "basil", "carrot", "onion"], focus: "tomato" };
   });
@@ -7182,12 +7205,12 @@ export default function App() {
     if (!saved || typeof saved !== "object") return defaults;
     const valid = {
       mode: saved.mode === "manual" ? "manual" : "zone",
-      zone: ZONE_FROST_DATES[saved.zone] ? saved.zone : 7,
+      zone: hasKey(ZONE_FROST_DATES, saved.zone) ? saved.zone : 7,
       manualFrost: typeof saved.manualFrost === "object" && saved.manualFrost
         ? { lastSpring: saved.manualFrost.lastSpring || "", firstFall: saved.manualFrost.firstFall || "" }
         : defaults.manualFrost,
       selectedCrops: Array.isArray(saved.selectedCrops)
-        ? saved.selectedCrops.filter((id) => CROPS[id])
+        ? saved.selectedCrops.filter((id) => hasKey(CROPS, id))
         : defaults.selectedCrops,
       // The pre-gate this replaces called Number() on the stored value first,
       // which is the hole itself: null, "", [] and false all coerced to a
@@ -7196,7 +7219,7 @@ export default function App() {
       referenceYear: clampInt(saved.referenceYear, thisYear, thisYear - 1, thisYear + 2),
       sowMethodChoice: typeof saved.sowMethodChoice === "object" && saved.sowMethodChoice
         ? Object.fromEntries(Object.entries(saved.sowMethodChoice).filter(
-            ([id, m]) => CROPS[id] && (m === "transplant" || m === "direct")
+            ([id, m]) => hasKey(CROPS, id) && (m === "transplant" || m === "direct")
           ))
         : {},
     };
@@ -7238,7 +7261,7 @@ export default function App() {
     const cleanPrices = {};
     if (saved.priceOverrides && typeof saved.priceOverrides === "object") {
       for (const [id, v] of Object.entries(saved.priceOverrides)) {
-        if (CROPS[id] && isStoredNumber(v) && v >= 0 && v < 10000) cleanPrices[id] = v;
+        if (hasKey(CROPS, id) && isStoredNumber(v) && v >= 0 && v < 10000) cleanPrices[id] = v;
       }
     }
     const cleanSetup = { ...DEFAULT_SETUP_COSTS };
@@ -7307,7 +7330,7 @@ export default function App() {
     const cleanChoice = {};
     if (saved.methodChoice && typeof saved.methodChoice === "object") {
       for (const [id, m] of Object.entries(saved.methodChoice)) {
-        if (!CROPS[id]) continue;
+        if (!hasKey(CROPS, id)) continue;
         const allowed = preservationOptionsFor(CROPS[id]).map((o) => o.id);
         if (allowed.includes(m)) cleanChoice[id] = m;
       }
