@@ -234,10 +234,21 @@ export default async function handler(req, res) {
       // the fail-closed store compare below can't mislabel it as a
       // wrong-product key, and an invalid key costs 1 LS round-trip not 2.
       if (preCheck.json && preCheck.json.error) {
+        // Cross-filed from the Grow Room audit 2026-08-17: this was the third
+        // leg that can carry activation-limit wording, and the only one that
+        // did not raise the flag. normaliseLsError already tests the limit
+        // bucket first, so the customer READ "activation limit reached" while
+        // the body carried a plain definitive valid:false - and the client
+        // keys its wipe on the verdict SHAPE, never on message text, so it
+        // deleted hhp_key and hhp_instance underneath that message. Driven
+        // end-to-end before the fix: the mount chain answered this exact body
+        // with hhp_key = null. Same idiom as the two legs below that had it.
+        const preErr = String(preCheck.json.error);
         return res.status(200).json({
           valid: false,
-          error: normaliseLsError(String(preCheck.json.error)),
+          error: normaliseLsError(preErr),
           retry_activation: false,
+          activation_limit_reached: ACTIVATION_LIMIT_RE.test(preErr),
         });
       }
       // SEC-4 (2026-06-12, Grow 3264c1a / Vertica 6d30289 port): R2-H1

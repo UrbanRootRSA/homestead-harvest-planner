@@ -758,6 +758,70 @@ group('A-1s', 'the server raises activation_limit_reached before /activate');
     });
     check('A-1s.10', 'a dead key is still a plain definitive reject', r.body.valid === false && !r.body.activation_limit_reached, JSON.stringify(r.body));
   }
+
+  {
+    // Cross-filed from the Grow Room audit 2026-08-17. THREE legs of this
+    // handler can carry activation-limit wording; A-1 flagged two of them. The
+    // third is the pre-check business-error bail, which runs on the bare-key
+    // path - a stored key with no instance, a pasted key, a ?key= link - and
+    // is exactly where a bare call lands. normaliseLsError tests the limit
+    // bucket first, so the customer READ "activation limit reached" while the
+    // body carried a plain definitive valid:false underneath it.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 400, body: { valid: false, error: 'invalid: activation_limit reached for this license key' } },
+    });
+    check('A-1s.11', 'the pre-check business-error bail flags the limit too', r.body.activation_limit_reached === true, JSON.stringify(r.body));
+    check('A-1s.12', 'and never reached /activate to burn a slot', r.legs.length === 1 && r.legs[0].leg === 'validate', `legs=${JSON.stringify(r.legs.map((l) => l.leg))}`);
+  }
+
+  {
+    // LS's own canonical wording on a 200, on the same leg.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 200, body: { error: 'License key activation limit reached.' } },
+    });
+    check('A-1s.13', 'the same leg flags LS canonical wording on a 200', r.body.activation_limit_reached === true, JSON.stringify(r.body));
+  }
+
+  group('A-1w', 'server and client agreeing: the flag is what keeps the licence');
+
+  {
+    // The wire case. The verdict comes out of the REAL handler and goes into
+    // the REAL mount chain - neither half is paraphrased, so a change to
+    // either that breaks the pair turns this red rather than passing twice.
+    const r = await runServer({ key: KEY_MINE }, {
+      validate: { status: 400, body: { valid: false, error: 'invalid: activation_limit reached for this license key' } },
+    });
+    const kept = await mount({
+      // No instance stored: this is the shape that takes the bare-key path on
+      // the server, i.e. the one that reaches the pre-check bail.
+      store: seed({ key: KEY_MINE }),
+      plan: [{ status: r.status, body: r.body }],
+    });
+    check('A-1w.1', 'a full pool on the pre-check leg keeps the stored licence', kept.storedKey === KEY_MINE, `hhp_key=${JSON.stringify(kept.storedKey)}`);
+    check('A-1w.2', 'and this device stays locked, because it genuinely has no slot', kept.everPaid === false, `everPaid=${kept.everPaid}`);
+
+    // Flag-stripped control: the pre-fix server shape, byte-for-byte otherwise.
+    // Without it, "licence kept" could be true for some unrelated reason and
+    // the case would prove nothing about the flag.
+    const preFixBody = { ...r.body };
+    delete preFixBody.activation_limit_reached;
+    const wiped = await mount({
+      store: seed({ key: KEY_MINE }),
+      plan: [{ status: r.status, body: preFixBody }],
+    });
+    check('A-1w.3', 'and the flag is what stops it: strip it and the wipe path is still live', wiped.storedKey === null, `hhp_key=${JSON.stringify(wiped.storedKey)}`);
+
+    // Control the other way: a genuinely dead key on the same leg must still
+    // be wiped, or the limit bucket has grown wide enough to keep dead keys.
+    const dead = await runServer({ key: KEY_MINE }, {
+      validate: { status: 404, body: { valid: false, error: 'license_key not found' } },
+    });
+    const gone = await mount({
+      store: seed({ key: KEY_MINE }),
+      plan: [{ status: dead.status, body: dead.body }],
+    });
+    check('A-1w.4', 'a dead key on the same leg is still wiped', gone.storedKey === null, `hhp_key=${JSON.stringify(gone.storedKey)}`);
+  }
 }
 
 // --------------------------------------------------------------------- report
