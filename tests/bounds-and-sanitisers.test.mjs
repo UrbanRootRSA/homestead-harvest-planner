@@ -111,7 +111,9 @@ function bail(msg) {
 // consequence is measured through.
 const NAMES = [
   'sanitizeNum', 'clampInt', 'importedNumber', 'hasKey',
-  'PATH_BUFFER', 'DEFAULT_PRODUCE_PER_PERSON_LBS',
+  // PATH_SHARE_OF_FOOTPRINT feeds PATH_BUFFER as of the 2026-09-06
+  // engineering fix (M-1); the multiplier is derived, not a literal.
+  'PATH_SHARE_OF_FOOTPRINT', 'PATH_BUFFER', 'DEFAULT_PRODUCE_PER_PERSON_LBS',
   'GOAL_MULTIPLIER', 'FREQUENCY_FACTOR', 'ZONE_FROST_DATES', 'computeResults',
   'FT_TO_M', 'IN_TO_CM', 'LB_TO_KG', 'CUFT_TO_L',
   'SOIL_PRICE_MAX_PER_CUFT', 'GROCERY_PRICE_MAX_PER_LB',

@@ -35,6 +35,31 @@
 //   parentCrop                   For variety sub-types (tomato_cherry parents
 //                                to tomato). Companion lookups fall back to the
 //                                parent when no direct pair is recorded.
+//   lbsPerQuart                  Fresh pounds needed to fill one canning quart,
+//                                from the NCHFP "how much do I need" tables.
+//                                Present ONLY where the crop's yield basis and
+//                                the NCHFP purchase weight are the same thing.
+//                                Absent = the documented whole-tomato default
+//                                (QUART_LBS in App.jsx). Never guess one in:
+//                                a wrong basis here prints a wrong jar count.
+//
+// Engineering review 2026-09-06 (docs/engineering-review-2026-09-06.md):
+//   M-2  spacingSqFt corrected against the official Square Foot Gardening
+//        chart - peas 16 -> 8/sq ft, arugula 16 -> 4, leaf lettuce and parsnip
+//        9 -> 4. Bed area moves for most users; this is deliberate.
+//   L-3  the 9-per-sq-ft crops carried the rounded literal 0.11 (9.09/sq ft).
+//        They now carry the exact 1 / 9.
+//   M-6  groceryPricePerLb re-based on BLS average-price series via FRED,
+//        retrieved 2026-07 (latest observation): potatoes APU0000712112
+//        $0.942, field-grown tomatoes APU0000712311 $2.003, romaine lettuce
+//        APU0000FL2101 $3.469. Sweet peppers APU0000712406 was discontinued in
+//        March 2020 and is left on its prior figure. Every price is editable
+//        at runtime and disclosed on the Cost Savings tab.
+//   I-1  caloriesPer100g is NOT read anywhere in src/ or api/. Before anything
+//        renders it, check each entry's basis: cowpea was corrected from the
+//        mature DRY seed value to the immature fresh figure, and oregano,
+//        sage, tarragon and marjoram still carry DRIED-herb values beside
+//        fresh-weight yields.
 //
 // Sources: USDA PLANTS, Maryland / Iowa State / Utah State / Texas A&M / NC
 // State / Penn State / Clemson / LSU AgCenter extensions, FAO Ecocrop, AVRDC
@@ -49,7 +74,7 @@ export const CROPS = {
     name: "Tomatoes (General)", category: "fruiting", season: "warm", sowMethod: "transplant",
     daysToMaturity: [60, 85], spacingSqFt: 4, yieldPerPlantLbs: [8, 12],
     sunHours: 8, waterNeeds: "moderate", difficulty: 2,
-    avgConsumptionLbsPerPersonYear: 25, groceryPricePerLb: 2.50, caloriesPer100g: 18,
+    avgConsumptionLbsPerPersonYear: 25, groceryPricePerLb: 2.00, caloriesPer100g: 18,
     preservation: ["can", "freeze", "dehydrate", "sauce"],
     startIndoorsWeeks: -8, transplantWeeks: 2, directSowWeeks: null,
     harvestStartWeeks: 10, harvestDurationWeeks: 12,
@@ -84,7 +109,7 @@ export const CROPS = {
     // Bush habit, concentrated harvest window. Good for containers and canning batches.
     daysToMaturity: [55, 75], spacingSqFt: 2.25, yieldPerPlantLbs: [5, 7],
     sunHours: 8, waterNeeds: "moderate", difficulty: 2,
-    avgConsumptionLbsPerPersonYear: 15, groceryPricePerLb: 2.50, caloriesPer100g: 18,
+    avgConsumptionLbsPerPersonYear: 15, groceryPricePerLb: 2.00, caloriesPer100g: 18,
     preservation: ["can", "freeze", "sauce"],
     startIndoorsWeeks: -6, transplantWeeks: 2, directSowWeeks: null,
     harvestStartWeeks: 9, harvestDurationWeeks: 5,
@@ -230,9 +255,9 @@ export const CROPS = {
   lettuce: {
     name: "Lettuce (Leaf)", category: "leafy", season: "cool", sowMethod: "either",
     // Loose-leaf, cut-and-come-again types. For heading types see lettuce_head.
-    daysToMaturity: [30, 60], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.5],
+    daysToMaturity: [30, 60], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.5],
     sunHours: 4, waterNeeds: "moderate", difficulty: 1,
-    avgConsumptionLbsPerPersonYear: 20, groceryPricePerLb: 2.75, caloriesPer100g: 15,
+    avgConsumptionLbsPerPersonYear: 20, groceryPricePerLb: 3.47, caloriesPer100g: 15,
     preservation: ["fresh"],
     startIndoorsWeeks: -6, transplantWeeks: -2, directSowWeeks: -2,
     harvestStartWeeks: 6, harvestDurationWeeks: 8,
@@ -252,7 +277,7 @@ export const CROPS = {
   },
   spinach: {
     name: "Spinach", category: "leafy", season: "cool", sowMethod: "direct",
-    daysToMaturity: [40, 50], spacingSqFt: 0.11, yieldPerPlantLbs: [0.25, 0.4],
+    daysToMaturity: [40, 50], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.25, 0.4],
     sunHours: 5, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 3, groceryPricePerLb: 3.50, caloriesPer100g: 23,
     preservation: ["freeze"],
@@ -292,7 +317,7 @@ export const CROPS = {
   },
   arugula: {
     name: "Arugula", category: "leafy", season: "cool", sowMethod: "direct",
-    daysToMaturity: [30, 45], spacingSqFt: 0.0625, yieldPerPlantLbs: [0.1, 0.2],
+    daysToMaturity: [30, 45], spacingSqFt: 0.25, yieldPerPlantLbs: [0.1, 0.2],
     sunHours: 4, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 8.00, caloriesPer100g: 25,
     preservation: ["fresh"],
@@ -394,13 +419,16 @@ export const CROPS = {
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
     avgConsumptionLbsPerPersonYear: 8, groceryPricePerLb: 1.40, caloriesPer100g: 41,
     preservation: ["root_cellar", "can", "freeze"],
+    // NCHFP Carrots: 17.5 lb per canner load of 7 quarts. Whole fresh pods / topped roots -
+    // the same thing yieldPerPlantLbs weighs, so the bases match.
+    lbsPerQuart: 2.5,
     startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: -2,
     harvestStartWeeks: 9, harvestDurationWeeks: 6,
     varieties: "Nantes, Danvers 126, Scarlet Nantes, Imperator, Chantenay, Paris Market, Purple Dragon",
   },
   beet: {
     name: "Beets", category: "root", season: "cool", sowMethod: "direct",
-    daysToMaturity: [50, 70], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.5],
+    daysToMaturity: [50, 70], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.3, 0.5],
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
     avgConsumptionLbsPerPersonYear: 3, groceryPricePerLb: 2.00, caloriesPer100g: 43,
     preservation: ["can", "root_cellar"],
@@ -432,7 +460,7 @@ export const CROPS = {
     name: "Potatoes", category: "root", season: "cool", sowMethod: "direct",
     daysToMaturity: [80, 100], spacingSqFt: 1, yieldPerPlantLbs: [2, 3],
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
-    avgConsumptionLbsPerPersonYear: 35, groceryPricePerLb: 1.10, caloriesPer100g: 77,
+    avgConsumptionLbsPerPersonYear: 35, groceryPricePerLb: 0.94, caloriesPer100g: 77,
     preservation: ["root_cellar"],
     startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: -2,
     harvestStartWeeks: 14, harvestDurationWeeks: 4,
@@ -452,7 +480,7 @@ export const CROPS = {
     name: "Onions", category: "root", season: "cool", sowMethod: "transplant",
     // Day-length matters: short-day (<35° latitude), long-day (>37° latitude),
     // day-neutral works across zones. Plant the wrong type for your latitude = no bulbs.
-    daysToMaturity: [90, 120], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.5],
+    daysToMaturity: [90, 120], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.3, 0.5],
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
     avgConsumptionLbsPerPersonYear: 20, groceryPricePerLb: 1.20, caloriesPer100g: 40,
     preservation: ["root_cellar", "dehydrate"],
@@ -462,7 +490,7 @@ export const CROPS = {
   },
   turnip: {
     name: "Turnips", category: "root", season: "cool", sowMethod: "direct",
-    daysToMaturity: [40, 60], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.5],
+    daysToMaturity: [40, 60], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.3, 0.5],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 1.60, caloriesPer100g: 28,
     preservation: ["root_cellar", "ferment", "can"],
@@ -474,7 +502,7 @@ export const CROPS = {
     name: "Parsnips", category: "root", season: "cool", sowMethod: "direct",
     // Taproot - transplants poorly. Slow to germinate (2-3 weeks). Flavor
     // sweetens after first frost. UK / Northern-European staple.
-    daysToMaturity: [100, 130], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.6],
+    daysToMaturity: [100, 130], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 6, waterNeeds: "moderate", difficulty: 2,
     avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 2.40, caloriesPer100g: 75,
     preservation: ["root_cellar", "freeze", "dehydrate"],
@@ -534,10 +562,13 @@ export const CROPS = {
   // ─── Legume ────────────────────────────────────────────────────────────
   green_beans_bush: {
     name: "Green Beans (Bush)", category: "legume", season: "warm", sowMethod: "direct",
-    daysToMaturity: [50, 65], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.6],
+    daysToMaturity: [50, 65], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 7, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 6, groceryPricePerLb: 2.40, caloriesPer100g: 31,
     preservation: ["can", "freeze", "dehydrate"],
+    // NCHFP Beans, Snap and Italian: 14 lb per canner load of 7 quarts. Whole fresh pods / topped roots -
+    // the same thing yieldPerPlantLbs weighs, so the bases match.
+    lbsPerQuart: 2,
     startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: 2,
     harvestStartWeeks: 8, harvestDurationWeeks: 5,
     varieties: "Provider, Blue Lake Bush, Contender, Royal Burgundy, Maxibel (filet), Jade",
@@ -548,13 +579,16 @@ export const CROPS = {
     sunHours: 7, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 6, groceryPricePerLb: 2.40, caloriesPer100g: 31,
     preservation: ["can", "freeze", "dehydrate"],
+    // NCHFP Beans, Snap and Italian: 14 lb per canner load of 7 quarts. Whole fresh pods / topped roots -
+    // the same thing yieldPerPlantLbs weighs, so the bases match.
+    lbsPerQuart: 2,
     startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: 2,
     harvestStartWeeks: 10, harvestDurationWeeks: 10,
     varieties: "Kentucky Wonder, Blue Lake Pole, Rattlesnake, Scarlet Runner, Fortex (filet), Cherokee Trail of Tears",
   },
   peas_snap: {
     name: "Snap Peas", category: "legume", season: "cool", sowMethod: "direct",
-    daysToMaturity: [55, 70], spacingSqFt: 0.0625, yieldPerPlantLbs: [0.2, 0.3],
+    daysToMaturity: [55, 70], spacingSqFt: 0.125, yieldPerPlantLbs: [0.2, 0.3],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 3, groceryPricePerLb: 3.00, caloriesPer100g: 42,
     preservation: ["freeze"],
@@ -564,7 +598,7 @@ export const CROPS = {
   },
   peas_shell: {
     name: "Shelling Peas", category: "legume", season: "cool", sowMethod: "direct",
-    daysToMaturity: [60, 75], spacingSqFt: 0.0625, yieldPerPlantLbs: [0.08, 0.15],
+    daysToMaturity: [60, 75], spacingSqFt: 0.125, yieldPerPlantLbs: [0.08, 0.15],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 3.50, caloriesPer100g: 81,
     preservation: ["freeze", "can", "dehydrate"],
@@ -576,7 +610,10 @@ export const CROPS = {
     name: "Cowpea (Black-Eyed Pea)", category: "legume", season: "warm", sowMethod: "direct",
     daysToMaturity: [60, 90], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 8, waterNeeds: "low", difficulty: 1,
-    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 2.00, caloriesPer100g: 336,
+    // caloriesPer100g is the IMMATURE (fresh) seed figure, USDA FoodData
+    // Central; the mature DRY seed value of 336 does not belong beside a
+    // fresh-weight garden yield. Engineering review 2026-09-06 I-1.
+    avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 2.00, caloriesPer100g: 90,
     preservation: ["dehydrate", "can", "freeze"],
     startIndoorsWeeks: null, transplantWeeks: null, directSowWeeks: 2,
     harvestStartWeeks: 10, harvestDurationWeeks: 6,
@@ -638,7 +675,7 @@ export const CROPS = {
   // ─── Allium ────────────────────────────────────────────────────────────
   garlic: {
     name: "Garlic", category: "allium", season: "cool", sowMethod: "direct",
-    daysToMaturity: [240, 270], spacingSqFt: 0.11, yieldPerPlantLbs: [0.15, 0.25],
+    daysToMaturity: [240, 270], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.15, 0.25],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 2, groceryPricePerLb: 5.00, caloriesPer100g: 149,
     preservation: ["root_cellar", "dehydrate"],
@@ -658,7 +695,7 @@ export const CROPS = {
   },
   shallot: {
     name: "Shallots", category: "allium", season: "cool", sowMethod: "direct",
-    daysToMaturity: [90, 120], spacingSqFt: 0.11, yieldPerPlantLbs: [0.25, 0.5],
+    daysToMaturity: [90, 120], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.25, 0.5],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 1, groceryPricePerLb: 6.50, caloriesPer100g: 72,
     preservation: ["root_cellar", "dehydrate"],
@@ -680,7 +717,7 @@ export const CROPS = {
   },
   parsley: {
     name: "Parsley", category: "herb", season: "cool", sowMethod: "either",
-    daysToMaturity: [70, 90], spacingSqFt: 0.11, yieldPerPlantLbs: [0.3, 0.6],
+    daysToMaturity: [70, 90], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.3, 0.6],
     sunHours: 5, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 0.5, groceryPricePerLb: 12.00, caloriesPer100g: 36,
     preservation: ["freeze", "dehydrate"],
@@ -690,7 +727,7 @@ export const CROPS = {
   },
   cilantro: {
     name: "Cilantro", category: "herb", season: "cool", sowMethod: "direct",
-    daysToMaturity: [40, 55], spacingSqFt: 0.11, yieldPerPlantLbs: [0.15, 0.3],
+    daysToMaturity: [40, 55], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.15, 0.3],
     sunHours: 5, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 0.3, groceryPricePerLb: 14.00, caloriesPer100g: 23,
     preservation: ["freeze"],
@@ -700,7 +737,7 @@ export const CROPS = {
   },
   dill: {
     name: "Dill", category: "herb", season: "cool", sowMethod: "direct",
-    daysToMaturity: [40, 60], spacingSqFt: 0.11, yieldPerPlantLbs: [0.2, 0.4],
+    daysToMaturity: [40, 60], spacingSqFt: 1 / 9, yieldPerPlantLbs: [0.2, 0.4],
     sunHours: 6, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 0.3, groceryPricePerLb: 12.00, caloriesPer100g: 43,
     preservation: ["dehydrate", "freeze"],

@@ -143,17 +143,26 @@ const CURRENCY_SYMBOLS = ["$", "€", "£", "R", "¥"];
 // every garden-space display + LLM input + HTML report by ~0.003%. Now
 // matches sibling Urban Root products (Grow Room, Aero-Calc) at 6 sig figs.
 const SQFT_TO_SQM = 0.09290304;    // 1 sq ft = 0.3048² m² (exact)
-const LB_TO_KG = 0.453592;
+// Engineering review 2026-09-06 L-2: these three were truncated below the
+// exact definitions while SQFT_TO_SQM was raised to exact in the 2026-05-18
+// pass. Finish the job so every conversion in the file is exact.
+const LB_TO_KG = 0.45359237;        // 1 lb = 0.45359237 kg (exact, NIST SP 811)
 const FT_TO_M = 0.3048;
 const IN_TO_CM = 2.54;
 const CUFT_TO_CUYD = 1 / 27;
-const CUFT_TO_L = 28.3168;          // 1 cu ft = 28.3168 liters
-const CUFT_TO_CUM = 0.0283168;      // 1 cu ft = 0.0283168 m³
+const CUFT_TO_L = 28.316846592;     // 1 cu ft = 0.3048³ m³ × 1000 (exact)
+const CUFT_TO_CUM = 0.028316846592; // 1 cu ft = 0.3048³ m³ (exact)
 const SETTLING_BUFFER = 1.15;       // +15% to fill soil, settles 10-20% over first few weeks (Cornell, U. Minn Extension)
-// Multi-bed raised gardens typically lose 25-35% of footprint to paths.
-// Cornell Home Gardening guidance lands at ~30% for walk-between-beds layouts;
-// a single SFG grid can be lower (~15-20%) but 30% is the safer default.
-const PATH_BUFFER = 1.30;
+// Multi-bed raised gardens typically lose 25-35% OF FOOTPRINT to paths.
+// Cornell Home Gardening guidance lands at ~30% for walk-between-beds layouts.
+// Engineering review 2026-09-06 M-1: the old literal 1.30 made paths
+// 0.30 / 1.30 = 23.1% of footprint, not 30%. If paths are p OF THE FOOTPRINT
+// the multiplier is 1 / (1 - p), so 30% -> 1.4286. Geometric check: 4 ft beds
+// with a shared 2 ft path give a 6 ft pitch = 33.3% path share; 1.30
+// corresponds to a 1.2 ft path, which nobody can walk down. Keep the share as
+// the named constant and derive the multiplier so the two can never disagree.
+const PATH_SHARE_OF_FOOTPRINT = 0.30;
+const PATH_BUFFER = 1 / (1 - PATH_SHARE_OF_FOOTPRINT);
 // USDA ERS per-capita fresh produce consumption ≈ 330 lb/person/year (veg +
 // fruit + potatoes). Carleen Madigan's The Backyard Homestead plans 300-400 lb
 // per person for full self-sufficiency. UK / South African dietary averages
@@ -221,7 +230,16 @@ const PRESETS = {
   full_homestead: {
     label: "Full Homestead",
     sub: "Large, year-round",
+    // Engineering review 2026-09-06 M-4: eight crops are VARIETY CHILDREN of
+    // another crop (tomato_cherry parents to tomato, lettuce_head to lettuce,
+    // butternut/acorn/spaghetti/pumpkin to winter squash) and each carries its
+    // OWN avgConsumptionLbsPerPersonYear. Selecting parent AND child charged
+    // the household for both, stacking demand 18.6% (295.45 -> 350.45 lb per
+    // person per year) and inflating plant counts, bed area, soil cost and
+    // savings with it. The 74 non-variety crops sum to 295.45 lb, which is what
+    // DEFAULT_PRODUCE_PER_PERSON_LBS (300) is calibrated against.
     selection: Object.keys(CROPS).reduce((acc, k) => {
+      if (CROPS[k].parentCrop) return acc;
       acc[k] = "weekly";
       return acc;
     }, {}),
@@ -353,6 +371,20 @@ const DEFAULT_BED = () => ({
 // ── Planting date tables (USDA zones, Northern hemisphere reference) ──
 // Extension-service midpoints. Southern hemisphere flips all dates by 6 months.
 // User can override per their hyperlocal frost history via manual entry.
+//
+// Engineering review 2026-09-06 M-7. Two limits a reader must know about:
+//   1. A USDA hardiness zone encodes MINIMUM WINTER TEMPERATURE, not frost
+//      dates. Two places in one zone can differ by six weeks on last frost.
+//      These rows are regional midpoints and nothing more; manual entry is
+//      the sharp instrument, and the picker now says so on screen.
+//   2. The current USDA map (November 2023, 1991-2020 normals, 13,412
+//      stations) has THIRTEEN zones each split into a/b half-zones and runs
+//      about 2.5 °F warmer than the 2012 map. This table is whole-zone 3-11.
+//      Zones 1, 2, 12 and 13 are deliberately ABSENT rather than filled with
+//      extrapolated dates: zones 12-13 are frost-free, which this shape
+//      cannot express, and no sourced freeze-date normals for 1-2 were to
+//      hand. Anyone outside 3-11 uses manual entry, which the copy directs
+//      them to. Do not invent rows here - a wrong frost date kills a crop.
 // ═══════════════════════════════════════════════════════════════════════════
 const ZONE_FROST_DATES = {
   3:  { lastSpring: { m: 5,  d: 15 }, firstFall: { m: 9,  d: 15 } },
@@ -457,6 +489,31 @@ const fmtDecimal = (n, d = 1) => {
   return n.toFixed(d);
 };
 
+// Engineering review 2026-09-06 L-9: the yen has no minor unit, so "¥910.21"
+// is not a price anyone in Japan would write. Every money display asks this
+// helper how many decimals its currency takes, rather than each site hardcoding
+// two. Currencies are the five symbols the app offers.
+const ZERO_DECIMAL_CURRENCIES = ["¥"];
+const moneyDecimals = (currency) => (ZERO_DECIMAL_CURRENCIES.includes(currency) ? 0 : 2);
+
+// Engineering review 2026-09-06 L-1: a fixed 1-decimal area print collapsed 31
+// of 82 crops to "0.0 m²" on the mobile crop card - a Rand or Euro customer
+// read "no space needed" for carrots, garlic and every herb - and printed two
+// different crops as the same 0.1 sq ft in imperial. Pick the decimals from the
+// magnitude so every crop in the table reads as a distinct, non-zero number,
+// and use ONE helper on both the desktop table and the mobile card so they can
+// never disagree again.
+function fmtAreaValue(sqft, metric) {
+  const v = (Number.isFinite(sqft) ? sqft : 0) * (metric ? SQFT_TO_SQM : 1);
+  const d = v < 0.1 ? 3 : v < 1 ? 2 : 1;
+  return v.toFixed(d);
+}
+function fmtMassValue(lbs, metric) {
+  const v = (Number.isFinite(lbs) ? lbs : 0) * (metric ? LB_TO_KG : 1);
+  const d = v < 0.1 ? 3 : v < 1 ? 2 : 1;
+  return v.toFixed(d);
+}
+
 // Lightly tints a hex color to use as a card background. Keeps the crop
 // selector legible across 8 category colours - pure primary tint worked
 // for one green theme; per-category tints need a consistent ~12% alpha.
@@ -525,6 +582,12 @@ function formatDate(date, refYear) {
   const base = `${SHORT_MONTHS[date.getMonth()]} ${date.getDate()}`;
   return refYear && y !== refYear ? `${base}, ${y}` : base;
 }
+// Engineering review 2026-09-06 L-7: the timeline divided by a hardcoded 365,
+// so in a leap year a 31-December bar was clamped to day 365 of 366 and every
+// bar sat 0.27% left of where it belonged.
+function daysInYear(year) {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 366 : 365;
+}
 function dayOfYear(date, refYear) {
   if (!date) return null;
   const jan1 = new Date(refYear, 0, 1);
@@ -536,6 +599,13 @@ function getFrostDates(mode, zone, hemisphere, manualFrost, referenceYear) {
     const ls = parseIsoDate(manualFrost?.lastSpring);
     const ff = parseIsoDate(manualFrost?.firstFall);
     if (!ls || !ff) return null;
+    // Engineering review 2026-09-06 L-8: parseIsoDate rejects 2026-02-30 but
+    // nothing checked ORDER, so a swapped pair (fall 1 Mar, spring 1 Nov) was
+    // accepted and every date downstream was generated from a -245-day growing
+    // window. A same-day pair is a 0-day window and is equally unusable.
+    // Return null and reuse the existing "manual dates missing" block, which
+    // already stops generation and explains itself on screen.
+    if (ff <= ls) return null;
     return { lastSpring: ls, firstFall: ff, source: "manual" };
   }
   const base = ZONE_FROST_DATES[zone];
@@ -576,7 +646,8 @@ function toIsoDate(date) {
 function computePlantingDates(crop, frostDates, sowMethodOverride = null) {
   const out = {
     startIndoors: null, transplant: null, directSow: null,
-    harvestStart: null, harvestEnd: null, anchorMethod: null,
+    harvestStart: null, harvestEnd: null, harvestEndEffective: null,
+    anchorMethod: null,
     frostRiskAtHarvest: false,
   };
   if (!crop || !frostDates) return out;
@@ -613,6 +684,13 @@ function computePlantingDates(crop, frostDates, sowMethodOverride = null) {
   if (crop.season === "warm" && out.harvestEnd && firstFall && out.harvestEnd > firstFall) {
     out.frostRiskAtHarvest = true;
   }
+  // Engineering review 2026-09-06 M-8: the badge fired but the printed window
+  // did not move, so a zone-3 tomato read "harvest to 30 Oct" against a 15 Sep
+  // first frost - 45 days after the plant is dead. Truncate what we PRINT and
+  // DRAW at first frost for warm-season crops; leave harvestEnd itself alone,
+  // because the badge test above reads it. Cool-season and perennial crops
+  // genuinely run past frost, so they are untouched.
+  out.harvestEndEffective = out.frostRiskAtHarvest ? firstFall : out.harvestEnd;
 
   return out;
 }
@@ -1147,6 +1225,7 @@ function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = 
   let totalSpaceSqft = 0;
   let totalPlants = 0;
   let totalYieldLbs = 0;
+  let totalYieldConservativeLbs = 0;
   const categorySpaceMap = {};
 
   for (const [cropId, frequency] of Object.entries(selectedMap)) {
@@ -1175,6 +1254,7 @@ function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = 
     totalSpaceSqft += spaceSqFt;
     totalPlants += plantsNeeded;
     totalYieldLbs += expectedYieldLbs;
+    totalYieldConservativeLbs += expectedYieldLow;
     categorySpaceMap[crop.category] = (categorySpaceMap[crop.category] || 0) + spaceSqFt;
   }
 
@@ -1183,8 +1263,15 @@ function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = 
   // represents "% of a household's annual produce". Numerator honors the user's
   // chosen goal via plantsNeeded sizing.
   const householdTarget = producePerPersonLbs * familySize;
+  // Engineering review 2026-09-06 H-1: the plant count is sized on the
+  // CONSERVATIVE-LOW yield, so the headline has to be reported on the same
+  // basis - otherwise the KPI credits a harvest the garden was never sized to
+  // produce (mean yieldMid / yieldLow across the table is 1.4824, and the
+  // family-of-4 headline read 63.3% where the conservative basis reads 47.6%).
+  // This is what CLAUDE.md section 6 has always specified: conservative-end for
+  // the self-sufficiency display, midpoint for the cost-savings ROI.
   const rawSelfSufficiencyPct = householdTarget > 0
-    ? (totalYieldLbs / householdTarget) * 100
+    ? (totalYieldConservativeLbs / householdTarget) * 100
     : 0;
   const selfSufficiencyPct = Math.min(100, rawSelfSufficiencyPct);
 
@@ -1194,11 +1281,43 @@ function computeResults(selectedMap, familySize, goalKey, producePerPersonLbs = 
     totalSpaceRaw: totalSpaceSqft,
     totalPlants,
     totalYieldLbs,
+    totalYieldConservativeLbs,
     householdTarget,
     selfSufficiencyPct,
     rawSelfSufficiencyPct,
     categorySpaceMap,
   };
+}
+
+// ── Cost savings, one implementation ───────────────────────────────────────
+// Engineering review 2026-09-06 H-1, second mechanism: nothing capped the
+// savings at what the household actually eats, so every pound grown beyond the
+// stated annual need was credited as a grocery bill that never existed
+// (+82% on a one-person salad garden, +37% on a family of four). Savings are
+// DISPLACED PURCHASE: you only save on produce you would otherwise have
+// bought. Surplus is real, and the Self-Sufficiency tab says so in words, but
+// it is not money.
+//
+// Top-level and pure so the Growing Plan renders the same total the Cost
+// Savings tab does - two implementations of one rule is how they drift.
+// Fallback chain per crop: user override -> crop default -> 0. The final 0
+// covers a crop shipped without groceryPricePerLb so a missing field cannot
+// NaN-cascade through totals, hero, or bar widths.
+function computeSavingsRows(perCrop, priceOverrides = {}) {
+  const rows = perCrop.map((r) => {
+    const stored = priceOverrides?.[r.cropId];
+    const cropDefault = r.crop.groceryPricePerLb;
+    const pricePerLb = typeof stored === "number" && Number.isFinite(stored)
+      ? stored
+      : (typeof cropDefault === "number" && Number.isFinite(cropDefault) ? cropDefault : 0);
+    const displacedLbs = Math.min(r.expectedYieldLbs, r.annualNeedLbs);
+    const surplusLbs = Math.max(0, r.expectedYieldLbs - r.annualNeedLbs);
+    const annualSavings = displacedLbs * pricePerLb;
+    return { ...r, pricePerLb, displacedLbs, surplusLbs, annualSavings };
+  });
+  const totalSavings = rows.reduce((s, r) => s + r.annualSavings, 0);
+  const totalSurplusLbs = rows.reduce((s, r) => s + r.surplusLbs, 0);
+  return { rows, totalSavings, totalSurplusLbs };
 }
 
 // - ProduceTargetField (editable household produce-per-person baseline) -
@@ -1467,7 +1586,9 @@ function SelfSufficiencyCalculator({
             fontSize: 15, color: T.tx2, lineHeight: 1.5,
           }}>
             You'd grow about {Math.round(results.selfSufficiencyPct)}% of your family's fresh
-            produce needs from the crops you've selected.
+            produce needs from the crops you've selected. This uses the conservative end of
+            each crop's yield range - the same figure the plant counts are sized on, so a
+            good season beats it rather than falling short of it.
             {results.rawSelfSufficiencyPct > 110 && (
               <span style={{ display: "block", marginTop: 6, color: T.primary, fontWeight: 600 }}>
                 That's more than your household needs. Extra can go to neighbors,
@@ -1486,7 +1607,7 @@ function SelfSufficiencyCalculator({
           <MiniStat label="Garden space (incl. paths)"
             value={results.totalSpaceSqft * areaConv}
             decimals={1} unit={unitArea} />
-          <MiniStat label="Estimated yield" value={results.totalYieldLbs * massConv}
+          <MiniStat label="Estimated yield (mid-range)" value={results.totalYieldLbs * massConv}
             decimals={0} unit={unitMass} />
         </div>
         {results.totalSpaceSqft > 0 && results.totalSpaceSqft < 10 && (
@@ -1507,8 +1628,9 @@ function SelfSufficiencyCalculator({
               metric={metric} />
           </div>
           <p style={{ marginTop: 10, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
-            Totals above include {Math.round((PATH_BUFFER - 1) * 100)}% extra for
-            paths and margins. The bar shows crop area only.
+            Totals above allow for paths and margins at about{" "}
+            {Math.round(PATH_SHARE_OF_FOOTPRINT * 100)}% of the total footprint.
+            The bar shows crop area only.
           </p>
         </div>
 
@@ -1613,7 +1735,7 @@ function CropBreakdownCard({ result, metric, areaConv, massConv, unitArea, unitM
       }}>
         <span style={{ color: T.tx3 }}>Space</span>
         <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
-          {(spaceSqFt * areaConv).toFixed(1)} {unitArea}
+          {fmtAreaValue(spaceSqFt, metric)} {unitArea}
         </span>
         <span style={{ color: T.tx3 }}>Yield</span>
         <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
@@ -1675,15 +1797,24 @@ function computeSoilResults(beds, mix) {
     perBed.push({ bed, oneBedCuFt, subtotal });
   }
 
+  // Engineering review 2026-09-06 H-3: the card recommended the settled volume
+  // and then billed bags and cost against the UN-settled one, leaving the
+  // customer 10 bags and $73.44 short on a three-bed order. What you have to
+  // BUY is the settled volume, so that is what the breakdown quantifies -
+  // labelled "incl. settling" everywhere it appears. `cuft` stays on the return
+  // as the raw geometric share; nothing may bill against it silently.
+  // I-4: bags1 / bags1_5 / bags2 were dead (the render recomputed them so the
+  // metric path worked) and two implementations of one rule is how they drift.
+  // Removed; the render is the single site that turns a volume into bags.
   const components = (mix.components || []).map((c) => {
     const cuft = totalCuFt * c.pct;
+    const cuftWithSettling = cuft * SETTLING_BUFFER;
     return {
       ...c,
       cuft,
-      bags1: Math.ceil(cuft / 1),
-      bags1_5: Math.ceil(cuft / 1.5),
-      bags2: Math.ceil(cuft / 2),
+      cuftWithSettling,
       cost: cuft * (c.pricePerCuFt || 0),
+      costWithSettling: cuftWithSettling * (c.pricePerCuFt || 0),
     };
   });
   const totalCost = components.reduce((s, c) => s + c.cost, 0);
@@ -1693,6 +1824,7 @@ function computeSoilResults(beds, mix) {
     cuYd: totalCuFt / 27,
     components,
     totalCost,
+    totalCostWithSettling: components.reduce((s, c) => s + c.costWithSettling, 0),
     perBed,
     hasInvalidLShape,
   };
@@ -1924,13 +2056,17 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
           <MiniStat label={`Volume (${metric ? "m³" : "cu yd"})`}
             value={metric ? results.totalCuFt * CUFT_TO_CUM : results.cuYd}
             decimals={2} unit={metric ? "m³" : "cu yd"} />
-          <MiniStat label="Estimated cost" value={results.totalCost}
-            decimals={2} unit={currency} />
+          <MiniStat label="Estimated cost (incl. settling)" value={results.totalCostWithSettling}
+            decimals={moneyDecimals(currency)} unit={currency} />
         </div>
 
         {/* Per-component breakdown */}
         <div style={{ marginTop: 24 }}>
           <div style={eyebrowStyle}>Breakdown by component</div>
+          <p style={{ margin: "6px 0 0", fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+            Quantities and costs below are what you need to BUY: the 15% settling buffer is
+            already included, so the bags you carry home fill the bed after it settles.
+          </p>
           <div style={{
             marginTop: 12, display: "grid", gap: 10,
             gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
@@ -1938,7 +2074,8 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
             {results.components.map((c) => {
               const bagSizes = metric ? BAG_SIZES_L : BAG_SIZES_CUFT;
               const bagUnit = metric ? "L" : "cu ft";
-              const cuftOrL = metric ? c.cuft * CUFT_TO_L : c.cuft;
+              // H-3: bill the settled volume, the same one the hero recommends.
+              const cuftOrL = metric ? c.cuftWithSettling * CUFT_TO_L : c.cuftWithSettling;
               return (
                 <div key={c.key} style={{
                   padding: "14px 16px", borderRadius: T.radius,
@@ -1951,7 +2088,7 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
                       fontSize: 20, fontWeight: 700, color: T.primary,
                     }}>
                       {cuftOrL.toFixed(1)}
-                      <span style={{ fontSize: 12, color: T.tx3, fontWeight: 500, marginLeft: 4 }}>{bagUnit}</span>
+                      <span style={{ fontSize: 12, color: T.tx3, fontWeight: 500, marginLeft: 4 }}>{bagUnit} incl. settling</span>
                     </div>
                   </div>
                   <div style={{
@@ -1969,9 +2106,9 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
                         </React.Fragment>
                       );
                     })}
-                    <span style={{ color: T.tx3 }}>Subtotal</span>
+                    <span style={{ color: T.tx3 }}>Subtotal (incl. settling)</span>
                     <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
-                      {currency}{c.cost.toFixed(2)}
+                      {currency}{fmtDecimal(c.costWithSettling, moneyDecimals(currency))}
                     </span>
                   </div>
                 </div>
@@ -1981,8 +2118,10 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
         </div>
 
         <p style={{ marginTop: 20, fontSize: 13, color: T.tx3, lineHeight: 1.5 }}>
-          Soil typically settles 10–20% over the first few waterings. The "with settling
-          buffer" figure adds 15%. Bag counts round up, so plan to have a little extra.
+          Soil typically settles 10–20% over the first few waterings, so the breakdown and the
+          estimated cost are sized on the +15% settling figure, not the bare bed volume. Bag
+          counts round up on top of that. Prices are a display symbol only; no currency
+          conversion is applied.
         </p>
       </div>
     </section>
@@ -2552,8 +2691,11 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
         <div style={{ marginTop: 20 }}>
           <ZonePicker value={zone} onChange={(v) => update({ zone: v })} hemisphere={hemisphere} />
           <p style={{ marginTop: 8, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
-            Your actual frost dates can vary by ±2 weeks based on elevation, proximity to water,
-            and urban heat. Use the manual option below if you know your local dates.
+            A hardiness zone tells you how cold your winter gets, not when your frosts fall, so
+            these dates are regional midpoints and can be two weeks out either way for elevation,
+            water nearby, or urban heat. If you know your own frost dates, enter them instead -
+            the plan gets sharper. Outside zones 3 to 11 (interior Alaska, south Florida, Hawaii,
+            the tropics), use "Enter frost dates".
           </p>
         </div>
       )}
@@ -2572,6 +2714,20 @@ function PlantingDateCalculator({ plantingState, setPlantingState, hemisphere })
             onChange={(v) => update({ manualFrost: { ...(manualFrost || {}), firstFall: v } })}
             referenceYear={referenceYear} />
         </div>
+      )}
+      {/* L-8: both dates parse but the season runs backwards (or has no length
+          at all). getFrostDates refuses the pair, so say why rather than
+          leaving the summary block silently empty. */}
+      {mode === "manual" && !frostDates
+        && parseIsoDate(manualFrost?.lastSpring) && parseIsoDate(manualFrost?.firstFall) && (
+        <p role="status" aria-live="polite" style={{
+          margin: "12px 0 0", padding: "8px 12px",
+          background: T.errorBg, color: T.error, borderRadius: T.radius,
+          fontSize: 13, fontWeight: 600, lineHeight: 1.5,
+        }}>
+          The first fall frost has to come after the last spring frost. Check the two dates -
+          as entered there is no growing season between them.
+        </p>
       )}
 
       {/* Frost date summary */}
@@ -2767,7 +2923,7 @@ function PlantingTimelineChart({ rows, referenceYear }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
   const rowHeight = 52;
   const labelWidth = isMobile ? 96 : 132;
-  const totalDays = 365;
+  const totalDays = daysInYear(referenceYear);
   const monthLabels = SHORT_MONTHS;
 
   const phaseFor = (start, end, color) => {
@@ -2791,7 +2947,7 @@ function PlantingTimelineChart({ rows, referenceYear }) {
     // Show pills at the left/right edge for out-of-year phases (garlic etc).
     const results = [];
     const earliest = [dates.startIndoors, dates.transplant, dates.directSow].filter(Boolean).sort((a, b) => a - b)[0];
-    const latest = dates.harvestEnd;
+    const latest = dates.harvestEndEffective || dates.harvestEnd;
     if (earliest && earliest < new Date(referenceYear, 0, 1)) {
       results.push({ side: "left", label: `${formatDate(earliest, referenceYear)}` });
     }
@@ -2836,8 +2992,10 @@ function PlantingTimelineChart({ rows, referenceYear }) {
           const growBars = !isPerennial && sowBase && dates.harvestStart
             ? phaseFor(sowBase, dates.harvestStart, PHASE_COLORS.grow)
             : [];
-          const harvestBars = !isPerennial && dates.harvestStart && dates.harvestEnd
-            ? phaseFor(dates.harvestStart, dates.harvestEnd, PHASE_COLORS.harvest)
+          // M-8: draw the window the plant can actually stand, not the raw
+          // duration. dates.harvestEnd is still what the frost badge tests.
+          const harvestBars = !isPerennial && dates.harvestStart && dates.harvestEndEffective
+            ? phaseFor(dates.harvestStart, dates.harvestEndEffective, PHASE_COLORS.harvest)
             : [];
           const edges = isPerennial ? [] : edgeIndicators(dates);
 
@@ -3003,7 +3161,7 @@ function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChan
             <span style={{ color: T.tx3 }}>Harvest</span>
             <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
               {formatDate(dates.harvestStart, referenceYear)}
-              {dates.harvestEnd && ` – ${formatDate(dates.harvestEnd, referenceYear)}`}
+              {dates.harvestEndEffective && ` – ${formatDate(dates.harvestEndEffective, referenceYear)}`}
             </span>
           </>
         )}
@@ -3970,6 +4128,8 @@ const PLAN_INPUT_DEFAULTS = {
   waterMethod: "drip",
   experience: "1_to_3",
   goals: ["fresh", "preserving"],
+  // null = "use the growing area my crop selection needs" (M-5).
+  gardenSqFt: null,
 };
 const LOADING_MESSAGES = [
   "Reading your inputs...",
@@ -4050,10 +4210,82 @@ async function computeFingerprint(d) {
 // client-side shape sanitiser at that point - do not render unsanitised
 // cached plans.
 
+// ── Garden space the customer actually has (engineering review M-5) ────────
+// Canonical storage is SQUARE FEET, always - the same unit the request payload
+// sends and the same rule ProduceTargetField follows for pounds. The Field
+// shows m² in metric mode and converts its BOUNDS with its value, because a
+// bound has to travel in the same unit as the value it bounds (audit
+// 2026-08-17 H-1). The skip-if-equal guard stops an untouched focus+blur from
+// re-encoding the displayed 1-decimal m² back through the conversion and
+// drifting the stored figure a little further every cycle.
+const GARDEN_SQFT_MIN = 10;
+const GARDEN_SQFT_MAX = 100000;
+function GardenSpaceField({ value, derived, onChange, metric, isMobile, tight }) {
+  const usingDerived = !(typeof value === "number" && Number.isFinite(value));
+  const canonical = usingDerived ? derived : value;
+  const displayUnit = metric ? "m²" : "sq ft";
+  const displayValue = metric ? Number((canonical * SQFT_TO_SQM).toFixed(1)) : canonical;
+  const min = metric ? GARDEN_SQFT_MIN * SQFT_TO_SQM : GARDEN_SQFT_MIN;
+  const max = metric ? GARDEN_SQFT_MAX * SQFT_TO_SQM : GARDEN_SQFT_MAX;
+  const commit = (v) => {
+    const displayedNow = metric ? Number((canonical * SQFT_TO_SQM).toFixed(1)) : canonical;
+    if (v === displayedNow) return;
+    const asSqFt = metric ? v / SQFT_TO_SQM : v;
+    onChange(Math.max(GARDEN_SQFT_MIN, Math.min(GARDEN_SQFT_MAX, asSqFt)));
+  };
+  return (
+    <div>
+      <div style={{
+        display: "grid", gap: 12, alignItems: "end",
+        gridTemplateColumns: isMobile ? "1fr" : "minmax(240px, 320px) 1fr",
+      }}>
+        <Field label="Garden space available"
+          unit={displayUnit}
+          value={displayValue} onChange={commit}
+          min={Math.max(1, Math.round(min))} max={Math.round(max)} step={10} />
+        <div style={{
+          margin: isMobile ? "-4px 0 0" : "0 0 12px",
+          fontSize: 13, color: T.tx3, lineHeight: 1.5,
+        }}>
+          Growing area only, not counting paths.{" "}
+          {usingDerived
+            ? "Right now this is the area your crop selection needs."
+            : (
+              <button type="button" onClick={() => onChange(null)}
+                style={{
+                  background: "transparent", border: "none", color: T.primary,
+                  fontFamily: T.fontBody, fontSize: 13, fontWeight: 700,
+                  cursor: "pointer", textDecoration: "underline",
+                  padding: "6px 4px", minHeight: 32,
+                }}>
+                Use what my selection needs ({metric
+                  ? `${(derived * SQFT_TO_SQM).toFixed(1)} m²`
+                  : `${derived} sq ft`})
+              </button>
+            )}
+        </div>
+      </div>
+      {tight && (
+        <p role="status" aria-live="polite" style={{
+          margin: "8px 0 0", padding: "8px 12px", borderRadius: T.radius,
+          background: T.goldBg, color: T.gold,
+          fontSize: 13, fontWeight: 600, lineHeight: 1.5,
+        }}>
+          Your selection needs about {metric
+            ? `${(derived * SQFT_TO_SQM).toFixed(1)} m²`
+            : `${derived} sq ft`}, more than the space you have. The plan will say which crops
+          to grow first and which to leave for next year.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function GrowingPlanTab({
   baseResults, planState, setPlanState,
   familySize, hemisphere, plantingState,
   metric, currency, producePerPerson, setTab,
+  costSavings,
   onActivateKey,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
@@ -4217,10 +4449,33 @@ function GrowingPlanTab({
     ? `USDA zone ${plantingState.zone}`
     : "Manual frost entry";
 
-  // ── Garden space estimate from selection ──
+  // ── Garden space ──
   // Use the RAW (un-buffered) area so the LLM sees actual growing area, not
   // path overhead. The buffered total is for layout/UX only (#10).
-  const gardenSqFt = Math.max(50, Math.round(baseResults.totalSpaceRaw));
+  //
+  // Engineering review 2026-09-06 M-5: this used to be the ONLY source, which
+  // made the system prompt's "if the garden space is too small, recommend what
+  // to prioritise" inoperative - the space supplied was by construction exactly
+  // the space the selection needs, so it was never too small. A customer with a
+  // 200 sq ft yard who picked Full Homestead was told they had 2,069 sq ft.
+  // The customer can now state what they actually have; the derived figure
+  // stays as the default and as the prefill.
+  const derivedGardenSqFt = Math.max(50, Math.round(baseResults.totalSpaceRaw));
+  const gardenSqFt = typeof inputs.gardenSqFt === "number" && Number.isFinite(inputs.gardenSqFt)
+    ? inputs.gardenSqFt
+    : derivedGardenSqFt;
+  const gardenSpaceIsTight = gardenSqFt < derivedGardenSqFt;
+
+  // ── The plan's numbers, from this app's own engine (H-2) ──
+  const engineYields = useMemo(() => engineYieldRows(baseResults.perCrop), [baseResults]);
+  const engineHarvest = useMemo(
+    () => engineHarvestRows(baseResults.perCrop, frostDates, plantingState.sowMethodChoice),
+    [baseResults, frostDates, plantingState.sowMethodChoice]
+  );
+  const engineSavings = useMemo(
+    () => computeSavingsRows(baseResults.perCrop, costSavings?.priceOverrides).totalSavings,
+    [baseResults, costSavings]
+  );
 
   const goalLabels = inputs.goals
     .map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label)
@@ -4390,6 +4645,7 @@ function GrowingPlanTab({
       plan, inputs, familySize, zoneStr,
       lastSpringFrostStr, firstFallFrostStr, hemisphere,
       gardenSqFt, metric, currency, cropNames, generatedAt: planState.generatedAt,
+      engineYields, engineHarvest, engineSavings,
     });
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     // Revoke the previous URL before creating a new one - every additional
@@ -4434,7 +4690,7 @@ function GrowingPlanTab({
           <span><span style={{ color: T.tx3 }}>Family:</span> <strong style={{ color: T.tx }}>{familySize}</strong></span>
           <span><span style={{ color: T.tx3 }}>Hemisphere:</span> <strong style={{ color: T.tx }}>{hemisphere === "south" ? "Southern" : "Northern"}</strong></span>
           <span><span style={{ color: T.tx3 }}>Climate:</span> <strong style={{ color: T.tx }}>{zoneStr}</strong></span>
-          <span><span style={{ color: T.tx3 }}>Garden space:</span> <strong style={{ color: T.tx }}>{metric ? `${(gardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${gardenSqFt} sq ft`}</strong></span>
+          <span><span style={{ color: T.tx3 }}>Growing area needed (excl. paths):</span> <strong style={{ color: T.tx }}>{metric ? `${(derivedGardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${derivedGardenSqFt} sq ft`}</strong></span>
           <span style={{ gridColumn: isMobile ? "auto" : "1 / -1" }}>
             <span style={{ color: T.tx3 }}>Crops ({cropNames.length}):</span>{" "}
             <span style={{ color: T.tx }}>{cropNames.length > 0 ? cropNames.slice(0, 8).join(", ") + (cropNames.length > 8 ? `, +${cropNames.length - 8} more` : "") : "None selected yet"}</span>
@@ -4444,6 +4700,14 @@ function GrowingPlanTab({
 
       {/* ── New inputs ── */}
       <div style={{ display: "grid", gap: 20 }}>
+        {/* M-5: the space the customer ACTUALLY has, so "your garden is too
+            small, here is what to prioritise" can finally fire. */}
+        <GardenSpaceField
+          value={inputs.gardenSqFt}
+          derived={derivedGardenSqFt}
+          onChange={(v) => updateInput("gardenSqFt", v)}
+          metric={metric} isMobile={isMobile}
+          tight={gardenSpaceIsTight} />
         <div>
           <label style={labelStyle}>Sun exposure</label>
           <PillSelect options={SUN_OPTIONS} value={inputs.sunExposure}
@@ -4644,6 +4908,8 @@ function GrowingPlanTab({
         <PlanRenderer plan={plan} metric={metric} currency={currency}
           isMobile={isMobile}
           generatedAt={planState.generatedAt}
+          engineYields={engineYields} engineHarvest={engineHarvest}
+          engineSavings={engineSavings}
           onDownload={downloadHtml}
           onClear={clearPlan} />
       )}
@@ -4663,7 +4929,63 @@ function monthIndex(name) {
   return MONTH_ORDER.indexOf(name);
 }
 
-function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownload, onClear }) {
+// ── The Growing Plan's numbers come from THIS app, not from the model ──────
+// Engineering review 2026-09-06 H-2, resolved as option (b) on 2026-09-06.
+// The request only ever sent the model a list of crop NAMES, so every figure
+// it returned - plant counts, yields, savings, harvest months - was invented
+// beside an engine that already knew the answer. One purchase could show a
+// customer three different tomato yields on three tabs. The model now writes
+// the prose (summary, monthly tasks, bed layouts, succession notes, tips) and
+// these two builders plus computeSavingsRows supply every number, in the
+// customer's own units and currency.
+//
+// Yields are reported in POUNDS here and converted at the render boundary,
+// so the value and its unit label can never be separated - the same rule the
+// request payload follows (gardenSqFt is always sq ft, producePerPersonLbs
+// always lb, displayUnits is a separate output flag).
+function engineYieldRows(perCrop) {
+  if (!Array.isArray(perCrop)) return [];
+  return perCrop.map((r) => ({
+    crop: r.crop.name,
+    plants: r.plantsNeeded,
+    yieldLbs: r.expectedYieldLbs,
+    lowLbs: r.expectedYieldLow,
+    highLbs: r.expectedYieldHigh,
+  }));
+}
+
+// Harvest window per crop, from the same computePlantingDates the free
+// Planting Dates tab draws. "Peak" is the midpoint of the window - a stated
+// convention, not a horticultural claim. Crops with no derivable anchor date
+// are dropped rather than guessed at.
+function engineHarvestRows(perCrop, frostDates, sowMethodChoice = {}) {
+  if (!Array.isArray(perCrop) || !frostDates) return [];
+  const rows = [];
+  for (const r of perCrop) {
+    const d = computePlantingDates(r.crop, frostDates, sowMethodChoice?.[r.cropId] || null);
+    const start = d.harvestStart;
+    const end = d.harvestEndEffective || d.harvestEnd || start;
+    if (!start || !end || end < start) continue;
+    const spanDays = Math.round((end - start) / 86400000);
+    // setDate, not epoch arithmetic - DST safe, per the date-math rule.
+    const peak = new Date(start);
+    peak.setDate(peak.getDate() + Math.round(spanDays / 2));
+    rows.push({
+      crop: r.crop.name,
+      startMonth: MONTH_ORDER[start.getMonth()],
+      endMonth: MONTH_ORDER[end.getMonth()],
+      peakMonth: MONTH_ORDER[peak.getMonth()],
+    });
+  }
+  return rows;
+}
+
+// engineYields / engineHarvest / engineSavings are always supplied by
+// GrowingPlanTab; the defaults are there so a future call site that forgets one
+// renders a section short instead of taking the whole app into the ErrorBoundary.
+function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
+                        engineYields = [], engineHarvest = [], engineSavings = 0,
+                        onDownload, onClear }) {
   return (
     <div style={{ marginTop: 32 }}>
       {/* ── Action bar ── */}
@@ -4782,18 +5104,22 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownloa
         </PlanSection>
       )}
 
-      {/* ── Harvest timeline ── */}
-      {plan.harvestTimeline.length > 0 && (
+      {/* ── Harvest timeline (from computePlantingDates, not the model) ── */}
+      {engineHarvest.length > 0 && (
         <PlanSection title="Harvest timeline">
-          <PlanHarvestChart rows={plan.harvestTimeline} />
+          <PlanHarvestChart rows={engineHarvest} />
+          <p style={{ margin: "10px 0 0", fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+            Windows come from your zone and frost dates on the Planting Dates tab. Peak is the
+            middle of each window. Warm-season crops stop at your first fall frost.
+          </p>
         </PlanSection>
       )}
 
-      {/* ── Yield estimates ── */}
-      {plan.yieldEstimates.length > 0 && (
+      {/* ── Yield estimates (from the crop database, not the model) ── */}
+      {engineYields.length > 0 && (
         <PlanSection title="Estimated yields">
           <div style={{ display: "grid", gap: 8 }}>
-            {plan.yieldEstimates.map((y, i) => (
+            {engineYields.map((y, i) => (
               <div key={i} style={{
                 padding: "10px 14px", borderRadius: T.radius,
                 background: T.bg2, border: `1.5px solid ${T.border}`,
@@ -4806,9 +5132,12 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownloa
                   fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
                   fontSize: 14, color: T.primary, fontWeight: 700,
                 }}>
-                  {y.plants} plants · ~{fmtDecimal(y.estimatedYield, 1)} {y.unit}
+                  {fmtInt(y.plants)} plants · ~{fmtMassValue(y.yieldLbs, metric)} {metric ? "kg" : "lb"}
                 </div>
-                {y.note && <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>{y.note}</div>}
+                <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+                  Range {fmtMassValue(y.lowLbs, metric)}–{fmtMassValue(y.highLbs, metric)}{" "}
+                  {metric ? "kg" : "lb"} depending on the season.
+                </div>
               </div>
             ))}
           </div>
@@ -4845,6 +5174,11 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownloa
       )}
 
       {/* ── Savings estimate ── */}
+      {/* The figure is the Cost Savings tab's own total, in the customer's own
+          currency. The model supplies only the shortlist and the note, so the
+          two paid tabs can no longer print two different numbers for one
+          purchase (engineering H-2), and a model-echoed currency symbol can no
+          longer override the customer's selection (code review M-3). */}
       {plan.savingsEstimate && (
         <PlanSection title="Estimated annual savings">
           <div style={{
@@ -4856,14 +5190,18 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt, onDownloa
               <span style={{
                 fontFamily: T.fontNum, fontWeight: 700,
                 fontSize: isMobile ? 28 : 40, color: T.tx2,
-              }}>{plan.savingsEstimate.currency || currency}</span>
+              }}>{currency}</span>
               <span style={{
                 fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
                 fontWeight: 700, fontSize: isMobile ? 36 : 56, color: T.primary, lineHeight: 1,
               }}>
-                {plan.savingsEstimate.annualSavings.toLocaleString()}
+                {fmtInt(Math.round(engineSavings))}
               </span>
             </div>
+            <p style={{ margin: "8px auto 0", maxWidth: 460, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+              Your Cost Savings tab's figure: mid-range yields at your grocery prices, capped
+              at what your household would otherwise buy.
+            </p>
             {plan.savingsEstimate.topSavers.length > 0 && (
               <div style={{ marginTop: 12, fontSize: 13, color: T.tx2 }}>
                 Top savers:{" "}
@@ -5008,7 +5346,8 @@ function escapeHtml(s) {
 //   primaryBg=#E6F0E5, goldBg=#FBF6E6, gold=#B8942C
 function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
                               lastSpringFrostStr, firstFallFrostStr, hemisphere,
-                              gardenSqFt, metric, currency, cropNames, generatedAt }) {
+                              gardenSqFt, metric, currency, cropNames, generatedAt,
+                              engineYields, engineHarvest, engineSavings }) {
   const dateStr = generatedAt ? new Date(generatedAt).toLocaleString() : new Date().toLocaleString();
   const sunLabel = SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure;
   const soilLabel = SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType;
@@ -5096,7 +5435,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   // (#13). Without it a non-canonical startMonth gave startIdx -1 ->
   // segment [-1, 11] -> a phantom full-year harvest bar in the downloaded
   // report for a row the on-screen chart correctly hid.
-  const harvestRows = plan.harvestTimeline
+  const harvestRows = (engineHarvest || [])
     .map((r) => {
       const startIdx = monthIndex(r.startMonth);
       let endIdx = monthIndex(r.endMonth);
@@ -5128,15 +5467,17 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
     </div>
   ` : "";
 
-  const yieldHtml = plan.yieldEstimates.length > 0 ? `
+  const massUnit = metric ? "kg" : "lb";
+  const yieldRows = engineYields || [];
+  const yieldHtml = yieldRows.length > 0 ? `
     <h2>Estimated yields</h2>
-    ${plan.yieldEstimates.map((y) => `
+    ${yieldRows.map((y) => `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
           <strong>${escapeHtml(y.crop)}</strong>
-          <span class="num" style="color:#2D5A27;">${y.plants} plants &middot; ~${fmtDecimal(y.estimatedYield, 1)} ${escapeHtml(y.unit)}</span>
+          <span class="num" style="color:#2D5A27;">${fmtInt(y.plants)} plants &middot; ~${fmtMassValue(y.yieldLbs, metric)} ${escapeHtml(massUnit)}</span>
         </div>
-        ${y.note ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(y.note)}</p>` : ""}
+        <p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">Range ${fmtMassValue(y.lowLbs, metric)}&ndash;${fmtMassValue(y.highLbs, metric)} ${escapeHtml(massUnit)} depending on the season.</p>
       </div>
     `).join("")}
   ` : "";
@@ -5158,7 +5499,8 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   const savingsHtml = plan.savingsEstimate ? `
     <h2>Estimated annual savings</h2>
     <div class="savings">
-      <div><span class="num currency">${escapeHtml(plan.savingsEstimate.currency || currency)}</span><span class="num big">${plan.savingsEstimate.annualSavings.toLocaleString()}</span></div>
+      <div><span class="num currency">${escapeHtml(currency)}</span><span class="num big">${escapeHtml(fmtInt(Math.round(engineSavings || 0)))}</span></div>
+      <p style="margin:8px auto 0;max-width:460px;font-size:12px;color:#7A6E5F;">Mid-range yields at your grocery prices, capped at what your household would otherwise buy.</p>
       ${plan.savingsEstimate.topSavers.length > 0 ? `<div style="margin-top:10px;font-size:13px;color:#6B5D4F;">Top savers: ${plan.savingsEstimate.topSavers.map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join("")}</div>` : ""}
       ${plan.savingsEstimate.note ? `<p style="margin:10px auto 0;max-width:460px;font-size:13px;color:#6B5D4F;">${escapeHtml(plan.savingsEstimate.note)}</p>` : ""}
     </div>
@@ -5442,7 +5784,8 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
             <CropDbCard key={row.id} row={row}
               expanded={expandedId === row.id}
               onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
-              massConv={massConv} areaConv={areaConv} unitMass={unitMass} unitArea={unitArea} />
+              massConv={massConv} areaConv={areaConv} unitMass={unitMass} unitArea={unitArea}
+              metric={metric} />
           ))}
         </div>
       ) : (
@@ -5510,10 +5853,10 @@ function CropDatabaseTab({ metric, dbState, setDbState }) {
                       <td style={cropDbTdStyle}>{SOW_LABELS[row.sowMethod]}</td>
                       <td style={cropDbTdNumStyle}>{fmtMaturity(row.daysToMaturity, row.season)}</td>
                       <td style={cropDbTdNumStyle}>
-                        {(row.spacingSqFt * areaConv).toFixed(metric ? 2 : 1)}
+                        {fmtAreaValue(row.spacingSqFt, metric)}
                       </td>
                       <td style={cropDbTdNumStyle}>
-                        {(row.yieldPerPlantLbs[0] * massConv).toFixed(1)}–{(row.yieldPerPlantLbs[1] * massConv).toFixed(1)}
+                        {fmtMassValue(row.yieldPerPlantLbs[0], metric)}–{fmtMassValue(row.yieldPerPlantLbs[1], metric)}
                       </td>
                       <td style={cropDbTdNumStyle}>{row.sunHours}</td>
                       <td style={cropDbTdStyle}>{WATER_LABELS[row.waterNeeds]}</td>
@@ -5566,7 +5909,7 @@ function DifficultyDots({ level }) {
   );
 }
 
-function CropDbCard({ row, expanded, onToggle, massConv, areaConv, unitMass, unitArea }) {
+function CropDbCard({ row, expanded, onToggle, massConv, areaConv, unitMass, unitArea, metric }) {
   const cat = CATEGORIES.find((c) => c.id === row.category);
   return (
     <div style={{
@@ -5608,8 +5951,8 @@ function CropDbCard({ row, expanded, onToggle, massConv, areaConv, unitMass, uni
         }}>
           <span><span style={{ color: T.tx3 }}>Maturity:</span> {fmtMaturity(row.daysToMaturity, row.season)}</span>
           <span><span style={{ color: T.tx3 }}>Sun:</span> {row.sunHours}h</span>
-          <span><span style={{ color: T.tx3 }}>Space:</span> {(row.spacingSqFt * areaConv).toFixed(1)} {unitArea}</span>
-          <span><span style={{ color: T.tx3 }}>Yield:</span> {(row.yieldPerPlantLbs[0] * massConv).toFixed(1)}–{(row.yieldPerPlantLbs[1] * massConv).toFixed(1)} {unitMass}</span>
+          <span><span style={{ color: T.tx3 }}>Space:</span> {fmtAreaValue(row.spacingSqFt, metric)} {unitArea}</span>
+          <span><span style={{ color: T.tx3 }}>Yield:</span> {fmtMassValue(row.yieldPerPlantLbs[0], metric)}–{fmtMassValue(row.yieldPerPlantLbs[1], metric)} {unitMass}</span>
           <span><span style={{ color: T.tx3 }}>Water:</span> {WATER_LABELS[row.waterNeeds]}</span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ color: T.tx3 }}>Diff:</span> <DifficultyDots level={row.difficulty} />
@@ -5830,7 +6173,10 @@ function CostSavingsCalculator({
         pricePerCuFt: priceOverrides[c.key] ?? c.pricePerCuFt,
       })),
     };
-    return computeSoilResults(beds, effectiveMix).totalCost;
+    // Must read the SAME total the Soil tab prints, or the button's own label
+    // ("Use Soil Calculator total") is a lie. Engineering review H-3 moved that
+    // total onto the settled volume; this followed it.
+    return computeSoilResults(beds, effectiveMix).totalCostWithSettling;
   }, [beds, soilState]);
 
   // Functional setters so back-to-back updates in the same React batch
@@ -5865,23 +6211,16 @@ function CostSavingsCalculator({
   };
 
   // ── Per-crop savings table ──
-  // Fallback chain: user override → crop-default → 0. The final 0 guard
-  // covers a future crop shipped without `groceryPricePerLb` so a missing
-  // field can't NaN-cascade through totals, hero, or bar widths. Audit #3.
   // Render in baseResults order (matches Self-Sufficiency tab) so editing
   // a price doesn't reorder the row mid-edit and yank the cursor with it.
   // The bar widths still convey ranking visually. Audit #49.
-  const perCropSavings = useMemo(() => {
-    return baseResults.perCrop.map((r) => {
-      const stored = costSavings.priceOverrides[r.cropId];
-      const cropDefault = r.crop.groceryPricePerLb;
-      const pricePerLb = typeof stored === "number" && Number.isFinite(stored)
-        ? stored
-        : (typeof cropDefault === "number" && Number.isFinite(cropDefault) ? cropDefault : 0);
-      const annualSavings = r.expectedYieldLbs * pricePerLb;
-      return { ...r, pricePerLb, annualSavings };
-    });
-  }, [baseResults, costSavings.priceOverrides]);
+  // The arithmetic itself lives in computeSavingsRows at module scope so the
+  // Growing Plan tab renders the identical total - engineering review H-1/H-2.
+  const savingsResult = useMemo(
+    () => computeSavingsRows(baseResults.perCrop, costSavings.priceOverrides),
+    [baseResults, costSavings.priceOverrides]
+  );
+  const perCropSavings = savingsResult.rows;
   // Bar-chart denominator uses the max savings across all rows so per-row
   // widths still reflect ranking even though the row order itself is stable.
   const maxSavingsForBars = useMemo(
@@ -5890,7 +6229,7 @@ function CostSavingsCalculator({
   );
 
   const totals = useMemo(() => {
-    const totalSavings = perCropSavings.reduce((s, r) => s + r.annualSavings, 0);
+    const totalSavings = savingsResult.totalSavings;
     const totalSetup = COST_SAVINGS_FIELDS.reduce(
       (s, f) => s + (Number(costSavings.setupCosts[f.key]) || 0), 0
     );
@@ -5900,7 +6239,7 @@ function CostSavingsCalculator({
       ? ((totalSavings - totalSetup) / totalSetup) * 100
       : null;
     return { totalSavings, totalSetup, breakEvenMonths, roiPct, hasCrops: perCropSavings.length > 0 };
-  }, [perCropSavings, costSavings.setupCosts]);
+  }, [savingsResult, perCropSavings, costSavings.setupCosts]);
 
   const maxSavings = maxSavingsForBars;
   const heroBreakEven = Number.isFinite(totals.breakEvenMonths)
@@ -6140,9 +6479,11 @@ function CostSavingsCalculator({
       </div>
 
       <p style={{ marginTop: 24, fontSize: 13, color: T.tx3, lineHeight: 1.5 }}>
-        Savings use midpoint yield estimates and your grocery prices. Defaults reflect 2026 US
-        retail averages and are editable per crop. Setup costs are one-time; savings repeat every
-        year, so the second year onward is closer to pure return.
+        Savings use midpoint yield estimates and your grocery prices, capped per crop at what
+        your household would otherwise buy - produce grown beyond that is real food, but it
+        displaces no grocery bill, so it is not counted here. Default prices are BLS average
+        retail (series retrieved July 2026) and are editable per crop. Setup costs are one-time;
+        savings repeat every year, so the second year onward is closer to pure return.
       </p>
     </section>
   );
@@ -6171,10 +6512,35 @@ const FREEZER_BAG_LBS = 3;
 const FREEZER_BAG_CUFT = 0.1337;          // 1 US gal = 231 in³ = 0.1337 cu ft
 const DEHYDRATOR_LBS_PER_BATCH = 8;
 const ROOT_CELLAR_LBS_PER_INCH = 5 / 6;
-const PINT_LBS = 1.5;                     // NCHFP whole-tomato baseline
-const QUART_LBS = 3;                      // NCHFP whole-tomato baseline
+// Engineering review 2026-09-06 M-3 / L-6. One crop-blind constant across 40
+// crops printed a jar count a third too low for snap beans and 70% too high
+// for tomato sauce, and PINT_LBS was the rounded 1.5 where NCHFP's own table
+// says 13 lb per 9 pints.
+//   NCHFP, Whole or Halved Tomatoes: 21 lb per canner load of 7 quarts (3.0
+//   lb/qt), 13 lb per canner load of 9 pints (1.444 lb/pt).
+//   NCHFP, Standard Tomato Sauce (thin): 35 lb per 7 quarts (5.0 lb/qt).
+// A crop may carry its own `lbsPerQuart` (see src/data/crops.js) when the
+// NCHFP purchase weight and the crop's garden-yield basis are the same thing.
+// The pint is derived from the quart at NCHFP's own whole-tomato pint:quart
+// ratio rather than a per-crop pint figure, because the published pint rows
+// for the crops we carry sit within 4% of that ratio and inventing a
+// per-crop pint number would be exactly the error this finding is about.
+const QUART_LBS = 3;
+const PINT_LBS = 13 / 9;
+const PINT_PER_QUART_RATIO = PINT_LBS / QUART_LBS;
+const SAUCE_QUART_LBS = 5;
 const FRESH_PCT_MIN = 0;
 const FRESH_PCT_MAX = 100;
+
+// Fresh pounds per canning quart for one crop under one method. Sauce is a
+// property of the PRODUCT, not the crop, so it wins over the crop figure.
+function jarQuartLbs(crop, method) {
+  if (method === "sauce") return SAUCE_QUART_LBS;
+  const perCrop = crop?.lbsPerQuart;
+  return typeof perCrop === "number" && Number.isFinite(perCrop) && perCrop > 0
+    ? perCrop
+    : QUART_LBS;
+}
 
 function preservationOptionsFor(crop) {
   const arr = Array.isArray(crop.preservation) && crop.preservation.length > 0
@@ -6183,7 +6549,7 @@ function preservationOptionsFor(crop) {
   return arr.map((m) => ({ id: m, label: PRESERVATION_LABELS[m] || m }));
 }
 
-function computePreservationForCrop(yieldLbs, freshPct, method) {
+function computePreservationForCrop(yieldLbs, freshPct, method, crop = null) {
   const fresh = yieldLbs * (freshPct / 100);
   const preserved = yieldLbs - fresh;
   // unstorablePreserved tracks the share the user asked to preserve but the
@@ -6203,10 +6569,15 @@ function computePreservationForCrop(yieldLbs, freshPct, method) {
   switch (method) {
     case "can":
     case "sauce":
-    case "ferment":
-      result.jarsPint = Math.ceil(preserved / PINT_LBS);
-      result.jarsQuart = Math.ceil(preserved / QUART_LBS);
+    case "ferment": {
+      const lbsPerQuart = jarQuartLbs(crop, method);
+      const lbsPerPint = lbsPerQuart * PINT_PER_QUART_RATIO;
+      result.lbsPerQuart = lbsPerQuart;
+      result.lbsPerPint = lbsPerPint;
+      result.jarsPint = Math.ceil(preserved / lbsPerPint);
+      result.jarsQuart = Math.ceil(preserved / lbsPerQuart);
       break;
+    }
     case "freeze":
       result.freezerBags = Math.ceil(preserved / FREEZER_BAG_LBS);
       result.freezerCuFt = result.freezerBags * FREEZER_BAG_CUFT;
@@ -6258,7 +6629,7 @@ function PreservationPlanner({
       const options = preservationOptionsFor(r.crop);
       const stored = preservation.methodChoice[r.cropId];
       const method = options.some((o) => o.id === stored) ? stored : (options[0]?.id ?? "fresh");
-      const detail = computePreservationForCrop(r.expectedYieldLbs, freshPct, method);
+      const detail = computePreservationForCrop(r.expectedYieldLbs, freshPct, method, r.crop);
       return { ...r, options, method, detail };
     });
   }, [baseResults, preservation.methodChoice, freshPct]);
@@ -6409,11 +6780,12 @@ function PreservationPlanner({
       </div>
 
       <p style={{ marginTop: 24, fontSize: 13, color: T.tx3, lineHeight: 1.5 }}>
-        Container counts use NCHFP whole-tomato averages as a middle-of-the-road baseline:
-        ~1.5 lb fresh per pint jar, ~3 lb per quart, ~3 lb per gallon freezer bag, 8 lb per
-        dehydrator batch. Dense packs (sauce, corn, peas) need closer to 2 lb/pint and
-        5 lb/quart; light packs (snap beans, leafy greens) need less. Shelf life is
-        method-typical, not crop-specific.
+        Jar counts use the NCHFP "how much do I need" tables. Where NCHFP publishes a figure
+        for the crop on the same weight basis we estimate yield on, we use it - snap beans
+        2 lb per quart, carrots 2.5, tomato sauce 5. Everything else uses NCHFP's whole-tomato
+        baseline of 3 lb per quart and 1.44 lb per pint, which runs low for dense packs (corn,
+        shelled peas) and high for light ones. Freezer bags assume ~3 lb per gallon bag,
+        dehydrator batches 8 lb. Shelf life is method-typical, not crop-specific.
       </p>
     </section>
   );
@@ -7320,6 +7692,12 @@ export default function App() {
         goals: Array.isArray(raw.goals)
           ? raw.goals.filter((g) => GOAL_CHIPS.some((c) => c.id === g)).slice(0, GOAL_CHIPS.length)
           : [...PLAN_INPUT_DEFAULTS.goals],
+        // null means "use the area my crop selection needs". Anything that is
+        // not a finite number in range becomes null rather than a NaN that
+        // would reach the request payload - engineering review M-5.
+        gardenSqFt: typeof raw.gardenSqFt === "number" && Number.isFinite(raw.gardenSqFt)
+          ? Math.max(GARDEN_SQFT_MIN, Math.min(GARDEN_SQFT_MAX, raw.gardenSqFt))
+          : null,
       };
     };
     if (!saved || typeof saved !== "object") {
@@ -7944,6 +8322,7 @@ export default function App() {
               metric={metric} currency={currency}
               producePerPerson={producePerPerson}
               setTab={setTab}
+              costSavings={costSavings}
               onActivateKey={activateKey} />
           </TabPageShell>
         )}

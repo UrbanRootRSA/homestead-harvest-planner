@@ -434,17 +434,20 @@ function sanitiseInput(body) {
   const experience = clampStr(body.experience, 32);
   const goals = clampStrArray(body.goals, MAX_GOALS, 32);
   const crops = clampStrArray(body.crops, MAX_CROPS, MAX_STR);
-  // displayUnits controls what units the LLM uses in OUTPUT yields/savings.
+  // displayUnits controls the units the model writes PROSE measurements in.
   // Inputs are always in lb and sq ft - see #11/#12 audit fix.
   const displayUnits = body.displayUnits === "metric" || body.metric === true
     ? "metric" : "imperial";
-  const currency = clampStr(body.currency, 3) || "$";
+  // body.currency is accepted and deliberately NOT forwarded. The model no
+  // longer produces a money figure, so it has no use for a symbol, and the
+  // client renders its own total in the customer's own currency (H-2 / code
+  // review M-3).
   // producePerPersonLbs is ALWAYS in lb - the client never converts this.
   const producePerPersonLbs = clampNum(body.producePerPersonLbs, 50, 800, 300);
   return {
     familySize, zone, lastSpringFrost, firstFallFrost, hemisphere,
     gardenSqFt, sunExposure, soilType, waterMethod, experience,
-    goals, crops, displayUnits, currency, producePerPersonLbs,
+    goals, crops, displayUnits, producePerPersonLbs,
   };
 }
 
@@ -460,7 +463,8 @@ Style and substance:
 - Prioritise companion planting in your bed layouts.
 - Tailor advice to the experience level given.
 - Keep tasks specific and time-anchored to the user's hardiness zone and frost dates.
-- Inputs are always in lb and sq ft. Output yields and savings in the units specified by displayUnits (imperial: lb; metric: kg). Currency for the savings figure will be specified in the user message: match it.
+- Inputs are always in lb and sq ft. Any measurement you write in prose (spacing, depth, quantities) must use the system given by displayUnits (imperial: inches, feet, lb; metric: cm, m, kg).
+- The app supplies the plant counts, the yield figures, the harvest months and the savings total from its own crop database. Do not state any of them, and do not contradict them. Write the reasoning and the actions, not the arithmetic.
 - If hemisphere is Southern, January is high summer and July is winter; reverse the seasonal flow throughout the year accordingly.
 - Do not include marketing language, disclaimers, or self-references. Output the plan content only.
 
@@ -516,35 +520,15 @@ const PLAN_SCHEMA = {
         required: ["crop", "plantings", "intervalWeeks", "note"],
       },
     },
-    harvestTimeline: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          crop: { type: "string" },
-          startMonth: { type: "string", enum: MONTH_NAMES },
-          endMonth: { type: "string", enum: MONTH_NAMES },
-          peakMonth: { type: "string", enum: MONTH_NAMES },
-        },
-        required: ["crop", "startMonth", "endMonth", "peakMonth"],
-      },
-    },
-    yieldEstimates: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          crop: { type: "string" },
-          plants: { type: "integer" },
-          estimatedYield: { type: "number" },
-          unit: { type: "string", enum: ["lb", "kg"] },
-          note: { type: "string" },
-        },
-        required: ["crop", "plants", "estimatedYield", "unit", "note"],
-      },
-    },
+    // harvestTimeline and yieldEstimates USED to live here and are gone on
+    // purpose - engineering review 2026-09-06 H-2, resolved as option (b).
+    // The app owns every number in the plan now: harvest windows come from
+    // computePlantingDates, plant counts and yields from computeResults, the
+    // savings total from computeSavingsRows. Asking a model for figures the
+    // engine already holds produced three different tomato yields inside one
+    // $39.99 purchase, and the sanitiser's clamps (0-100,000 lb, 0-9,999
+    // plants, 0-$10,000,000) were far too wide to catch any of it.
+    // Do not re-add a numeric field here without an engine to check it against.
     preservationGuide: {
       type: "array",
       items: {
@@ -559,23 +543,22 @@ const PLAN_SCHEMA = {
         required: ["crop", "freshShare", "preservationMethods", "note"],
       },
     },
+    // The savings FIGURE and its currency are the app's, not the model's.
+    // What the model still contributes is the shortlist and the sentence.
     savingsEstimate: {
       type: "object",
       additionalProperties: false,
       properties: {
-        annualSavings: { type: "number" },
-        currency: { type: "string" },
         topSavers: { type: "array", items: { type: "string" } },
         note: { type: "string" },
       },
-      required: ["annualSavings", "currency", "topSavers", "note"],
+      required: ["topSavers", "note"],
     },
     tips: { type: "array", items: { type: "string" } },
   },
   required: [
     "summary", "monthlySchedule", "bedLayouts", "successionPlanting",
-    "harvestTimeline", "yieldEstimates", "preservationGuide",
-    "savingsEstimate", "tips",
+    "preservationGuide", "savingsEstimate", "tips",
   ],
 };
 
@@ -597,10 +580,9 @@ function buildUserPrompt(input) {
 - Goals: ${goalsLine}
 - Selected crops: ${cropsLine}
 - Annual produce target: ${input.producePerPersonLbs} lb/person
-- displayUnits: ${input.displayUnits} (output yields and savings in this system)
-- Currency for savings estimate: ${input.currency}
+- displayUnits: ${input.displayUnits} (write any prose measurement in this system)
 
-Be conservative on yield. Emphasise companion planting. If the space is small, prioritise high-value crops and defer the rest. Anchor every monthly task to the frost dates above. Submit via the submit_growing_plan tool.`;
+Emphasise companion planting. If the garden space above is smaller than the crop list needs, say which crops to grow first and which to defer. Anchor every monthly task to the frost dates above. The app prints the plant counts, yields, harvest months and savings total itself - leave those out of your text. Submit via the submit_growing_plan tool.`;
 }
 
 // ── Output sanitisation ─────────────────────────────────────────────────────
@@ -611,20 +593,12 @@ Be conservative on yield. Emphasise companion planting. If the space is small, p
 const PLAN_STR_MAX = 800;
 const PLAN_SHORT_MAX = 80;
 
-// Currency symbols the client knows how to render. Map common ISO codes back
-// to symbols so the LLM can return either "$" or "USD" and we'll normalise.
-const CURRENCY_SYMBOLS = ["$", "€", "£", "R", "¥"];
-const CURRENCY_CODE_TO_SYMBOL = {
-  USD: "$", EUR: "€", GBP: "£", ZAR: "R", JPY: "¥",
-};
-function normaliseCurrency(returned, fallback) {
-  const s = typeof returned === "string" ? returned.trim() : "";
-  if (!s) return fallback;
-  if (CURRENCY_SYMBOLS.includes(s)) return s;
-  const upper = s.toUpperCase();
-  if (CURRENCY_CODE_TO_SYMBOL[upper]) return CURRENCY_CODE_TO_SYMBOL[upper];
-  return fallback;
-}
+// The currency-echo normaliser that used to live here is gone. The model no
+// longer returns a currency, because it no longer returns a savings figure:
+// the client renders its own total in the customer's own selected symbol.
+// That also closes code review 2026-09-06 M-3, where a recognised-but-wrong
+// symbol from the model overrode the customer's choice on screen and in the
+// downloaded report.
 
 function s(v, max = PLAN_STR_MAX) {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -639,7 +613,7 @@ function n(v, min = 0, max = 1e9) {
   return Math.max(min, Math.min(max, x));
 }
 
-function sanitisePlan(raw, currencyFallback = "$") {
+function sanitisePlan(raw) {
   if (!raw || typeof raw !== "object") return null;
   return {
     summary: s(raw.summary, 1200),
@@ -664,23 +638,9 @@ function sanitisePlan(raw, currencyFallback = "$") {
           note: s(sp?.note, 400),
         })).filter((sp) => sp.crop)
       : [],
-    harvestTimeline: Array.isArray(raw.harvestTimeline)
-      ? raw.harvestTimeline.slice(0, 32).map((h) => ({
-          crop: s(h?.crop, PLAN_SHORT_MAX),
-          startMonth: s(h?.startMonth, PLAN_SHORT_MAX),
-          endMonth: s(h?.endMonth, PLAN_SHORT_MAX),
-          peakMonth: s(h?.peakMonth, PLAN_SHORT_MAX),
-        })).filter((h) => h.crop && h.startMonth)
-      : [],
-    yieldEstimates: Array.isArray(raw.yieldEstimates)
-      ? raw.yieldEstimates.slice(0, 32).map((y) => ({
-          crop: s(y?.crop, PLAN_SHORT_MAX),
-          plants: Math.round(n(y?.plants, 0, 9999)),
-          estimatedYield: Math.round(n(y?.estimatedYield, 0, 100000) * 10) / 10,
-          unit: y?.unit === "kg" ? "kg" : "lb",
-          note: s(y?.note, 400),
-        })).filter((y) => y.crop)
-      : [],
+    // No harvestTimeline, no yieldEstimates: the client renders both from its
+    // own engine (H-2). A model that returns them anyway is dropped here, so a
+    // stale cached tool schema cannot smuggle a number back onto the page.
     preservationGuide: Array.isArray(raw.preservationGuide)
       ? raw.preservationGuide.slice(0, 32).map((p) => ({
           crop: s(p?.crop, PLAN_SHORT_MAX),
@@ -690,8 +650,6 @@ function sanitisePlan(raw, currencyFallback = "$") {
         })).filter((p) => p.crop)
       : [],
     savingsEstimate: raw.savingsEstimate && typeof raw.savingsEstimate === "object" ? {
-      annualSavings: Math.round(n(raw.savingsEstimate.annualSavings, 0, 1e7)),
-      currency: normaliseCurrency(raw.savingsEstimate.currency, currencyFallback),
       topSavers: sArr(raw.savingsEstimate.topSavers, 10, PLAN_SHORT_MAX),
       note: s(raw.savingsEstimate.note, 600),
     } : null,
@@ -784,16 +742,20 @@ export default async function handler(req, res) {
   // primary cost-control gate - limits an authenticated attacker to
   // RL_LICENCE_MAX generations per RL_LICENCE_WINDOW_SEC even if they hold a
   // valid key.
+  // Engineering review 2026-09-06 I-8: shape first, THEN the bucket. This
+  // guard used to sit after the per-licence increment, so a request with no
+  // crops - a plan for an empty garden - spent one of the customer's 20 daily
+  // slots to be told no. Nothing here touches Anthropic or Redis.
+  const input = sanitiseInput(body);
+  if (input.crops.length === 0) {
+    return res.status(400).json({ ok: false, error: "Pick at least one crop on the Self-Sufficiency tab before generating a plan." });
+  }
+
   if (!(await rateLimitOK(`lk:${hashKey(licenseKey)}`, RL_LICENCE_MAX, RL_LICENCE_WINDOW_SEC))) {
     return res.status(429).json({
       ok: false,
       error: "You've reached the fair-use limit of 20 plans in 24 hours. Please try again later. See our terms for details.",
     });
-  }
-
-  const input = sanitiseInput(body);
-  if (input.crops.length === 0) {
-    return res.status(400).json({ ok: false, error: "Pick at least one crop on the Self-Sufficiency tab before generating a plan." });
   }
 
   // Phase-2 M5: bound the Anthropic call. Without this, a hung upstream can
@@ -896,7 +858,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ ok: false, error: "The plan generator returned an unexpected response. Please try again." });
     }
 
-    const plan = sanitisePlan(toolBlock.input, input.currency);
+    const plan = sanitisePlan(toolBlock.input);
     if (!plan || plan.monthlySchedule.length === 0) {
       return res.status(502).json({ ok: false, error: "The generated plan was incomplete. Please try again." });
     }
