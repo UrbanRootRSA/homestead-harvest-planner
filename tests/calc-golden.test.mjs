@@ -226,7 +226,7 @@ const APP_NAMES = [
   'DEFAULT_PRODUCE_PER_PERSON_LBS', 'GOAL_MULTIPLIER', 'FREQUENCY_FACTOR',
   'PRESETS', 'BAG_SIZES_CUFT', 'BAG_SIZES_L', 'ZONE_FROST_DATES',
   'fmtDecimal', 'fmtInt', 'ZERO_DECIMAL_CURRENCIES', 'moneyDecimals',
-  'fmtAreaValue', 'fmtMassValue',
+  'fmtAreaValue', 'fmtMassValue', 'fmtMassRounded',
   'monthDayToDate', 'addWeeks', 'shiftMonths', 'SHORT_MONTHS',
   'daysInYear', 'dayOfYear', 'getFrostDates', 'parseIsoDate',
   'computePlantingDates', 'splitRange',
@@ -517,6 +517,13 @@ safe(() => {
   near('H3-1', 'bed volume = 96 cu ft', s.totalCuFt, 96, 1e-9);
   near('H3-2', 'with the 15% settling buffer = 110.4 cu ft', s.totalCuFtWithSettling, 110.4, 1e-9);
   near('H3-3', 'cubic yards = 3.5556', s.cuYd, 96 / 27, 1e-12);
+  // N-1 (code re-review 2026-09-07): the bulk-order figure. H-3 left the 72 px
+  // headline and the cubic-yard stat on the RAW volume while the bags, the
+  // subtotals and the cost moved to the settled one, so the card printed 3.56
+  // and 110.4 cu ft side by side - two volumes, two bases, one card.
+  near('N1-1', 'cubic yards to BUY = 4.0889 (110.4 / 27)', s.cuYdWithSettling, 110.4 / 27, 1e-12);
+  near('N1-2', 'and it is the raw figure times the same buffer', s.cuYdWithSettling, s.cuYd * app.SETTLING_BUFFER, 1e-12);
+  near('N1-3', 'cubic metres to buy = 3.1261', s.totalCuFtWithSettling * app.CUFT_TO_CUM, 110.4 * 0.028316846592, 1e-12);
   const by = Object.fromEntries(s.components.map((c) => [c.key, c]));
   near('H3-4', 'topsoil raw share = 57.6 cu ft', by.topsoil.cuft, 57.6, 1e-9);
   near('H3-5', 'topsoil to buy = 66.24 cu ft', by.topsoil.cuftWithSettling, 66.24, 1e-9);
@@ -813,6 +820,14 @@ safe(() => {
   eq('L1-8', 'radish low yield in kg = 0.023, not 0.0', app.fmtMassValue(0.05, true), '0.023');
   eq('L1-9', 'a big yield still reads 30.0 lb', app.fmtMassValue(30, false), '30.0');
   eq('L1-10', 'a non-numeric input degrades to zero rather than NaN', app.fmtAreaValue(undefined, false), '0.000');
+  // N-3 (code re-review 2026-09-07): the INVERSE of L-1. A true zero is not a
+  // measurement, and both ends of the Preservation tab's fresh/preserved slider
+  // are true zeros - they printed "0.000 lb" on every crop row.
+  eq('N3-1', 'a true zero prints as 0, not 0.000', app.fmtMassRounded(0, false), '0');
+  eq('N3-2', '... in metric too', app.fmtMassRounded(0, true), '0');
+  eq('N3-3', 'a small non-zero still keeps its magnitude', app.fmtMassRounded(0.05, true), '0.023');
+  eq('N3-4', 'and a whole number is still rounded', app.fmtMassRounded(89.6, false), '90');
+  eq('N3-5', 'control: the sub-0.1 degrade stays on the per-plant formatter', app.fmtMassValue(0, false), '0.000');
 }
 });
 
@@ -826,17 +841,29 @@ safe(() => {
   const minC = sliceDecl(APP_SRC, 'GARDEN_SQFT_MIN');
   const maxC = sliceDecl(APP_SRC, 'GARDEN_SQFT_MAX');
   const commitText = field && sliceLocal(field, 'commit');
-  if (!field || !commitText || !minC || !maxC) {
+  // N-5 (code re-review 2026-09-07): the display transform and the two bounds
+  // are lifted with the commit closure now, because the fix made them ONE
+  // expression. A harness that recomputed the bound for itself would have
+  // reported the floor as correct while the shipped Field clamped against a
+  // different number.
+  const toDisplayText = field && sliceLocal(field, 'toDisplay');
+  const minLocal = field && sliceLocal(field, 'min');
+  const maxLocal = field && sliceLocal(field, 'max');
+  if (!field || !commitText || !minC || !maxC || !toDisplayText || !minLocal || !maxLocal) {
     check('M5-0', 'GardenSpaceField and its commit closure exist', false, 'not found');
     return;
   }
   const make = new Function('SQFT_TO_SQM', `${minC}\n${maxC}
     return function make(metric, canonical, onChange) {
+      ${toDisplayText}
+      ${minLocal}
+      ${maxLocal}
       ${commitText}
-      return commit;
+      return { commit, min, max, display: toDisplay(canonical) };
     };`)(app.SQFT_TO_SQM);
   const writes = [];
-  const commitM = make(true, 320, (v) => writes.push(v));
+  const fieldM = make(true, 320, (v) => writes.push(v));
+  const commitM = fieldM.commit;
   commitM(Number((320 * app.SQFT_TO_SQM).toFixed(1)));
   eq('M5-1', 'an untouched focus+blur in metric writes nothing (no drift)', writes.length, 0);
   commitM(50);
@@ -844,13 +871,32 @@ safe(() => {
   commitM(999999);
   near('M5-3', 'the metric ceiling clamps to the 100000 SQ FT max, not to 100000 m2', writes[1], 100000, 1e-9);
   const writesI = [];
-  const commitI = make(false, 320, (v) => writesI.push(v));
+  const fieldI = make(false, 320, (v) => writesI.push(v));
+  const commitI = fieldI.commit;
   commitI(320);
   eq('M5-4', 'an untouched focus+blur in imperial writes nothing', writesI.length, 0);
   commitI(5);
   near('M5-5', 'below the floor clamps to 10 sq ft', writesI[0], 10, 1e-9);
   commitI(640);
   near('M5-6', 'a real imperial edit is stored as typed', writesI[1], 640, 1e-9);
+
+  // N-5: the bound the Field clamps against, against the value the Field shows.
+  // These were computed by two different expressions - Math.round(0.929) = 1 m2
+  // as the floor, Number((0.929).toFixed(1)) = 0.9 as the value - so the field
+  // opened one step BELOW its own minimum and one blur committed the minimum.
+  const atFloorM = make(true, 10, () => {});
+  eq('N5-1', 'the metric floor equals the metric display of the 10 sq ft minimum',
+    atFloorM.min, atFloorM.display, `min=${atFloorM.min} display=${atFloorM.display}`);
+  const atCeilM = make(true, 100000, () => {});
+  eq('N5-2', 'and the metric ceiling equals the display of the 100000 sq ft maximum',
+    atCeilM.max, atCeilM.display, `max=${atCeilM.max} display=${atCeilM.display}`);
+  const atFloorI = make(false, 10, () => {});
+  eq('N5-3', 'control: imperial floor and display already agreed', atFloorI.min, atFloorI.display);
+  // And the JSX must hand the Field exactly those two, or the pair above is a
+  // statement about numbers nothing reads.
+  check('N5-4', 'the <Field> is passed the same min and max the closure computes',
+    /<Field label="Garden space available"[\s\S]{0,400}?min=\{min\}\s*max=\{max\}/.test(field),
+    'the min/max props are not the lifted bounds');
 });
 
 group('money decimals - L-9');

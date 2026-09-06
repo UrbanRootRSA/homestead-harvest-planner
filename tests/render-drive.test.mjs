@@ -75,6 +75,9 @@ const WANTED = [
   'SelfSufficiencyCalculator', 'PlantingDateCalculator',
   'computeResults', 'computeSavingsRows', 'engineYieldRows', 'engineHarvestRows',
   'getFrostDates', 'PRESETS',
+  // L-6 / mutant M16: the timeline's own arithmetic, so the expected bar
+  // position is derived from the shipped helpers instead of copied.
+  'daysInYear', 'dayOfYear', 'splitRange', 'computePlantingDates',
   // Stage B (code review 2026-09-06): the paywall overlay's held-message
   // render (H-2), the client-side plan shape gate (M-5), the two tabs whose
   // copy carries a unit or a stat that was wrong (L-6, L-7), the small pill
@@ -562,6 +565,334 @@ safe(() => {
   record('M2b-5', 'control: a real harvest is still a whole number, not 3 decimals',
     /~\d+ lb\/yr/.test(bigCard) && !/~\d+\.\d+ lb\/yr/.test(bigCard),
     (bigCard.match(/~[\d.]+ lb\/yr/) || [''])[0]);
+}
+});
+
+// ═══ M-6 ruling: a prefilled key has to say whose key it is (2026-09-07)
+group('the prefilled licence box names where the key came from - M-6');
+safe(() => {
+{
+  const overlay = (prefillKey) => render('PWP', 'PaywallOverlay (prefill)',
+    React.createElement(M.PaywallOverlay, {
+      tab: { id: 'growing-plan', label: 'Growing Plan', paid: true },
+      keyError: 'This licence key was not found.', prefillKey, activating: false,
+      onActivate() {}, onClearError() {}, onClearPrefill() {},
+    }));
+  const filled = overlay('ABCD-1234-EFGH-5678');
+  has('M6-1', 'the prefilled key is in the box', filled, 'value="ABCD-1234-EFGH-5678"');
+  has('M6-2', 'and the copy says the key came from the link, not from this device', filled,
+    'This key came from the link you opened, not from a licence saved on this device.');
+  has('M6-3', 'and that activating it registers THIS device to that key', filled,
+    /this device is registered to that key and uses one of its\s+three activations/);
+  has('M6-4', 'the note is wired to the input for a screen reader', filled, 'hhp-prefill-note');
+  has('M6-5', 'and the input points at both the error and the note', filled,
+    'aria-describedby="hhp-key-error hhp-prefill-note"');
+  const bare = overlay('');
+  hasNot('M6-6', 'a customer opening the form themselves is not told about a link', bare,
+    'This key came from the link you opened');
+  hasNot('M6-7', 'control: with no prefill the form is not opened for them', bare, 'value="ABCD-1234-EFGH-5678"');
+}
+});
+
+// ═════════ L-6 / MUTANT M16: the timeline BAR, not just the daysInYear helper
+//
+// calc-golden pins daysInYear(2024) = 366. Nothing rendered a bar and measured
+// it, so replacing `daysInYear(referenceYear)` with a hardcoded 365 inside
+// PlantingTimelineChart survived the whole suite. The live effect is a 0.27%
+// drift on every bar in a leap year - small, but the helper exists precisely
+// to prevent it, and a helper nothing consumes correctly is not a fix.
+group('the planting timeline divides the year by the year it is drawing - L-6');
+safe(() => {
+{
+  // Every bar's left offset is (dayOfYear / totalDays) * 100, so a rendered
+  // percentage carries the denominator with it: multiply it back out and a
+  // correct chart returns an integer day.
+  // A PHASE BAR carries both a left and a width in per cent. The month
+  // gridlines next to it are `left:X%;width:1px` - a 12-column grid that
+  // divides by 12 whatever the year does, so matching on `left` alone measures
+  // the gridlines and passes in every year. That trap is why this reads both.
+  const pcts = (html) => [...html.matchAll(/left:([\d.]+)%;width:([\d.]+)%/g)]
+    .map((m) => Number(m[1])).filter((p) => p > 0);
+
+  // The expectation is DERIVED, not copied: the same crop, the same frost
+  // dates and the same phase the chart draws, divided by the year the chart is
+  // drawing. dayOfYear can be fractional across a DST boundary, so the day is
+  // never rounded here - the point is the DENOMINATOR.
+  const firstBarPct = (year) => {
+    const frost = M.getFrostDates('zone', 7, 'north', null, year);
+    const d = M.computePlantingDates(CROPS.tomato, frost, undefined);
+    const seg = M.splitRange(d.startIndoors, d.transplant, year)[0];
+    const day = Math.max(0, M.dayOfYear(seg.start, year));
+    return { with366: (day / 366) * 100, with365: (day / 365) * 100, day };
+  };
+
+  const leap = render('PDL', 'PlantingDateCalculator (2024, leap)',
+    React.createElement(M.PlantingDateCalculator, plantingProps({ referenceYear: 2024, selectedCrops: ['tomato', 'kale', 'carrot'] })));
+  const leapPcts = pcts(leap);
+  const e2024 = firstBarPct(2024);
+  record('L6-1', 'the leap-year chart drew bars to measure', leapPcts.length >= 3, `${leapPcts.length} bars`);
+  record('L6-2', 'the first tomato bar sits at day/366, the year the chart is drawing',
+    leap.includes(`left:${e2024.with366}%`),
+    `expected left:${e2024.with366}% (day ${e2024.day} / 366); drawn ${leapPcts.slice(0, 3).join(', ')}`);
+  record('L6-3', 'and NOT at day/365 - which is what a hardcoded 365 would draw',
+    !leap.includes(`left:${e2024.with365}%`), `the mutant's left:${e2024.with365}% is on the page`);
+
+  const common = render('PDC', 'PlantingDateCalculator (2025, common)',
+    React.createElement(M.PlantingDateCalculator, plantingProps({ referenceYear: 2025, selectedCrops: ['tomato', 'kale', 'carrot'] })));
+  const commonPcts = pcts(common);
+  const e2025 = firstBarPct(2025);
+  record('L6-4', 'control: the same chart in a common year divides by 365',
+    common.includes(`left:${e2025.with365}%`),
+    `expected left:${e2025.with365}% (day ${e2025.day} / 365); drawn ${commonPcts.slice(0, 3).join(', ')}`);
+  record('L6-5', 'control: the two years really do draw different bars',
+    JSON.stringify(leapPcts) !== JSON.stringify(commonPcts),
+    `leap=${leapPcts.slice(0, 2).join(',')} common=${commonPcts.slice(0, 2).join(',')}`);
+}
+});
+
+// ═════════════════ N-1: one card, one basis per figure, every figure labelled
+group('the soil card never prints two volumes on two bases - N-1');
+safe(() => {
+{
+  const html = render('SON', 'SoilCalculator (N-1)', React.createElement(M.SoilCalculator, soilProps(false, '$')));
+  // The 72 px headline. H-3 moved the bags, the subtotals and the cost onto the
+  // settled volume and left this one - and the "Volume (cu yd)" stat - on the
+  // raw one, so the biggest number on the page was the one a bulk-soil buyer
+  // must NOT order.
+  has('N1-1', 'the headline says what it is: the volume to buy', html, 'Total soil to buy (incl. settling)');
+  hasNot('N1-2', 'the unqualified "Total soil needed" eyebrow is gone', html, 'Total soil needed');
+  has('N1-3', 'and the number under it is the settled 110.4, not the raw 96.0', html,
+    /Total soil to buy \(incl\. settling\)[\s\S]{0,400}?110\.4/);
+  has('N1-4', 'the bulk-order figure is the settled 4.09 cu yd', html, '4.09 cu yd');
+  hasNot('N1-5', 'the raw 3.56 cu yd no longer stands alone as "Volume (cu yd)"', html, 'Volume (cu yd)<');
+  has('N1-6', 'the cubic-yard stat says it includes settling', html, 'Volume (cu yd, incl. settling)');
+  has('N1-7', 'the raw bed volume is still on the card, named as the pre-settling measure', html,
+    /your beds measure 96\.0 cu ft \(3\.56 cu yd\) before the 15% settling buffer/);
+}
+{
+  const html = render('SONM', 'SoilCalculator (N-1, metric)', React.createElement(M.SoilCalculator, soilProps(true, 'R')));
+  has('N1-8', 'metric headline is the settled 3126.2 L', html,
+    /Total soil to buy \(incl\. settling\)[\s\S]{0,400}?3126\.2/);
+  has('N1-9', 'and the bulk figure is 3.13 m3, not the raw 2.72', html, '3.13 m³');
+  has('N1-10', 'the raw 2718.4 L (2.72 m3) is labelled as the bed measurement', html,
+    /your beds measure 2718\.4 L \(2\.72 m³\) before the 15% settling buffer/);
+  has('N1-11', 'and the stat carries the basis in metric too', html, 'Volume (m³, incl. settling)');
+}
+});
+
+// ══════════════════════ N-4: three states on the Cost Savings hero, all live
+group('the Cost Savings hero has no unreachable branch - N-4');
+safe(() => {
+{
+  const res = M.computeResults({}, 4, 'full_year');
+  const empty = render('CSE', 'CostSavingsCalculator (no crops)', React.createElement(M.CostSavingsCalculator, {
+    baseResults: res, beds: BEDS, soilState: { mixId: 'classic_60_30_10', mixOverrides: null },
+    costSavings: { priceOverrides: {}, setupCosts: {} }, setCostSavings() {}, metric: false, currency: '$',
+  }));
+  has('N4-1', 'an empty selection gets the tab-level empty state', empty, 'Pick your crops first');
+  hasNot('N4-2', 'and the hero sentence that could never be reached is gone from the source', empty,
+    'Add at least one crop in the Self-Sufficiency tab');
+  const res2 = M.computeResults({ tomato: 'weekly' }, 4, 'full_year');
+  const savings = (setupCosts) => render('CSH', 'CostSavingsCalculator (hero)', React.createElement(M.CostSavingsCalculator, {
+    baseResults: res2, beds: BEDS, soilState: { mixId: 'classic_60_30_10', mixOverrides: null },
+    costSavings: { priceOverrides: {}, setupCosts }, setCostSavings() {}, metric: false, currency: '$',
+  }));
+  has('N4-3', 'state 1 of 3: crops but no setup cost', savings({}), 'Add your setup costs below');
+  has('N4-4', 'state 3 of 3: a real break-even sentence', savings({ beds: 350 }), 'pays for itself in');
+}
+});
+
+// ═══════════════ N-6: the preservation footnote states its direction correctly
+group('the preservation footnote is right about which way it errs - N-6');
+safe(() => {
+{
+  const res = M.computeResults({ peas_shell: 'weekly', corn: 'weekly' }, 4, 'full_year');
+  const html = render('PPN', 'PreservationPlanner (N-6)', React.createElement(M.PreservationPlanner, {
+    baseResults: res, preservation: { freshPct: 30, methodChoice: {} }, setPreservation() {}, metric: false,
+  }));
+  hasNot('N6-1', 'the inverted claim is gone', html, 'runs low for dense packs');
+  has('N6-2', 'shelling peas are named with the right direction: the jar count reads LOW', html,
+    /Shelling peas[\s\S]{0,220}?reads low/);
+  has('N6-3', 'and the reason is the basis, not the density', html, 'NCHFP weighs peas in the pod');
+  has('N6-4', 'sweet corn is named as in-husk, not as a dense pack', html, /Sweet corn[\s\S]{0,80}?weighs in the husk/);
+}
+{
+  // A true zero at both ends of the slider - N-3 on the surface it was found on.
+  const res = M.computeResults({ tomato: 'weekly' }, 4, 'full_year');
+  const at = (freshPct) => render('PPZ', `PreservationPlanner (fresh ${freshPct}%)`, React.createElement(M.PreservationPlanner, {
+    baseResults: res, preservation: { freshPct, methodChoice: {} }, setPreservation() {}, metric: false,
+  }));
+  hasNot('N3-1', 'fresh 0% does not print "0.000"', at(0), '0.000');
+  hasNot('N3-2', 'and neither does fresh 100%', at(100), '0.000');
+  has('N3-3', 'the zero is printed as a zero', at(0), 'fresh 0 ');
+}
+});
+
+// ══════════ N-2: a CENSUS, not a selector list - every interactive control
+//
+// The L-3 sweep fixed the four control types that finding named and left 97
+// controls under the floor, including the 82 crop rows, because the check that
+// followed it asserted two selectors. This one walks EVERY interactive element
+// in the rendered markup and fails on any that does not clear 44 px, so a
+// control that ships small in future fails here whether or not anyone thought
+// to add it.
+//
+// WHAT THIS MEASURES: the DECLARED box - min-height, or height, or padding plus
+// a line box. SSR has no layout engine, so it cannot see a computed width, a
+// flex stretch or a font that resolves larger than declared. Unknown is treated
+// as FAIL, not as pass: a control whose height cannot be read from its own
+// style has to declare one. The pixel census at 375 px lives in the browser
+// drive (docs/fixes-2026-09-06-round2.md records the run).
+group('every interactive control declares 44 px on a phone - N-2');
+safe(() => {
+{
+  const TAP_MIN = 44;
+  // The whole census runs at the phone breakpoint. useMediaQuery reads
+  // matchMedia at first render, so this has to be installed before any of the
+  // surfaces below are rendered - and restored after, or every later check in
+  // this file silently measures a phone.
+  const realMatchMedia = globalThis.matchMedia;
+  globalThis.matchMedia = (q) => ({
+    matches: /max-width:\s*640px/.test(q), media: q,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
+    onchange: null, dispatchEvent: () => false,
+  });
+  try {
+  // Named exemptions. Each one needs a reason, and the reason has to be about
+  // the CONTROL, not about the effort of fixing it.
+  const EXEMPT = [
+    {
+      // WCAG 2.5.8 exempts a link inside a sentence: growing it to 44 px would
+      // break the line box of the copyright line it sits in.
+      test: (el) => el.tag === 'a' && /href="https:\/\/urban-root\.com"/.test(el.attrs),
+      why: 'inline link inside a sentence (WCAG 2.5.8 inline exception)',
+    },
+    {
+      // The 18 px checkbox inside a crop row. The LABEL is the tap target and
+      // it is measured; the input is what the label activates.
+      test: (el) => el.tag === 'input' && /type="checkbox"/.test(el.attrs) && el.insideBigLabel,
+      why: 'checkbox wrapped by a label that clears the floor - the label is the target',
+    },
+  ];
+
+  const surfaces = [];
+  const add = (name, el) => { const html = render('CEN', `census surface ${name}`, el); if (html) surfaces.push([name, html]); };
+  add('App', React.createElement(M.default));
+  add('SelfSufficiency', React.createElement(M.SelfSufficiencyCalculator, {
+    familySize: 4, setFamilySize() {}, goal: 'full_year', setGoal() {},
+    selection: M.PRESETS.family_basics.selection, setSelection() {},
+    metric: false, producePerPerson: 300, setProducePerPerson() {},
+  }));
+  add('Soil', React.createElement(M.SoilCalculator, soilProps(false, '$')));
+  {
+    const res = M.computeResults({ tomato: 'weekly', carrot: 'weekly' }, 4, 'full_year');
+    add('CostSavings', React.createElement(M.CostSavingsCalculator, {
+      baseResults: res, beds: BEDS, soilState: { mixId: 'classic_60_30_10', mixOverrides: null },
+      costSavings: { priceOverrides: {}, setupCosts: { beds: 350 } }, setCostSavings() {}, metric: false, currency: '$',
+    }));
+    add('Preservation', React.createElement(M.PreservationPlanner, {
+      baseResults: res, preservation: { freshPct: 30, methodChoice: {} }, setPreservation() {}, metric: false,
+    }));
+    add('GrowingPlan', React.createElement(M.GrowingPlanTab, {
+      baseResults: res,
+      planState: { inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'], gardenSqFt: null }, plan: null, generatedAt: null, cropFingerprint: '' },
+      setPlanState() {}, familySize: 2, hemisphere: 'north',
+      plantingState: { mode: 'zone', zone: 7, manualFrost: null, selectedCrops: ['tomato'], referenceYear: 2026, sowMethodChoice: {} },
+      metric: false, currency: '$', producePerPerson: 300, setTab() {},
+      costSavings: { priceOverrides: {}, setupCosts: {} }, onActivateKey() {},
+      generating: false, error: '', longRun: false, loadingIdx: 0,
+      onGeneratePlan() {}, setError() {},
+    }));
+  }
+  add('PlantingDates', React.createElement(M.PlantingDateCalculator, plantingProps({})));
+  add('Paywall', React.createElement(M.PaywallOverlay, {
+    tab: { id: 'growing-plan', label: 'Growing Plan', paid: true },
+    keyError: '', prefillKey: '', activating: false,
+    onActivate() {}, onClearError() {}, onClearPrefill() {},
+  }));
+  record('N2-0', 'the census has surfaces to walk', surfaces.length >= 6, `${surfaces.length} surfaces`);
+
+  const px = (s) => { const m = /^(-?[\d.]+)px$/.exec(String(s).trim()); return m ? Number(m[1]) : null; };
+  const decl = (style, prop) => {
+    const m = new RegExp(`(?:^|;)\\s*${prop}\\s*:([^;]*)`).exec(style);
+    return m ? m[1].trim() : null;
+  };
+  // A declared height, or null when the style does not settle it.
+  function declaredHeight(style) {
+    const mh = px(decl(style, 'min-height'));
+    if (mh !== null) return mh;
+    const h = px(decl(style, 'height'));
+    if (h !== null) return h;
+    const pad = decl(style, 'padding');
+    if (!pad) return null;
+    const parts = pad.split(/\s+/).map(px);
+    if (parts.some((p) => p === null)) return null;
+    const top = parts[0];
+    const bottom = parts.length >= 3 ? parts[2] : parts[0];
+    // The smallest font this app uses on a control, so the estimate errs
+    // toward FAILING an element rather than passing one.
+    const fs = px(decl(style, 'font-size')) ?? 12;
+    return top + bottom + Math.round(fs * 1.35);
+  }
+
+  const findings = [];
+  let measured = 0;
+  for (const [surface, html] of surfaces) {
+    // Label blocks first: a label that wraps a checkbox IS the tap target, and
+    // knowing which inputs it covers is what makes the exemption exact.
+    const bigLabelInputs = new Set();
+    for (const m of html.matchAll(/<label\b([^>]*)>([\s\S]*?)<\/label>/g)) {
+      const style = (m[1].match(/style="([^"]*)"/) || [, ''])[1];
+      const inner = m[2];
+      if (!/<input\b[^>]*type="(?:checkbox|radio)"/.test(inner)) continue;
+      const h = declaredHeight(style);
+      measured += 1;
+      if (h === null || h < TAP_MIN) {
+        findings.push(`${surface}: <label> wrapping a checkbox declares ${h === null ? 'no height' : `${h}px`} - ${style.slice(0, 90)}`);
+      } else {
+        for (const im of inner.matchAll(/<input\b[^>]*>/g)) bigLabelInputs.add(im[0]);
+      }
+    }
+    for (const m of html.matchAll(/<(button|a|input|select|textarea)\b([^>]*)>/g)) {
+      const [whole, tag, attrs] = m;
+      if (tag === 'a' && !/\shref=/.test(attrs)) continue;              // an anchor with no href is not a control
+      if (tag === 'input' && /type="hidden"/.test(attrs)) continue;
+      const el = { tag, attrs, insideBigLabel: bigLabelInputs.has(whole) };
+      const ex = EXEMPT.find((e) => e.test(el));
+      if (ex) continue;
+      const style = (attrs.match(/style="([^"]*)"/) || [, ''])[1];
+      const h = declaredHeight(style);
+      measured += 1;
+      if (h === null || h < TAP_MIN) {
+        findings.push(`${surface}: <${tag}> declares ${h === null ? 'no height' : `${h}px`} - ${(attrs.match(/aria-label="([^"]*)"/) || [, ''])[1] || style.slice(0, 90)}`);
+      }
+    }
+  }
+  record('N2-1', 'the census actually walked a page full of controls', measured > 150, `${measured} controls measured`);
+  record('N2-2', `every interactive control declares at least ${TAP_MIN}px at the phone breakpoint`,
+    findings.length === 0, `${findings.length} under the floor:\n      ${[...new Set(findings)].slice(0, 12).join('\n      ')}`);
+  // The two families the fix moved, pinned by value so a revert is loud.
+  const ss = surfaces.find(([n]) => n === 'SelfSufficiency');
+  record('N2-3', 'the 82 crop rows are 44, not 32', ss && /min-height:44px/.test(ss[1]) && !/min-height:32px/.test(ss[1]));
+  const app = surfaces.find(([n]) => n === 'App');
+  record('N2-4', 'the footer links carry a floor', app && /text-decoration:none;font-size:13px;font-weight:500;padding:4px 0;display:flex;align-items:center;min-height:44px/.test(app[1]));
+  } finally {
+    globalThis.matchMedia = realMatchMedia;
+  }
+}
+});
+
+// The desktop control for the census: the same rows keep their tighter rhythm
+// off the phone breakpoint, so the fix did not just set 44 everywhere.
+group('the 44 px floor is a phone rule, not a redesign - N-2');
+safe(() => {
+{
+  const html = render('SSD', 'SelfSufficiencyCalculator (desktop)', React.createElement(M.SelfSufficiencyCalculator, {
+    familySize: 4, setFamilySize() {}, goal: 'full_year', setGoal() {},
+    selection: M.PRESETS.family_basics.selection, setSelection() {},
+    metric: false, producePerPerson: 300, setProducePerPerson() {},
+  }));
+  has('N2-5', 'a desktop crop row is still 32 px', html, 'min-height:32px');
 }
 });
 

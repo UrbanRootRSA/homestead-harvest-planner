@@ -121,7 +121,7 @@ const OTHER = 'ZZZZZZZZ-0000-0000-0000-NEVERSOLD00';
 const hash = (k) => createHash('sha256').update(String(k)).digest('hex').slice(0, 16);
 
 async function call({ key = KEY, instance_id, ip = '203.0.113.9', origin = 'https://thehomesteadplan.com',
-                      contentType = 'application/json', ls, env } = {}) {
+                      referer, contentType = 'application/json', ls, env } = {}) {
   lsScript = ls || null;
   const before = lsCalls.length;
   const prevEnv = process.env.VERCEL_ENV;
@@ -135,6 +135,7 @@ async function call({ key = KEY, instance_id, ip = '203.0.113.9', origin = 'http
   };
   const headers = { 'x-real-ip': ip };
   if (origin) headers.origin = origin;
+  if (referer) headers.referer = referer;
   if (contentType) headers['content-type'] = contentType;
   const w = console.warn; const e = console.error;
   console.warn = () => {}; console.error = () => {};
@@ -153,6 +154,11 @@ const OK_VALID_BOUND = { validate: { status: 200, body: { valid: true, license_k
 const POOL_FULL = { validate: { status: 200, body: { valid: true, license_key: { status: 'active', activation_limit: 3, activation_usage: 3 }, meta: LS_META } } };
 const NOT_FOUND = { validate: { status: 404, body: { error: 'license_key not found' } } };
 const LS_OUTAGE = { validate: { status: 503, body: { error: 'Service Unavailable' } } };
+// The attacker's shape for the HIGH-1 residual: LemonSqueezy FOUND the key and
+// rejected the INSTANCE the caller supplied. 200 / 400 / 404 all reach the same
+// leg; 404 is the one measured against the live API's wording.
+const BAD_INSTANCE = { validate: { status: 404, body: { error: 'license_key instance not found' } } };
+const DISABLED = { validate: { status: 200, body: { valid: false, license_key: { status: 'disabled' }, meta: LS_META } } };
 const ACTIVATE_OK = { instance: { id: 'inst-new' }, license_key: { status: 'active' }, meta: LS_META };
 
 // A fresh IP per request: the per-IP bucket (10 per 10 min) is a different
@@ -279,6 +285,193 @@ group('L-5: only application/json is accepted');
   const badOrigin = await call({ origin: 'https://evil.example', contentType: 'text/plain', ip: nextIp() });
   check('L5-6', 'the origin gate still answers first, so the 403 matrix is unchanged',
     badOrigin.status === 403, `http=${badOrigin.status}`);
+}
+
+// ══════════════════ HIGH-1 residual: the exemption has to be EARNABLE
+//
+// Security re-review 2026-09-07 (../docs/security-review-2026-09-06-rereview.md):
+// the exemption could only be minted by a request that PASSED the very gate it
+// exists to bypass. An attacker holding a leaked key sent it with a junk
+// instance_id: LemonSqueezy rejected the INSTANCE, which is not activation-limit
+// wording, so every one of those bumped the bucket and none of them minted the
+// marker. Fifty of those and the owner - own clean IP, own good key, own bound
+// instance - was answered 429 with LemonSqueezy never consulted, permanently.
+// H1-1..H1-5 above cannot catch it because H1-1 validates the owner FIRST,
+// which mints the marker before the spray.
+
+group('HIGH-1 residual: a never-validated key sprayed with a junk instance_id');
+
+{
+  const victim = 'EEEEEEEE-5555-5555-5555-NEVERSEENYET';
+  const sprayed = [];
+  for (let i = 0; i < 60; i += 1) {
+    sprayed.push(await call({ key: victim, ip: nextIp(), instance_id: 'junk-instance', ls: BAD_INSTANCE }));
+  }
+  check('H1r-1', 'an instance rejection never fills the licence bucket',
+    Number(store.get(`hhp:rl:validate-key:lkbad:${hash(victim)}`) || 0) === 0,
+    `count=${store.get(`hhp:rl:validate-key:lkbad:${hash(victim)}`)}`);
+  check('H1r-2', 'because LS finding the KEY and refusing the DEVICE proves the key is real',
+    store.has(`hhp:vk:ok:${hash(victim)}`), 'no known-good marker minted');
+  check('H1r-3', 'the spray is answered, so nothing about it looks special to the attacker',
+    sprayed.every((r) => r.status === 200), `statuses=${[...new Set(sprayed.map((r) => r.status))].join(',')}`);
+
+  const owner = await call({ key: victim, instance_id: 'inst-mine', ip: '203.0.113.77', ls: OK_VALID_BOUND });
+  check('H1r-4', 'the owner, on their own bound device, is served',
+    owner.status === 200 && owner.body.valid === true, `http=${owner.status} ${JSON.stringify(owner.body)}`);
+  check('H1r-5', 'and their answer came from LemonSqueezy, not from a limiter',
+    owner.lsLegs.length === 1, `legs=${JSON.stringify(owner.lsLegs)}`);
+
+  // The same customer on a NEW device has no instance to present at all.
+  const fresh = await call({
+    key: victim, ip: '203.0.113.78',
+    ls: { validate: OK_VALID.validate, activate: { status: 200, body: ACTIVATE_OK } },
+  });
+  check('H1r-6', 'and so is the same customer on a fresh device with no instance',
+    fresh.status === 200 && fresh.body.valid === true, `http=${fresh.status} ${JSON.stringify(fresh.body)}`);
+}
+
+{
+  // The control that must survive the change: the probe hole the limiter was
+  // added for. An UNKNOWN key answers "license_key not found" - no instance
+  // wording - so it still counts, junk instance_id or not.
+  const unknown = 'YYYYYYYY-9999-9999-9999-NEVERSOLD22';
+  const probes = [];
+  for (let i = 0; i < 60; i += 1) {
+    probes.push(await call({ key: unknown, ip: nextIp(), instance_id: 'junk-instance', ls: NOT_FOUND }));
+  }
+  check('H1r-7', 'an unknown key sprayed WITH an instance_id is still capped',
+    probes.findIndex((r) => r.status === 429) === 50,
+    `first 429 at #${probes.findIndex((r) => r.status === 429) + 1}`);
+  check('H1r-8', 'and it never earned the exemption',
+    !store.has(`hhp:vk:ok:${hash(unknown)}`), 'marker minted for a key LS says does not exist');
+}
+
+group('HIGH-1 residual: the bound device is a wording-independent backstop');
+
+{
+  // /api/generate binds the first generating device to hhp:instance:<hash>.
+  // Fill the bucket with verdicts that do NOT mint (plain not-found), so the
+  // ONLY thing that can serve the owner here is the binding.
+  const bound = 'FFFFFFFF-6666-6666-6666-BOUNDDEVICE1';
+  store.set(`hhp:instance:${hash(bound)}`, 'inst-canonical');
+  for (let i = 0; i < 60; i += 1) await call({ key: bound, ip: nextIp(), instance_id: 'junk', ls: NOT_FOUND });
+  check('H1r-9', 'the bucket is full and no exemption was earned',
+    Number(store.get(`hhp:rl:validate-key:lkbad:${hash(bound)}`) || 0) >= 50 /* RL_LICENCE_MAX */ &&
+    !store.has(`hhp:vk:ok:${hash(bound)}`),
+    `count=${store.get(`hhp:rl:validate-key:lkbad:${hash(bound)}`)} marker=${store.has(`hhp:vk:ok:${hash(bound)}`)}`);
+
+  // Controls first: a success would mint the marker and hide the backstop.
+  const stranger = await call({ key: bound, instance_id: 'inst-somebody-else', ip: nextIp(), ls: OK_VALID_BOUND });
+  check('H1r-10', 'a caller claiming an instance that is not the bound one is still denied',
+    stranger.status === 429 && stranger.lsLegs.length === 0, `http=${stranger.status} legs=${JSON.stringify(stranger.lsLegs)}`);
+  const bare = await call({ key: bound, ip: nextIp(), ls: OK_VALID });
+  check('H1r-11', 'and so is a caller presenting no instance at all',
+    bare.status === 429 && bare.lsLegs.length === 0, `http=${bare.status} legs=${JSON.stringify(bare.lsLegs)}`);
+
+  const owner = await call({ key: bound, instance_id: 'inst-canonical', ip: nextIp(), ls: OK_VALID_BOUND });
+  check('H1r-12', 'the bound device gets past a full bucket',
+    owner.status === 200 && owner.body.valid === true && owner.lsLegs.length === 1,
+    `http=${owner.status} legs=${JSON.stringify(owner.lsLegs)}`);
+  check('H1r-13', 'and that success mints the exemption, so it is a one-time rescue',
+    store.has(`hhp:vk:ok:${hash(bound)}`), 'no marker after the bound device validated');
+}
+
+// ═══════════════════ LOW-1: a key that goes definitively bad loses its brake
+
+group('LOW-1: the exemption is revoked on a definitive negative verdict');
+
+{
+  const refunded = 'GGGGGGGG-7777-7777-7777-REFUNDEDKEY1';
+  const good = await call({ key: refunded, instance_id: 'inst-r', ip: nextIp(), ls: OK_VALID_BOUND });
+  check('R1-1', 'the key validates once and is marked known-good',
+    good.status === 200 && store.has(`hhp:vk:ok:${hash(refunded)}`), JSON.stringify(good.body));
+
+  const after = [];
+  for (let i = 0; i < 63; i += 1) {
+    after.push(await call({ key: refunded, instance_id: 'inst-r', ip: nextIp(), ls: DISABLED }));
+  }
+  check('R1-2', 'the first disabled verdict deletes the marker',
+    !store.has(`hhp:vk:ok:${hash(refunded)}`), 'exemption survived a definitive negative');
+  check('R1-3', 'so the per-licence bucket applies again and the probes are capped',
+    after.filter((r) => r.status === 429).length > 0,
+    `429s=${after.filter((r) => r.status === 429).length}/63`);
+  check('R1-4', 'and each denied probe costs no LemonSqueezy round-trip',
+    after[after.length - 1].lsLegs.length === 0, JSON.stringify(after[after.length - 1].lsLegs));
+}
+
+{
+  // A full pool is not a definitive negative and must keep its exemption -
+  // that is the customer H-1 was fixed for.
+  const full = 'HHHHHHHH-8888-8888-8888-POOLISFULL1';
+  const r = await call({ key: full, ip: nextIp(), ls: POOL_FULL });
+  check('R1-5', 'a full device pool still earns the exemption',
+    r.status === 200 && r.body.activation_limit_reached === true && store.has(`hhp:vk:ok:${hash(full)}`),
+    `http=${r.status} ${JSON.stringify(r.body)}`);
+
+  // ...but only for a key from OUR store. This leg returns before the store
+  // gate, so a foreign full-pool key used to earn a 30-day pass on our bucket.
+  const foreign = 'IIIIIIII-9999-9999-9999-OTHERSTORE1';
+  const f = await call({
+    key: foreign, ip: nextIp(),
+    ls: { validate: { status: 200, body: { valid: true, license_key: { status: 'active', activation_limit: 3, activation_usage: 3 }, meta: { store_id: 999999 } } } },
+  });
+  check('R1-6', 'a full-pool key from ANOTHER LemonSqueezy store earns nothing',
+    !store.has(`hhp:vk:ok:${hash(foreign)}`), 'foreign key marked known-good');
+  check('R1-7', 'and it is still answered, not 500d', f.status === 200, `http=${f.status}`);
+}
+
+// ═══════════════════════════ LOW-2 / LOW-3: the origin gate
+
+group('LOW-2: localhost is a development origin, not a production one');
+
+{
+  const key = 'JJJJJJJJ-1010-1010-1010-LOCALHOSTOK';
+  const prod = await call({ key, origin: 'http://localhost:5173', instance_id: 'x', ip: nextIp(), env: 'production', ls: OK_VALID_BOUND });
+  check('R2-1', 'http://localhost:5173 is refused in production',
+    prod.status === 403 && prod.lsLegs.length === 0, `http=${prod.status} legs=${JSON.stringify(prod.lsLegs)}`);
+  const prod3000 = await call({ key, origin: 'http://localhost:3000', instance_id: 'x', ip: nextIp(), env: 'production' });
+  check('R2-2', 'and so is http://localhost:3000', prod3000.status === 403, `http=${prod3000.status}`);
+  const dev = await call({ key, origin: 'http://localhost:5173', instance_id: 'x', ip: nextIp(), env: null, ls: OK_VALID_BOUND });
+  check('R2-3', 'control: local development still works', dev.status === 200, `http=${dev.status}`);
+  const devRef = await call({ key, origin: '', referer: 'http://localhost:5173/', instance_id: 'x', ip: nextIp(), env: 'preview', ls: OK_VALID_BOUND });
+  check('R2-4', 'control: the same holds for the Referer arm on a preview deploy',
+    devRef.status === 200, `http=${devRef.status}`);
+  const prodRef = await call({ key, origin: '', referer: 'http://localhost:5173/', instance_id: 'x', ip: nextIp(), env: 'production' });
+  check('R2-5', 'and the Referer arm is closed in production too', prodRef.status === 403, `http=${prodRef.status}`);
+}
+
+group('LOW-3: when both Origin and Referer are present, both must pass');
+
+{
+  const key = 'KKKKKKKK-1111-1111-1111-ORIGINPAIRS';
+  const mixed = await call({
+    key, origin: 'https://evil.example', referer: 'https://thehomesteadplan.com/growing-plan',
+    instance_id: 'x', ip: nextIp(), env: 'production', ls: OK_VALID_BOUND,
+  });
+  check('R3-1', 'a foreign Origin is no longer rescued by an allowed Referer',
+    mixed.status === 403 && mixed.lsLegs.length === 0, `http=${mixed.status} legs=${JSON.stringify(mixed.lsLegs)}`);
+  const inverted = await call({
+    key, origin: 'https://thehomesteadplan.com', referer: 'https://evil.example/x',
+    instance_id: 'x', ip: nextIp(), env: 'production',
+  });
+  check('R3-2', 'and the inverse pair is refused as well', inverted.status === 403, `http=${inverted.status}`);
+  const both = await call({
+    key, origin: 'https://thehomesteadplan.com', referer: 'https://thehomesteadplan.com/growing-plan',
+    instance_id: 'x', ip: nextIp(), env: 'production', ls: OK_VALID_BOUND,
+  });
+  check('R3-3', 'control: the real client sends both, and both pass', both.status === 200, `http=${both.status}`);
+  const originOnly = await call({ key, origin: 'https://www.thehomesteadplan.com', instance_id: 'x', ip: nextIp(), env: 'production', ls: OK_VALID_BOUND });
+  check('R3-4', 'control: a lone allowed Origin still passes', originOnly.status === 200, `http=${originOnly.status}`);
+  const refererOnly = await call({ key, origin: '', referer: 'https://thehomesteadplan.com/', instance_id: 'x', ip: nextIp(), env: 'production', ls: OK_VALID_BOUND });
+  check('R3-5', 'control: a lone allowed Referer still passes', refererOnly.status === 200, `http=${refererOnly.status}`);
+  // Fleet canon (feedback_origin_allowlist_headerless_get.md): an allowlist can
+  // only gate a cross-site BROWSER call, and those always carry the header.
+  const headerless = await call({ key, origin: '', instance_id: 'x', ip: nextIp(), env: 'production', ls: OK_VALID_BOUND });
+  check('R3-6', 'a request carrying neither header passes the gate',
+    headerless.status === 200, `http=${headerless.status}`);
+  const suffix = await call({ key, origin: '', referer: 'https://thehomesteadplan.com.evil.example/x', instance_id: 'x', ip: nextIp(), env: 'production' });
+  check('R3-7', 'control: the suffix bypass is still closed on the Referer arm',
+    suffix.status === 403, `http=${suffix.status}`);
 }
 
 // --------------------------------------------------------------------- report

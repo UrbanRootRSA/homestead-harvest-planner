@@ -521,6 +521,13 @@ function fmtMassValue(lbs, metric) {
 // number) on the yield line rather than the space line.
 function fmtMassRounded(lbs, metric) {
   const v = (Number.isFinite(lbs) ? lbs : 0) * (metric ? LB_TO_KG : 1);
+  // N-3 (code re-review 2026-09-07): a TRUE zero is a whole number, not a
+  // measurement. Without this line the M-2 sub-0.1 branch printed "0.000" at
+  // both ends of the Preservation tab's fresh/preserved slider - the inverse
+  // of the rule that fix was applied under. fmtMassValue and fmtAreaValue
+  // deliberately keep their 3-decimal degrade: there a zero means "this input
+  // was not a number", and calc-golden L1-10 pins it.
+  if (v === 0) return "0";
   return v >= 1 ? String(Math.round(v)) : fmtMassValue(lbs, metric);
 }
 
@@ -1565,9 +1572,16 @@ function SelfSufficiencyCalculator({
                         border: `1.5px solid ${selected ? cat.color : T.border}`,
                         transition: "all 0.18s ease",
                       }}>
+                      {/* N-2 (code re-review 2026-09-07): 44 px on a phone. The
+                          L-3 sweep reached the four control types that finding
+                          named and left these 82 rows at 32 - the single
+                          most-tapped control in the product on mobile. The
+                          checkbox inside stays 18 px; the LABEL is the target,
+                          which is why the census next door measures the label
+                          and exempts the input it wraps. Desktop keeps 32. */}
                       <label style={{
                         display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
-                        minHeight: 32,
+                        minHeight: isMobile ? 44 : 32,
                       }}>
                         <input type="checkbox" checked={selected}
                           onChange={() => toggleCrop(cropId)}
@@ -1852,6 +1866,13 @@ function computeSoilResults(beds, mix) {
     totalCuFt,
     totalCuFtWithSettling: totalCuFt * SETTLING_BUFFER,
     cuYd: totalCuFt / 27,
+    // N-1 (code re-review 2026-09-07): the bulk-delivery figure. H-3 moved the
+    // bags, the subtotals and the cost onto the settled volume and left the
+    // headline and the cubic-yard stat on the raw one, so one card printed two
+    // volumes in the same units on different bases - and the biggest number on
+    // the page was the one a customer must NOT order. Derived here, from the
+    // same buffer, so a reader cannot compute a second answer.
+    cuYdWithSettling: (totalCuFt * SETTLING_BUFFER) / 27,
     components,
     totalCost,
     totalCostWithSettling: components.reduce((s, c) => s + c.costWithSettling, 0),
@@ -1928,9 +1949,15 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
 
   const unitVol = metric ? "L" : "cu ft";
   const volConv = metric ? CUFT_TO_L : 1;
-  const cuYdLine = metric
-    ? `${(results.totalCuFt * CUFT_TO_CUM).toFixed(2)} m³`
-    : `${results.cuYd.toFixed(2)} cu yd`;
+  // N-1: every volume on this card is now labelled with its basis. The hero and
+  // the stat carry what you BUY (settled); the raw bed volume stays visible on
+  // the line below, in both units, named as the pre-settling measurement.
+  const bulkLine = metric
+    ? `${(results.totalCuFtWithSettling * CUFT_TO_CUM).toFixed(2)} m³`
+    : `${results.cuYdWithSettling.toFixed(2)} cu yd`;
+  const rawLine = metric
+    ? `${(results.totalCuFt * CUFT_TO_L).toFixed(1)} L (${(results.totalCuFt * CUFT_TO_CUM).toFixed(2)} m³)`
+    : `${results.totalCuFt.toFixed(1)} cu ft (${results.cuYd.toFixed(2)} cu yd)`;
 
   return (
     <section aria-label="Soil Calculator" style={{
@@ -2053,17 +2080,16 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
           border: `1.5px solid ${T.border}`,
           textAlign: "center",
         }}>
-          <div style={eyebrowStyle}>Total soil needed</div>
+          <div style={eyebrowStyle}>Total soil to buy (incl. settling)</div>
           <div style={{ marginTop: 8 }}>
-            <CountUpNumber value={results.totalCuFt * volConv}
+            <CountUpNumber value={results.totalCuFtWithSettling * volConv}
               decimals={1} size={isMobile ? 48 : 72} unit={unitVol} />
           </div>
           <p style={{ margin: "10px auto 0", fontSize: 14, color: T.tx2 }}>
-            {cuYdLine} · or{" "}
             <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>
-              {(results.totalCuFtWithSettling * volConv).toFixed(1)} {unitVol}
+              {bulkLine}
             </span>{" "}
-            with 15% settling buffer
+            for a bulk order · your beds measure {rawLine} before the 15% settling buffer
           </p>
           {results.hasInvalidLShape && (
             <p role="status" aria-live="polite" style={{
@@ -2083,8 +2109,8 @@ function SoilCalculator({ beds, setBeds, mixId, setMixId, mixOverrides, setMixOv
           gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 12,
         }}>
           <MiniStat label="Number of beds" value={beds.reduce((s, b) => s + (b.qty || 0), 0)} unit="beds" />
-          <MiniStat label={`Volume (${metric ? "m³" : "cu yd"})`}
-            value={metric ? results.totalCuFt * CUFT_TO_CUM : results.cuYd}
+          <MiniStat label={`Volume (${metric ? "m³" : "cu yd"}, incl. settling)`}
+            value={metric ? results.totalCuFtWithSettling * CUFT_TO_CUM : results.cuYdWithSettling}
             decimals={2} unit={metric ? "m³" : "cu yd"} />
           <MiniStat label="Estimated cost (incl. settling)" value={results.totalCostWithSettling}
             decimals={moneyDecimals(currency)} unit={currency} />
@@ -3914,6 +3940,17 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
     }
   }, [prefillKey]);
 
+  // M-6 ruling (orchestrator, 2026-09-07). The prefill STAYS: at this moment
+  // the customer holds no working licence, the key is only placed in the box,
+  // and nothing validates it until they press Activate. What was missing is
+  // that the box does not say whose key it is. A customer who opened a link
+  // from a stranger sees their own licence field filled in and no statement of
+  // where the value came from or what pressing Activate does. This note is the
+  // price of keeping the prefill. It shows only while the box still holds the
+  // key the link supplied - the moment they type over it, it is their own key
+  // again and the note goes.
+  const showPrefillNote = Boolean(prefillKey) && key === prefillKey;
+
   const features = [
     "Personalised month-by-month growing plan tuned to your family and zone",
     "Complete crop database - 82 crops, searchable + sortable",
@@ -4070,7 +4107,10 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
                 spellCheck={false}
                 disabled={activating}
                 aria-invalid={Boolean(keyError)}
-                aria-describedby={keyError ? "hhp-key-error" : undefined}
+                aria-describedby={
+                  [keyError ? "hhp-key-error" : null, showPrefillNote ? "hhp-prefill-note" : null]
+                    .filter(Boolean).join(" ") || undefined
+                }
                 style={{
                   fontSize: 16, fontFamily: T.fontNum,
                   fontVariantNumeric: "tabular-nums",
@@ -4084,6 +4124,15 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
               />
               {/* The message itself is rendered above the disclosure (H-2);
                   the input keeps its aria-describedby pointer to it. */}
+              {showPrefillNote && (
+                <p id="hhp-prefill-note" style={{
+                  margin: 0, fontSize: 13, lineHeight: 1.45, color: T.tx3,
+                }}>
+                  This key came from the link you opened, not from a licence saved on this device.
+                  If you activate it, this device is registered to that key and uses one of its
+                  three activations.
+                </p>
+              )}
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
                 <button type="button"
                   onClick={() => {
@@ -4269,11 +4318,20 @@ function GardenSpaceField({ value, derived, onChange, metric, isMobile, tight })
   const usingDerived = !(typeof value === "number" && Number.isFinite(value));
   const canonical = usingDerived ? derived : value;
   const displayUnit = metric ? "m²" : "sq ft";
-  const displayValue = metric ? Number((canonical * SQFT_TO_SQM).toFixed(1)) : canonical;
-  const min = metric ? GARDEN_SQFT_MIN * SQFT_TO_SQM : GARDEN_SQFT_MIN;
-  const max = metric ? GARDEN_SQFT_MAX * SQFT_TO_SQM : GARDEN_SQFT_MAX;
+  // N-5 (code re-review 2026-09-07): ONE expression turns a canonical sq ft
+  // figure into what this field shows, and the bounds go through it too. The
+  // bounds used to be rounded separately - Math.round(0.929) = 1 m², ABOVE the
+  // 0.9 the field was displaying - so an untouched focus + blur clamped the
+  // display up to the bound and committed 10 -> 10.7639 sq ft, a 7.6% jump at
+  // the floor. The ceiling had the mirror of it (9290.3 rounded down to 9290).
+  // A guard that compares a displayed value against a bound must express both
+  // the same way.
+  const toDisplay = (sqft) => (metric ? Number((sqft * SQFT_TO_SQM).toFixed(1)) : sqft);
+  const displayValue = toDisplay(canonical);
+  const min = toDisplay(GARDEN_SQFT_MIN);
+  const max = toDisplay(GARDEN_SQFT_MAX);
   const commit = (v) => {
-    const displayedNow = metric ? Number((canonical * SQFT_TO_SQM).toFixed(1)) : canonical;
+    const displayedNow = toDisplay(canonical);
     if (v === displayedNow) return;
     const asSqFt = metric ? v / SQFT_TO_SQM : v;
     onChange(Math.max(GARDEN_SQFT_MIN, Math.min(GARDEN_SQFT_MAX, asSqFt)));
@@ -4287,7 +4345,7 @@ function GardenSpaceField({ value, derived, onChange, metric, isMobile, tight })
         <Field label="Garden space available"
           unit={displayUnit}
           value={displayValue} onChange={commit}
-          min={Math.max(1, Math.round(min))} max={Math.round(max)} step={10} />
+          min={min} max={max} step={10} />
         <div style={{
           margin: isMobile ? "-4px 0 0" : "0 0 12px",
           fontSize: 13, color: T.tx3, lineHeight: 1.5,
@@ -6355,14 +6413,17 @@ function CostSavingsCalculator({
               for three different reasons - no crops, no setup costs, no grocery
               prices - and the first message was printed for all of them once
               zero setup stopped being "0.0 months". Ask the question each
-              message answers, in order. */}
-          {!totals.hasCrops
-            ? "Add at least one crop in the Self-Sufficiency tab to see your break-even timeline."
-            : totals.totalSetup === 0
-              ? "Add your setup costs below to see when your garden pays for itself."
-              : heroBreakEven == null
-                ? "Set a grocery price on at least one crop below to see when your garden pays for itself."
-                : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven < 1 || heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
+              message answers, in order.
+              N-4 (code re-review 2026-09-07): the no-crops rung is GONE. This
+              component returns its own "Pick your crops first" empty state
+              above (search for hasCrops), so `!totals.hasCrops` could never be
+              true here and the fix record read as though a fourth message
+              shipped. Three states, three branches, all three reachable. */}
+          {totals.totalSetup === 0
+            ? "Add your setup costs below to see when your garden pays for itself."
+            : heroBreakEven == null
+              ? "Set a grocery price on at least one crop below to see when your garden pays for itself."
+              : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven < 1 || heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
         </p>
       </div>
 
@@ -6559,7 +6620,9 @@ function CostSavingsCalculator({
         Savings use midpoint yield estimates and your grocery prices, capped per crop at what
         your household would otherwise buy - produce grown beyond that is real food, but it
         displaces no grocery bill, so it is not counted here. Default prices are BLS average
-        retail (series retrieved July 2026) and are editable per crop. Setup costs are one-time;
+        retail (series retrieved July 2026), and where BLS publishes no series for a crop we use
+        the closest one it does publish - leaf lettuce is priced off the romaine series. Every
+        price is editable per crop. Setup costs are one-time;
         savings repeat every year, so the second year onward is closer to pure return.
       </p>
     </section>
@@ -6878,8 +6941,11 @@ function PreservationPlanner({
         {noteMass(CROPS.green_beans_bush?.lbsPerQuart ?? 2)} {unitMass} per quart, carrots{" "}
         {noteMass(CROPS.carrot?.lbsPerQuart ?? 2.5)}, tomato sauce {noteMass(SAUCE_QUART_LBS)}.
         Everything else uses NCHFP's whole-tomato baseline of {noteMass(QUART_LBS)} {unitMass} per
-        quart and {noteMass(PINT_LBS, 2)} {unitMass} per pint, which runs low for dense packs (corn,
-        shelled peas) and high for light ones. Freezer bags assume ~{noteMass(FREEZER_BAG_LBS)} {unitMass} per
+        quart and {noteMass(PINT_LBS, 2)} {unitMass} per pint. That baseline is approximate wherever
+        NCHFP weighs a crop differently from the way we estimate its yield. Shelling peas are the
+        clear case: ours are already shelled and NCHFP weighs peas in the pod, so a jar takes less
+        than the baseline assumes and the pea jar count reads low. Sweet corn, which NCHFP weighs
+        in the husk, is approximate for the same reason. Freezer bags assume ~{noteMass(FREEZER_BAG_LBS)} {unitMass} per
         gallon bag, dehydrator batches {noteMass(DEHYDRATOR_LBS_PER_BATCH)} {unitMass}. Shelf life is
         method-typical, not crop-specific.
       </p>
@@ -7077,7 +7143,13 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
         }}>
           <a href="#home"
             onClick={(e) => { e.preventDefault(); window.location.hash = "home"; }}
-            style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 16, textDecoration: "none" }}>
+            style={{
+              display: "flex", alignItems: "center", gap: isMobile ? 12 : 16,
+              textDecoration: "none",
+              // N-2: the 42 px BrandMark set the whole link's height, two short
+              // of the floor.
+              minHeight: isMobile ? 44 : undefined,
+            }}>
             <BrandMark size={isMobile ? 42 : 56} />
             <span style={{
               fontFamily: T.fontDisplay, fontSize: isMobile ? 22 : 34,
@@ -7102,8 +7174,11 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
               fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
-              display: "inline-flex", alignItems: "center",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
               minHeight: isMobile ? 44 : undefined,
+              // N-2: 44 in BOTH directions. "Blog" measured 41 px wide at 375 -
+              // the height rule alone left the narrower of the two short.
+              minWidth: isMobile ? 44 : undefined,
               borderBottom: "1px solid transparent",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
@@ -7114,8 +7189,9 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
               fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
-              display: "inline-flex", alignItems: "center",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
               minHeight: isMobile ? 44 : undefined,
+              minWidth: isMobile ? 44 : undefined,
               borderBottom: "1px solid transparent",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.color = T.primary; }}
@@ -7441,9 +7517,15 @@ function TabPageShell({ title, blurb, children }) {
 
 function AppFooter() {
   const year = new Date().getFullYear();
+  // N-2 (code re-review 2026-09-07): these 14 links were 343 x 24 on a phone,
+  // on every tab. Height, not width, was the miss. Desktop keeps the tight
+  // 4 px rhythm so the four columns still read as lists.
+  const isMobile = useMediaQuery("(max-width: 640px)");
   const linkStyle = {
     color: T.tx2, textDecoration: "none", fontSize: 13,
     fontWeight: 500, padding: "4px 0",
+    display: "flex", alignItems: "center",
+    minHeight: isMobile ? 44 : undefined,
   };
   return (
     <footer style={{

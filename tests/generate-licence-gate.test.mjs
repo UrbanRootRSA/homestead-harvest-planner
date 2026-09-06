@@ -347,6 +347,66 @@ group('L-1: a claimable *.vercel.app origin is not trusted in production');
     apex.status === 200 && apex.body?.ok === true, `http=${apex.status} ${JSON.stringify(apex.body?.error || '')}`);
 }
 
+group('LOW-2 / LOW-3 (re-review 2026-09-07): the origin gate on the spend endpoint');
+
+{
+  // LOW-2: the localhost entries were unconditional, so a page served from the
+  // default Vite port on anyone's machine reached Anthropic on production.
+  const lh = await runGenerate({ ...INPUT, licenseKey: 'LHAAAAAA-1111-2222-3333-LOCALHOST0' }, {
+    env: 'production', extraHeaders: { origin: 'http://localhost:5173' },
+  });
+  check('G-6.1', 'in production a localhost origin is refused', lh.status === 403, `http=${lh.status}`);
+  check('G-6.2', 'and it reaches neither LemonSqueezy nor Anthropic',
+    lh.lsCalls === 0 && lh.anthropicCalls === 0, `ls=${lh.lsCalls} anthropic=${lh.anthropicCalls}`);
+  const lhDev = await runGenerate({ ...INPUT, licenseKey: 'LHAAAAAA-1111-2222-3333-LOCALDEV00' }, {
+    extraHeaders: { origin: 'http://localhost:5173' },
+    ls: { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } },
+    anthropic: { status: 200, body: GOOD_PLAN },
+  });
+  check('G-6.3', 'control: local development still generates', lhDev.status === 200, `http=${lhDev.status}`);
+
+  // LOW-3: an allowed Referer used to rescue a foreign Origin.
+  const mixed = await runGenerate({ ...INPUT, licenseKey: 'MXAAAAAA-1111-2222-3333-MIXEDPAIR0' }, {
+    env: 'production',
+    extraHeaders: { origin: 'https://evil.example', referer: 'https://thehomesteadplan.com/growing-plan' },
+  });
+  check('G-6.4', 'a foreign Origin is not rescued by an allowed Referer',
+    mixed.status === 403, `http=${mixed.status}`);
+  check('G-6.5', 'and nothing upstream is spent on it',
+    mixed.lsCalls === 0 && mixed.anthropicCalls === 0, `ls=${mixed.lsCalls} anthropic=${mixed.anthropicCalls}`);
+  const both = await runGenerate({ ...INPUT, licenseKey: 'MXAAAAAA-1111-2222-3333-BOTHGOOD00' }, {
+    env: 'production',
+    extraHeaders: { referer: 'https://thehomesteadplan.com/growing-plan' },
+    ls: { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } },
+    anthropic: { status: 200, body: GOOD_PLAN },
+  });
+  check('G-6.6', 'control: the real client sends both and both pass', both.status === 200, `http=${both.status}`);
+  const refOnly = await runGenerate({ ...INPUT, licenseKey: 'MXAAAAAA-1111-2222-3333-REFONLY000' }, {
+    env: 'production',
+    extraHeaders: { origin: undefined, referer: 'https://thehomesteadplan.com/' },
+    ls: { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } },
+    anthropic: { status: 200, body: GOOD_PLAN },
+  });
+  check('G-6.7', 'control: a lone allowed Referer still passes', refOnly.status === 200, `http=${refOnly.status}`);
+  // Fleet canon (workspace memory feedback_origin_allowlist_headerless_get.md):
+  // an allowlist can only gate a cross-site BROWSER call, and those always carry
+  // the header. The licence gate below is what protects the spend.
+  const headerless = await runGenerate({ ...INPUT, licenseKey: 'MXAAAAAA-1111-2222-3333-NOHEADERS0' }, {
+    env: 'production',
+    extraHeaders: { origin: undefined },
+    ls: { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } },
+    anthropic: { status: 200, body: GOOD_PLAN },
+  });
+  check('G-6.8', 'a request carrying neither header passes the gate',
+    headerless.status === 200, `http=${headerless.status} ${JSON.stringify(headerless.body?.error || '')}`);
+  const suffix = await runGenerate({ ...INPUT, licenseKey: 'MXAAAAAA-1111-2222-3333-SUFFIXBYP0' }, {
+    env: 'production',
+    extraHeaders: { origin: undefined, referer: 'https://thehomesteadplan.com.evil.example/x' },
+  });
+  check('G-6.9', 'control: the suffix bypass on the Referer arm is still closed',
+    suffix.status === 403, `http=${suffix.status}`);
+}
+
 group('L-5: only application/json is accepted');
 
 {

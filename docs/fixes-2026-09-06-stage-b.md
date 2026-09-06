@@ -186,3 +186,63 @@ A leaf that is not a number is DROPPED, not defaulted to zero, so the consumers'
 ---
 
 *Every finding above has a row. Nothing was fixed on faith: each behavioural change is pinned by a case that fails against `e9cf852`.*
+
+---
+
+## 2026-09-07 — the M-6 prefill trade, named (orchestrator ruling)
+
+The code re-review (`docs/code-review-2026-09-06-rereview.md`, "Routed elsewhere")
+was right that this record did not name a trade it should have named. Recording
+it now, with the ruling that followed.
+
+**What M-6 changed.** Before the fix, a `?key=` link whose key was rejected set
+`prefillKey`, and the old suite asserted the opposite for the case where the
+customer's OWN stored key had just been wiped as definitively dead:
+
+```
+M-1.8  'the foreign key is NOT pre-filled into the licence input'
+       // a phishing key one click from activation is the thing being defended against
+```
+
+M-6 replaced that case. The revoked-stored-key mount now pre-fills the key from
+the link (`M-6.3`), and the no-prefill assertion moved to a transient-outage
+variant, where it still holds (`M-1.7/1.8/1.10`).
+
+**The reachable path.** An attacker mails `thehomesteadplan.com/?key=<their key>`;
+the victim's own stored key is definitively rejected during that same mount
+(refund, reissue, corruption); the attacker's key is then sitting in the
+victim's licence box.
+
+**The ruling (2026-09-07): the prefill STAYS.** Three things bound it, and one
+was missing.
+
+1. It is prefill only. Nothing validates the key until the customer presses
+   Activate — `M-6.4` asserts no validator call fires for it.
+2. `LS_INSTANCE` is still not read on the URL-key path, and the wipe gate is
+   still skipped there, so the phishing link cannot burn the legitimate
+   instance slot (`feedback_url_key_instance_trust.md`).
+3. At that moment the customer holds no working licence, so the marginal loss
+   from activating a stranger's key is one of THAT key's activation slots, not
+   access to anything of the customer's. `instance_name` is never sent, so
+   nothing identifying reaches the attacker's LemonSqueezy dashboard.
+4. **What was missing, and is now fixed:** the box did not say whose key it
+   was. A prefilled licence field reads as "your licence", and the product had
+   no sentence anywhere saying otherwise.
+
+**What shipped with the ruling** (`src/App.jsx`, `PaywallOverlay`): while the
+box still holds the key the link supplied, the form carries
+
+> This key came from the link you opened, not from a licence saved on this
+> device. If you activate it, this device is registered to that key and uses
+> one of its three activations.
+
+It is `aria-describedby`-wired to the input beside the error message, and it
+disappears the moment the customer types over the value, because from then on
+it is their own key. Pinned by `render-drive` `M6-1..M6-7`, including the
+negative control that a customer who opens the form themselves is never told
+about a link. `M-6.1..M-6.6` and the transient-outage no-prefill assertion are
+untouched and still pass.
+
+**What would change the ruling.** If the client ever auto-validates a prefilled
+key, or if the URL-key path ever reads `LS_INSTANCE`, the trade is off and the
+prefill has to go with it.

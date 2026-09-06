@@ -115,7 +115,7 @@ const NAMES = [
   // engineering fix (M-1); the multiplier is derived, not a literal.
   'PATH_SHARE_OF_FOOTPRINT', 'PATH_BUFFER', 'DEFAULT_PRODUCE_PER_PERSON_LBS',
   'GOAL_MULTIPLIER', 'FREQUENCY_FACTOR', 'ZONE_FROST_DATES', 'computeResults',
-  'FT_TO_M', 'IN_TO_CM', 'LB_TO_KG', 'CUFT_TO_L',
+  'FT_TO_M', 'IN_TO_CM', 'LB_TO_KG', 'CUFT_TO_L', 'SQFT_TO_SQM',
   'SOIL_PRICE_MAX_PER_CUFT', 'GROCERY_PRICE_MAX_PER_LB',
   'BED_LENGTH_FT_MIN', 'BED_LENGTH_FT_MAX',
   'BED_WIDTH_FT_MIN', 'BED_WIDTH_FT_MAX',
@@ -833,6 +833,87 @@ group('M-6', 'an empty crop selection survives a reload');
     Object.keys(load({ tomato: 'weekly', not_a_crop: 'weekly', carrot: 'hourly' })).length === 1);
   check('M-6.7', 'an empty selection produces no plants and no space, not a preset',
     api.computeResults(load({}), 4, 'full_year', 300).perCrop.length === 0);
+}
+
+// ═════ N-5: the garden-space Field at its metric floor, five focus/blur cycles
+
+group('N-5', 'the garden-space Field does not drift at the bound it displays');
+
+{
+  // Code re-review 2026-09-07. The bound was rounded (Math.round(0.929) = 1 m2)
+  // while the value was displayed at one decimal (0.9), so the field opened
+  // BELOW its own minimum. An untouched focus + Tab ran Field.commit, which
+  // clamped 0.9 up to 1 and wrote 1 / SQFT_TO_SQM = 10.7639 sq ft: a 7.6% jump
+  // at the floor, from a gesture that changed nothing.
+  //
+  // This drives the WHOLE chain the customer touches - the real Field.commit
+  // over the real GardenSpaceField bounds - because either half alone looks
+  // correct. Field.commit clamps to the bound it is given; GardenSpaceField's
+  // own commit skips a no-op. The defect lived between them.
+  const garden = sliceDecl(SRC, 'GardenSpaceField');
+  const gMin = sliceDecl(SRC, 'GARDEN_SQFT_MIN');
+  const gMax = sliceDecl(SRC, 'GARDEN_SQFT_MAX');
+  const gToDisplay = garden && sliceLocal(garden, 'toDisplay');
+  const gMinLocal = garden && sliceLocal(garden, 'min');
+  const gMaxLocal = garden && sliceLocal(garden, 'max');
+  const gCommit = garden && sliceLocal(garden, 'commit');
+  if (!garden || !gToDisplay || !gMinLocal || !gMaxLocal || !gCommit || !gMin || !gMax) {
+    check('N-5.0', 'GardenSpaceField, its display transform and its bounds are all liftable',
+      false, 'the extractor is out of step with the source');
+  } else {
+    const makeGarden = new Function('SQFT_TO_SQM', `${gMin}\n${gMax}
+      return function makeGarden(metric, canonical, onChange) {
+        ${gToDisplay}
+        ${gMinLocal}
+        ${gMaxLocal}
+        ${gCommit}
+        return { commit, min, max, display: toDisplay(canonical) };
+      };`)(api.SQFT_TO_SQM);
+
+    // One untouched focus + blur: the box shows what it shows, and blurs.
+    const cycles = (metric, start, n) => {
+      let canonical = start;
+      const seen = [];
+      for (let i = 0; i < n; i += 1) {
+        const g = makeGarden(metric, canonical, (v) => { canonical = v; });
+        seen.push(g.display);
+        api.makeFieldCommit({
+          raw: String(g.display), value: g.display, min: g.min, max: g.max,
+          onChange: g.commit,
+        })();
+      }
+      return { canonical, seen };
+    };
+
+    const floorM = cycles(true, 10, 5);
+    check('N-5.1', 'five untouched cycles at the metric floor leave 10 sq ft alone',
+      Math.abs(floorM.canonical - 10) < 1e-9, `stored=${floorM.canonical} shown=${floorM.seen.join(',')}`);
+    const ceilM = cycles(true, 100000, 5);
+    check('N-5.2', 'and five at the metric ceiling leave 100000 sq ft alone',
+      Math.abs(ceilM.canonical - 100000) < 1e-9, `stored=${ceilM.canonical}`);
+    const midM = cycles(true, 137.2 / api.SQFT_TO_SQM, 5);
+    check('N-5.3', 'control: the mid-range case that already held still holds',
+      Math.abs(midM.canonical - 137.2 / api.SQFT_TO_SQM) < 1e-9, `stored=${midM.canonical}`);
+    const floorI = cycles(false, 10, 5);
+    check('N-5.4', 'control: the imperial floor was never affected',
+      floorI.canonical === 10, `stored=${floorI.canonical}`);
+
+    // A real edit must still clamp. The floor moving must not become "no floor".
+    let below = null;
+    const g = makeGarden(true, 320, (v) => { below = v; });
+    api.makeFieldCommit({ raw: '0.1', value: g.display, min: g.min, max: g.max, onChange: g.commit })();
+    check('N-5.5', 'typing below the floor still clamps to the 10 sq ft minimum',
+      below !== null && Math.abs(below - 10) < 1e-6, `stored=${below}`);
+    let above = null;
+    const g2 = makeGarden(true, 320, (v) => { above = v; });
+    api.makeFieldCommit({ raw: '999999', value: g2.display, min: g2.min, max: g2.max, onChange: g2.commit })();
+    // The ceiling lands within one step of the display's own resolution: 100000
+    // sq ft is 9290.304 m2 and the box carries one decimal, so the clamp can
+    // only ever be 9290.3. It may not EXCEED the maximum, and it may not fall a
+    // whole step below it (Math.round used to put it at 9290 = 99996.7 sq ft).
+    check('N-5.6', 'and typing above the ceiling clamps to the maximum, within the display step',
+      above !== null && above <= 100000 && above > 100000 - (0.1 / api.SQFT_TO_SQM), `stored=${above}`);
+  }
 }
 
 // --------------------------------------------------------------------- report

@@ -55,6 +55,12 @@
 //        APU0000FL2101 $3.469. Sweet peppers APU0000712406 was discontinued in
 //        March 2020 and is left on its prior figure. Every price is editable
 //        at runtime and disclosed on the Cost Savings tab.
+//        BASIS, named after the 2026-09-07 re-review: BLS publishes no LEAF
+//        lettuce series, so APU0000FL2101 (romaine, a heading type) is used as
+//        the PROXY for `lettuce` (Lettuce (Leaf)). The engineering review asked
+//        for "leaf lettuce 3.47" and 3.469 is the romaine figure; the number
+//        ships as written and the proxy is disclosed here, in the entry, and on
+//        the Cost Savings footnote. `lettuce_head` keeps its own 2.40.
 //   I-1  caloriesPer100g is NOT read anywhere in src/ or api/. Before anything
 //        renders it, check each entry's basis: cowpea was corrected from the
 //        mature DRY seed value to the immature fresh figure, and oregano,
@@ -255,6 +261,9 @@ export const CROPS = {
   lettuce: {
     name: "Lettuce (Leaf)", category: "leafy", season: "cool", sowMethod: "either",
     // Loose-leaf, cut-and-come-again types. For heading types see lettuce_head.
+    // groceryPricePerLb 3.47 is BLS APU0000FL2101, which is ROMAINE - BLS has
+    // no leaf-lettuce series, so romaine is the proxy (see the M-6 note in the
+    // header block). Re-source it if a leaf series ever appears.
     daysToMaturity: [30, 60], spacingSqFt: 0.25, yieldPerPlantLbs: [0.3, 0.5],
     sunHours: 4, waterNeeds: "moderate", difficulty: 1,
     avgConsumptionLbsPerPersonYear: 20, groceryPricePerLb: 3.47, caloriesPer100g: 15,

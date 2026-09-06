@@ -181,7 +181,10 @@ const OLD_SCHEMA_PLAN = {
 };
 
 // One run of the shipped closure. `script` decides what /api/generate answers.
-async function run(script, { store } = {}) {
+// `clock` swaps the two timers generatePlan arms (30 s reassurance, 90 s hard
+// timeout) for a fake one, so the timeout leg can be DRIVEN rather than
+// simulated by setting the ref the code under test is supposed to set.
+async function run(script, { store, clock, payload } = {}) {
   const calls = [];
   const fetchStub = async (url, init) => {
     calls.push({ url, body: JSON.parse(init.body), signal: init.signal });
@@ -191,7 +194,9 @@ async function run(script, { store } = {}) {
     hhp_key: JSON.stringify(KEY),
     hhp_instance: JSON.stringify(INSTANCE),
   });
-  const api = buildRunner()(storage, quietConsole, fetchStub, setTimeout, clearTimeout);
+  const api = buildRunner()(storage, quietConsole, fetchStub,
+    clock ? clock.setTimeout : setTimeout,
+    clock ? clock.clearTimeout : clearTimeout);
 
   const log = [];
   const rec = (name) => (v) => log.push([name, typeof v === 'function' ? 'fn' : v]);
@@ -214,8 +219,8 @@ async function run(script, { store } = {}) {
     refs.abort, refs.reason, refs.generating,
   );
 
-  const p = generatePlan({
-    payload: { familySize: 4, crops: ['Tomato'], gardenSqFt: 320 },
+  const args = {
+    payload: payload || { familySize: 4, crops: ['Tomato'], gardenSqFt: 320 },
     // The real shape the tab builds. canonicalizeFingerprintInput reads
     // d.inputs.* directly, so a partial object here throws inside
     // computeFingerprint and the digest silently falls back to "" - which
@@ -228,8 +233,9 @@ async function run(script, { store } = {}) {
       displayUnits: 'imperial', currency: '$',
     },
     fallbackFingerprint: '',
-  });
-  return { p, generatePlan, calls, log, refs, planState: () => planWritten,
+  };
+  const p = generatePlan(args);
+  return { p, generatePlan, args, calls, log, refs, planState: () => planWritten,
     errors: () => log.filter(([n]) => n === 'setPlanError').map(([, v]) => v),
     lastError: () => {
       const e = log.filter(([n]) => n === 'setPlanError').map(([, v]) => v);
@@ -353,6 +359,143 @@ if (!GEN_TEXT || missingDecls.length > 0) {
     await r.p;
     check('L5b-3', 'an abort recorded as a timeout says so',
       /too long/i.test(String(r.lastError() || '')), JSON.stringify(r.lastError()));
+  }
+}
+
+// ══════ L-6 (code re-review 2026-09-07): the four consumers nothing tested
+//
+// The re-review's 27-mutant battery killed 23. The four survivors were not
+// four weak assertions - they were four places where the HELPER is pinned and
+// its CALL SITE is not. Each case below is written against the mutant it has
+// to kill, and the mutant is named.
+
+group('L-6', 'the four surviving mutants: the consumers, not the helpers');
+
+if (GEN_TEXT && missingDecls.length === 0) {
+  {
+    // MUTANT M20: delete `if (planGeneratingRef.current) return;`.
+    // `disabled={generating}` cannot stop the second click - the prop has not
+    // re-rendered yet - so the ref is the whole guard, and one extra request
+    // is one extra Anthropic charge out of a 20-a-day allowance.
+    const r = await run(ok(CURRENT_PLAN));
+    const second = r.generatePlan(r.args);            // same tick, before any await settles
+    const third = r.generatePlan(r.args);
+    await Promise.all([r.p, second, third]);
+    check('L6-1', 'three calls in one tick produce exactly one request',
+      r.calls.length === 1, `calls=${r.calls.length}`);
+    check('L6-2', 'and the busy flag is still raised once and lowered once',
+      JSON.stringify(r.generatingLog()) === JSON.stringify([true, false]), JSON.stringify(r.generatingLog()));
+  }
+  {
+    // Control: once the first generation has finished, the next click works.
+    const r = await run(ok(CURRENT_PLAN));
+    await r.p;
+    await r.generatePlan(r.args);
+    check('L6-3', 'control: a second generation after the first completes is allowed',
+      r.calls.length === 2, `calls=${r.calls.length}`);
+  }
+
+  {
+    // MUTANT M18 (the wire half): the customer's stated garden space must reach
+    // /api/generate. Engineering M-5 exists for exactly this value.
+    const r = await run(ok(CURRENT_PLAN), {
+      payload: { familySize: 4, crops: ['Tomato'], gardenSqFt: 120 },
+    });
+    await r.p;
+    check('L6-4', 'the payload the tab hands over reaches the wire intact',
+      r.calls[0].body.gardenSqFt === 120, JSON.stringify(r.calls[0].body.gardenSqFt));
+    check('L6-5', 'and the licence fields are added, not substituted for it',
+      r.calls[0].body.licenseKey === KEY && r.calls[0].body.crops.length === 1,
+      JSON.stringify(Object.keys(r.calls[0].body)));
+  }
+
+  {
+    // MUTANT M23: delete `planAbortReasonRef.current = "timeout"`.
+    // L5b-3 above sets the ref itself, so it passes with the assignment gone.
+    // This drives the real 90 s timer with a fake clock instead: the timer
+    // callback IS the code under test.
+    const timers = [];
+    const clock = {
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimeout: () => {},
+    };
+    let rejectFetch;
+    const hang = (_n, init) => new Promise((_res, rej) => {
+      rejectFetch = rej;
+      init.signal.addEventListener('abort', () => {
+        rej(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+      });
+    });
+    const r = await run(hang, { clock });
+    // Let the fetch start and the timers be armed.
+    await new Promise((res) => setImmediate(res));
+    check('L6-6', 'generatePlan arms both timers', timers.length === 2, `timers=${timers.map((t) => t.ms).join(',')}`);
+    const long = timers.find((t) => t.ms === 30000);
+    const hard = timers.find((t) => t.ms === 90000);
+    check('L6-7', 'the reassurance timer is 30 s and the hard timeout 90 s', !!long && !!hard,
+      timers.map((t) => t.ms).join(','));
+    if (hard) {
+      check('L6-8', 'before it fires, no abort reason is recorded', r.refs.reason.current === null,
+        String(r.refs.reason.current));
+      hard.fn();                                        // 90 seconds pass
+      check('L6-9', 'firing the 90 s timer records the reason as a timeout',
+        r.refs.reason.current === 'timeout', String(r.refs.reason.current));
+      await r.p;
+      check('L6-10', 'and the customer is told it took too long, not that it was cancelled',
+        /too long/i.test(String(r.lastError() || '')), JSON.stringify(r.lastError()));
+    } else if (rejectFetch) {
+      rejectFetch(Object.assign(new Error('x'), { name: 'AbortError' }));
+      await r.p;
+    }
+  }
+} else {
+  for (const id of ['L6-1', 'L6-2', 'L6-3', 'L6-4', 'L6-5', 'L6-6', 'L6-7', 'L6-8', 'L6-9', 'L6-10']) {
+    check(id, 'requires the App-level generation owner', false, 'generatePlan not found');
+  }
+}
+
+// ══ L-6 / MUTANT M18 (the construction half): the payload literal in the tab
+//
+// The wire check above proves generatePlan forwards what it is handed. It
+// cannot see the mutant the re-review actually applied, which swapped the
+// value at the point the tab BUILDS the payload - `gardenSqFt` for
+// `derivedGardenSqFt`, so the customer's stated space is silently replaced by
+// the space their selection happens to need, and the "too small" case the
+// whole finding is about can never occur again. So the shipped object literal
+// is lifted and evaluated with the two values held apart.
+
+group('L-6b', 'the payload literal carries the customer\'s garden space, not the derived one');
+
+{
+  const tab = sliceDecl(SRC, 'GrowingPlanTab');
+  const payloadM = tab && /await onGeneratePlan\(\{\s*payload: (\{[\s\S]*?\n      \}),/.exec(tab);
+  const derivedM = tab && /const gardenSqFt = ([\s\S]*?);\n/.exec(tab);
+  check('L6b-1', 'the payload literal was found in GrowingPlanTab', !!payloadM, 'extractor out of step');
+  check('L6b-2', 'and so was the garden-space resolution above it', !!derivedM, 'extractor out of step');
+  if (payloadM && derivedM) {
+    const SCOPE = {
+      familySize: 4, zoneStr: 'USDA zone 7',
+      lastSpringFrostStr: 'Apr 15', firstFallFrostStr: 'Oct 20', hemisphere: 'north',
+      SUN_OPTIONS: [{ id: 'full_sun', label: 'Full sun' }],
+      SOIL_OPTIONS: [{ id: 'loamy', label: 'Loamy' }],
+      WATER_OPTIONS: [{ id: 'drip', label: 'Drip' }],
+      EXPERIENCE_OPTIONS: [{ id: '1_to_3', label: '1-3 years' }],
+      goalLabels: ['Fresh eating'], cropNames: ['Tomato'], metric: false,
+      currency: '$', producePerPerson: 300,
+      derivedGardenSqFt: 241,
+    };
+    const build = (inputs) => new Function(...Object.keys(SCOPE), 'inputs',
+      `const gardenSqFt = ${derivedM[1]};\n return (${payloadM[1]});`)(...Object.values(SCOPE), inputs);
+
+    const stated = build({ gardenSqFt: 120, sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'] });
+    check('L6b-3', 'a customer who states 120 sq ft sends 120, not the derived 241',
+      stated.gardenSqFt === 120, String(stated.gardenSqFt));
+    const unstated = build({ gardenSqFt: null, sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'] });
+    check('L6b-4', 'control: with nothing stated, the derived figure is the default',
+      unstated.gardenSqFt === 241, String(unstated.gardenSqFt));
+    check('L6b-5', 'the space still travels as sq ft, never converted for a metric customer',
+      build({ gardenSqFt: 120 }).gardenSqFt === 120 && stated.producePerPersonLbs === 300,
+      JSON.stringify({ g: stated.gardenSqFt, p: stated.producePerPersonLbs }));
   }
 }
 

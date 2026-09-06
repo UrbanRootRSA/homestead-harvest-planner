@@ -17,12 +17,27 @@
 import { Redis } from "@upstash/redis";
 import { createHash } from "crypto";
 
+// Production origins only. The two localhost entries live in DEV_ORIGINS
+// below: LOW-2 (security re-review 2026-09-07) is the same reasoning as the
+// L-1 preview-origin fix, applied one line higher. A page served from
+// http://localhost:5173 on anyone's machine - the default Vite port, so any
+// local dev server or locally installed tool - sent an Origin this gate
+// trusted on the PRODUCTION deploy.
 const ALLOWED_ORIGINS = [
   "https://thehomesteadplan.com",
   "https://www.thehomesteadplan.com",
+];
+// Non-production only. Resolved per request, never at module load: VERCEL_ENV
+// is a per-invocation signal and the suites flip it case by case.
+const DEV_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
 ];
+function allowedOrigins() {
+  return process.env.VERCEL_ENV === "production"
+    ? ALLOWED_ORIGINS
+    : [...ALLOWED_ORIGINS, ...DEV_ORIGINS];
+}
 
 const LS_ACTIVATE = "https://api.lemonsqueezy.com/v1/licenses/activate";
 const LS_VALIDATE = "https://api.lemonsqueezy.com/v1/licenses/validate";
@@ -90,25 +105,41 @@ try {
   console.warn("[validate-key] Upstash init failed:", e?.message);
 }
 
+// Vercel preview deployments from this project.
+// L-1 (security review 2026-09-06): NOT in production. Vercel project
+// subdomains are first-come across the whole platform, so a stranger can
+// create `homestead-harvest-planner-anything` and own an origin that passes
+// this gate. Production traffic never legitimately carries a preview origin:
+// vercel.json 308s every *.vercel.app path to the apex. Previews keep the
+// branch so they stay testable behind Vercel's SSO gate.
+const PREVIEW_ORIGIN_RE = /^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i;
+const PREVIEW_REFERER_RE = /^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i;
+
 function isAllowedOrigin(req) {
   const origin = req.headers.origin || "";
   const referer = req.headers.referer || "";
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
-  for (const allowed of ALLOWED_ORIGINS) {
-    if (referer.startsWith(allowed + "/") || referer === allowed) return true;
-  }
-  // Vercel preview deployments from this project.
-  // L-1 (security review 2026-09-06): NOT in production. Vercel project
-  // subdomains are first-come across the whole platform, so a stranger can
-  // create `homestead-harvest-planner-anything` and own an origin that passes
-  // this gate. Production traffic never legitimately carries a preview origin:
-  // vercel.json 308s every *.vercel.app path to the apex. Previews keep the
-  // branch so they stay testable behind Vercel's SSO gate.
-  if (process.env.VERCEL_ENV !== "production") {
-    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
-    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
-  }
-  return false;
+  const list = allowedOrigins();
+  const previewOk = process.env.VERCEL_ENV !== "production";
+  const originAllowed = list.includes(origin) || (previewOk && PREVIEW_ORIGIN_RE.test(origin));
+  const refererAllowed =
+    list.some((allowed) => referer.startsWith(allowed + "/") || referer === allowed) ||
+    (previewOk && PREVIEW_REFERER_RE.test(referer));
+  // LOW-3 (security re-review 2026-09-07): this used to be an OR across both
+  // headers, so a foreign Origin was rescued by an allowed Referer. Origin is
+  // the stronger signal and a browser cannot produce that pair, so when BOTH
+  // are present BOTH must pass.
+  if (origin && referer) return originAllowed && refererAllowed;
+  if (origin) return originAllowed;
+  if (referer) return refererAllowed;
+  // Neither header present. Fleet canon (workspace memory
+  // `feedback_origin_allowlist_headerless_get.md`, sweep 2026-08-21): an
+  // origin allowlist can only ever gate a real cross-site BROWSER call, and
+  // those always carry the header; a scripted caller types whatever Origin it
+  // likes. Refusing the empty shape therefore buys no security and is how
+  // Cycle-Tracker 403'd its own frontend. Everything that actually protects
+  // this endpoint - the per-IP bucket, the licence gate, the store gate - sits
+  // below and is unchanged.
+  return true;
 }
 
 function getIp(req) {
@@ -161,6 +192,14 @@ async function rateLimitOK(suffix, max, windowSec) {
 const licenceBucket = (key) => `lkbad:${hashKey(key)}`;
 const licenceOkKey = (key) => `hhp:vk:ok:${hashKey(key)}`;
 
+// HIGH-1 residual (security re-review 2026-09-07,
+// ../docs/security-review-2026-09-06-rereview.md): the canonical device
+// binding /api/generate writes with SET NX and refreshes on every plan.
+// MIRROR of api/generate.js (search there for instanceBindKey) - the two
+// handlers are deliberately self-contained, and hashKey is byte-identical in
+// both, so the two names resolve to the same Redis key.
+const instanceBindKey = (licenceHash) => `hhp:instance:${licenceHash}`;
+
 // Has LemonSqueezy ever confirmed this exact key is real? Failing toward
 // "no" on a Redis fault is safe: the caller then consults the bucket, and
 // rateLimitOK / licenceBucketExceeded both fail open on the same fault.
@@ -198,14 +237,42 @@ async function licenceBucketExceeded(key) {
 
 // WRITE-ONLY, and only from a leg that has an actual LemonSqueezy verdict in
 // hand. Return value deliberately unused - the read above is the gate.
+//
+// Every caller is a DEFINITIVE NEGATIVE verdict (not found, expired, disabled,
+// not active, wrong store), so the exemption is revoked here rather than at
+// each call site: LOW-1 (security re-review 2026-09-07) measured a key that
+// was validated once, then disabled, keeping its 30-day brake and spending a
+// LemonSqueezy round-trip per probe for the rest of it. Deleting inside the
+// bump is what stops the two from drifting apart when a sixth bump site is
+// added - the same reason rlKey and licenceBucket are single expressions.
 async function bumpLicenceBucket(key) {
   if (!redis) return;
   try {
     const k = rlKey(licenceBucket(key));
     const count = await redis.incr(k);
     if (count === 1) await redis.expire(k, RL_LICENCE_WINDOW_SEC);
+    await redis.del(licenceOkKey(key));
   } catch (e) {
     console.warn("[validate-key] licence bucket bump failed:", e?.message);
+  }
+}
+
+// HIGH-1 residual: a wording-independent backstop for the gate below. Is this
+// request coming from the device the licence is actually bound to? An attacker
+// cannot forge that: the id lives in the victim's localStorage on the victim's
+// device, and the value compared against it was written server-side by
+// /api/generate. Deliberately NOT a bucket key - keying the failure bucket on
+// (licence, instance) would let any caller mint a fresh sub-bucket by rotating
+// the instance id, which removes the per-licence cap entirely. Read only after
+// the bucket has already denied, so the happy path costs no extra round-trip.
+async function isBoundDevice(key, instanceId) {
+  if (!redis || !instanceId) return false;
+  try {
+    const bound = await redis.get(instanceBindKey(hashKey(key)));
+    return typeof bound === "string" && bound.length > 0 && bound === instanceId;
+  } catch (e) {
+    console.warn("[validate-key] instance binding read failed:", e?.message);
+    return false;
   }
 }
 
@@ -347,8 +414,18 @@ export default async function handler(req, res) {
   // only where LemonSqueezy has stated a verdict (see the constant block).
   // A key LS has confirmed is real skips the bucket entirely, so a leaked key
   // cannot be sprayed into a denial of the owner's own product.
+  // HIGH-1 residual (security re-review 2026-09-07): the exemption could only
+  // be minted by a request that PASSED this gate, so an attacker who filled
+  // the bucket first locked the owner out of ever earning it. Two changes fix
+  // that: the mint below now also fires on an instance rejection (LemonSqueezy
+  // found the KEY and refused the DEVICE - proof the key is real), and the
+  // bound device gets past this gate whatever the bucket says.
   const licenceKnownGood = await licenceIsKnownGood(key);
-  if (!licenceKnownGood && (await licenceBucketExceeded(key))) {
+  if (
+    !licenceKnownGood &&
+    (await licenceBucketExceeded(key)) &&
+    !(await isBoundDevice(key, instanceId))
+  ) {
     return res.status(429).json({ valid: false, error: "Too many attempts for this licence. Try again in an hour." });
   }
 
@@ -453,7 +530,18 @@ export default async function handler(req, res) {
         // key is real. Exempt it from the failure bucket rather than counting
         // it: a customer whose pool is full is exactly the customer who then
         // reloads over and over.
-        await markLicenceKnownGood(key);
+        // LOW-1 carry-forward (security re-review 2026-09-07): only if it is
+        // one of OURS. This leg returns before the store gate below, so a
+        // full-pool key from another LemonSqueezy store used to earn a 30-day
+        // pass on our per-licence bucket. LS handed us meta.store_id in the
+        // same body, so read it here rather than reordering the customer-
+        // facing message. Missing env var keeps the existing dev/preview
+        // warn-and-skip; production refuses a few lines below.
+        const preStoreIdEarly = process.env.LEMONSQUEEZY_STORE_ID;
+        const preMetaEarly = (preCheck.json && preCheck.json.meta) || {};
+        if (!preStoreIdEarly || String(preMetaEarly.store_id) === String(preStoreIdEarly)) {
+          await markLicenceKnownGood(key);
+        }
         return res.status(200).json({
           valid: false,
           error: `This licence key has reached its device activation limit (${limitPre}/${limitPre}). Deactivate an old device in your LemonSqueezy account, or contact support.`,
@@ -536,7 +624,16 @@ export default async function handler(req, res) {
       // H-1: same rule as the pre-check leg. Activation-limit wording means
       // the key is real (exempt); anything else is a definitive rejection and
       // counts against the bucket.
-      if (ACTIVATION_LIMIT_RE.test(errStr)) await markLicenceKnownGood(key);
+      // HIGH-1 residual (security re-review 2026-09-07): an instance rejection
+      // is the second shape that proves the key is real - LemonSqueezy FOUND
+      // the key and refused the instance_id the caller supplied, which is a
+      // statement about the device, not about the licence. Counting it was the
+      // hole: anyone holding a leaked key sprayed junk instance_ids, filled the
+      // bucket, minted nothing, and the owner could then never earn the
+      // exemption (measured: owner 429 with LemonSqueezy never consulted). An
+      // unknown key answers "license_key not found", with no instance wording,
+      // and still counts - so the Phase-2 L6 probe cap is untouched.
+      if (ACTIVATION_LIMIT_RE.test(errStr) || looksLikeStaleInstance) await markLicenceKnownGood(key);
       else await bumpLicenceBucket(key);
       // A-1: the pre-check above can only read the counters LS gave it, so it
       // loses a race - two devices at 2 of 3 both pass it and LS rejects one of

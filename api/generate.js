@@ -31,12 +31,25 @@ export const config = { maxDuration: 300 }; // Vercel Fluid Compute upper bound
 // did not implement, and any stranger could claim a matching *.vercel.app
 // subdomain). Preview builds keep the branch so they stay testable behind
 // Vercel's SSO gate.
+// LOW-2 (security re-review 2026-09-07): the two localhost entries moved into
+// DEV_ORIGINS. They were unconditional, so a page served from
+// http://localhost:5173 on anyone's machine passed this gate on the PRODUCTION
+// deployment and reached Anthropic. Same reasoning as the L-1 preview-origin
+// fix one function below. MIRROR of api/validate-key.js.
 const ALLOWED_ORIGINS = [
   "https://thehomesteadplan.com",
   "https://www.thehomesteadplan.com",
+];
+// Non-production only, resolved per request (VERCEL_ENV is per-invocation).
+const DEV_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
 ];
+function allowedOrigins() {
+  return process.env.VERCEL_ENV === "production"
+    ? ALLOWED_ORIGINS
+    : [...ALLOWED_ORIGINS, ...DEV_ORIGINS];
+}
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 // Model alias per Anthropic skill cached 2026-04-15. Do NOT switch to a
@@ -86,25 +99,38 @@ try {
   console.warn("[generate] Upstash init failed:", e?.message);
 }
 
+// Vercel-assigned URLs for this project (matches validate-key.js).
+// Licence-key gate still protects Anthropic spend - origin check is defence-in-depth.
+// L-1 (security review 2026-09-06): gated on environment, which is what the
+// header comment at the top of this file already promised. Any stranger can
+// claim `homestead-harvest-planner-<anything>.vercel.app`, and in production
+// that origin reached Anthropic. vercel.json 308s every *.vercel.app path to
+// the apex, so production traffic never legitimately carries a preview origin.
+const PREVIEW_ORIGIN_RE = /^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i;
+const PREVIEW_REFERER_RE = /^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i;
+
 function isAllowedOrigin(req) {
   const origin = req.headers.origin || "";
   const referer = req.headers.referer || "";
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
-  for (const allowed of ALLOWED_ORIGINS) {
-    if (referer.startsWith(allowed + "/") || referer === allowed) return true;
-  }
-  // Vercel-assigned URLs for this project (matches validate-key.js).
-  // Licence-key gate still protects Anthropic spend - origin check is defence-in-depth.
-  // L-1 (security review 2026-09-06): gated on environment, which is what the
-  // header comment at the top of this file already promised. Any stranger can
-  // claim `homestead-harvest-planner-<anything>.vercel.app`, and in production
-  // that origin reached Anthropic. vercel.json 308s every *.vercel.app path to
-  // the apex, so production traffic never legitimately carries a preview origin.
-  if (process.env.VERCEL_ENV !== "production") {
-    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
-    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
-  }
-  return false;
+  const list = allowedOrigins();
+  const previewOk = process.env.VERCEL_ENV !== "production";
+  const originAllowed = list.includes(origin) || (previewOk && PREVIEW_ORIGIN_RE.test(origin));
+  const refererAllowed =
+    list.some((allowed) => referer.startsWith(allowed + "/") || referer === allowed) ||
+    (previewOk && PREVIEW_REFERER_RE.test(referer));
+  // LOW-3 (security re-review 2026-09-07): this was an OR across both headers,
+  // so a foreign Origin was rescued by an allowed Referer. Origin is the
+  // stronger signal and a browser cannot produce that pair, so when BOTH are
+  // present BOTH must pass. MIRROR of api/validate-key.js.
+  if (origin && referer) return originAllowed && refererAllowed;
+  if (origin) return originAllowed;
+  if (referer) return refererAllowed;
+  // Neither header present: fleet canon (workspace memory
+  // `feedback_origin_allowlist_headerless_get.md`) - an allowlist can only gate
+  // a real cross-site BROWSER call, which always carries the header, and a
+  // scripted caller forges whatever it likes. The licence gate, the canonical
+  // instance binding and both rate limits are what protect Anthropic spend.
+  return true;
 }
 
 function getIp(req) {
