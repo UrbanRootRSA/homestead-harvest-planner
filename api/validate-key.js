@@ -34,8 +34,37 @@ const RL_IP_WINDOW_SEC = 600;
 // firing /api/validate-key from N residential-proxy IPs to probe activation
 // state. Wider window because validate-key is the cheap endpoint and legit
 // users hit it more than /api/generate (mount-revalidate, URL-key flow).
+//
+// H-1 (security review 2026-09-06, docs/security-review-2026-09-06.md): that
+// bucket was INCREMENTED on every request, before LemonSqueezy was consulted,
+// on a key the CALLER supplies. So anyone holding a customer's licence key
+// could spray this endpoint from rotating IPs (measured: denied from request
+// #51 within the hour) and the owner then loaded the site from their own clean
+// IP with their own good key and their own bound instance and got 429. The
+// client correctly reads that as transient and KEEPS the key — but `paid`
+// never becomes true, so the customer who paid $39.99 sees a paywall on every
+// reload for as long as the spray runs, and there is nothing they can do.
+//
+// Two changes close it, and neither reopens the probe hole this limiter was
+// added for:
+//   1. The bucket is bumped only when LemonSqueezy states a VERDICT about the
+//      key (a definitive answer on 200/400/404 — the same status class rule
+//      LS_VERDICT_STATUSES encodes). An LS outage, a WAF refusal or a timeout
+//      no longer counts against the customer's key.
+//   2. A key LemonSqueezy has confirmed is REAL is exempt from this bucket
+//      entirely, recorded as `hhp:vk:ok:<sha>`. Probing an UNKNOWN key is what
+//      the limiter exists to stop and that is still capped; hammering a key
+//      the attacker already holds tells them nothing they do not know, spends
+//      no Anthropic credit (that gate is /api/generate's own per-licence
+//      bucket, which sits AFTER validation and is unchanged), and is still
+//      bounded per source address by the per-IP bucket above.
+// This is deliberately NOT the naive "count only failures", which would exempt
+// every key including keys that do not exist.
 const RL_LICENCE_MAX = 50;
 const RL_LICENCE_WINDOW_SEC = 3600;
+// Long enough that a customer who opens the app once a month is still known to
+// us, and refreshed on every successful validation.
+const LICENCE_OK_TTL_SEC = 30 * 86400;
 
 // Phase-2 M5: bound the LS fetch (mirrors generate.js LS_TIMEOUT_MS).
 const LS_TIMEOUT_MS = 8000;
@@ -69,8 +98,16 @@ function isAllowedOrigin(req) {
     if (referer.startsWith(allowed + "/") || referer === allowed) return true;
   }
   // Vercel preview deployments from this project.
-  if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
-  if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
+  // L-1 (security review 2026-09-06): NOT in production. Vercel project
+  // subdomains are first-come across the whole platform, so a stranger can
+  // create `homestead-harvest-planner-anything` and own an origin that passes
+  // this gate. Production traffic never legitimately carries a preview origin:
+  // vercel.json 308s every *.vercel.app path to the apex. Previews keep the
+  // branch so they stay testable behind Vercel's SSO gate.
+  if (process.env.VERCEL_ENV !== "production") {
+    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
+    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
+  }
   return false;
 }
 
@@ -78,10 +115,19 @@ function getIp(req) {
   // Phase-2 M4: prefer x-real-ip (Vercel-platform-attested at the edge).
   // Drops socket.remoteAddress fallback (returned Vercel-pod-internal IPs
   // that bucketed many distinct clients into one rate-limit slot).
+  // L-7 (security review 2026-09-06): the fallback is unreachable on Vercel,
+  // which OVERWRITES x-forwarded-for and always sets x-real-ip. It exists for
+  // localhost and for anyone porting these files behind another proxy — and
+  // there the LEFTMOST entry is the caller's own claim, i.e. a free rate-limit
+  // bucket per request. Take the RIGHTMOST entry, which the nearest trusted
+  // proxy appended. (An earlier comment here said Vercel appends; it does not.)
   const real = req.headers["x-real-ip"];
   if (typeof real === "string" && real.length > 0) return real.trim();
   const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.length > 0) return xff.split(",")[0].trim();
+  if (typeof xff === "string" && xff.length > 0) {
+    const parts = xff.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
   return "no-ip";
 }
 
@@ -89,18 +135,77 @@ function hashKey(key) {
   return createHash("sha256").update(String(key)).digest("hex").slice(0, 16);
 }
 
+// One place builds a bucket's Redis key, so a reader and a writer of the same
+// bucket cannot drift apart.
+const rlKey = (suffix) => `hhp:rl:validate-key:${suffix}`;
+
 async function rateLimitOK(suffix, max, windowSec) {
   // !redis is dev/preview-only: the 2026-07-10 L1 handler gate fails closed
   // (503) in production before any limiter runs.
   if (!redis) return true;
   try {
-    const key = `hhp:rl:validate-key:${suffix}`;
+    const key = rlKey(suffix);
     const count = await redis.incr(key);
     if (count === 1) await redis.expire(key, windowSec);
     return count <= max;
   } catch (e) {
     console.warn("[validate-key] rate limit check failed:", e?.message);
     return true;
+  }
+}
+
+// ── H-1: the per-licence bucket, split into a read and a write ──────────────
+// The bucket is NAMED for what it now counts. The rename is deliberate: the
+// old `lk:` counters were bumped on every request, so carrying them forward
+// would keep any in-progress lockout alive across this deploy.
+const licenceBucket = (key) => `lkbad:${hashKey(key)}`;
+const licenceOkKey = (key) => `hhp:vk:ok:${hashKey(key)}`;
+
+// Has LemonSqueezy ever confirmed this exact key is real? Failing toward
+// "no" on a Redis fault is safe: the caller then consults the bucket, and
+// rateLimitOK / licenceBucketExceeded both fail open on the same fault.
+async function licenceIsKnownGood(key) {
+  if (!redis) return false;
+  try {
+    return Boolean(await redis.get(licenceOkKey(key)));
+  } catch (e) {
+    console.warn("[validate-key] licence-known read failed:", e?.message);
+    return false;
+  }
+}
+
+async function markLicenceKnownGood(key) {
+  if (!redis) return;
+  try {
+    await redis.set(licenceOkKey(key), "1", { ex: LICENCE_OK_TTL_SEC });
+  } catch (e) {
+    console.warn("[validate-key] licence-known write failed:", e?.message);
+  }
+}
+
+// READ-ONLY. Never increments: an attacker's request must not be able to move
+// the counter that decides whether the owner is served.
+async function licenceBucketExceeded(key) {
+  if (!redis) return false;
+  try {
+    const count = Number(await redis.get(rlKey(licenceBucket(key))));
+    return Number.isFinite(count) && count >= RL_LICENCE_MAX;
+  } catch (e) {
+    console.warn("[validate-key] licence bucket read failed:", e?.message);
+    return false;
+  }
+}
+
+// WRITE-ONLY, and only from a leg that has an actual LemonSqueezy verdict in
+// hand. Return value deliberately unused - the read above is the gate.
+async function bumpLicenceBucket(key) {
+  if (!redis) return;
+  try {
+    const k = rlKey(licenceBucket(key));
+    const count = await redis.incr(k);
+    if (count === 1) await redis.expire(k, RL_LICENCE_WINDOW_SEC);
+  } catch (e) {
+    console.warn("[validate-key] licence bucket bump failed:", e?.message);
   }
 }
 
@@ -196,6 +301,17 @@ export default async function handler(req, res) {
   if (!isAllowedOrigin(req)) {
     return res.status(403).json({ valid: false, error: "Origin not allowed" });
   }
+  // L-5 (security review 2026-09-06): `text/plain`, `multipart/form-data` and
+  // `application/x-www-form-urlencoded` are the three content types that make a
+  // cross-origin POST a CORS "simple request" - no preflight is sent, so the
+  // 405-on-OPTIONS that currently makes a forged origin harmless never runs.
+  // The browser still cannot read our reply, but the request executes. Our own
+  // client sends `application/json` on both fetches, so demanding it costs
+  // nothing and takes the preflight-free shape off the table.
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    return res.status(415).json({ valid: false, error: "Unsupported content type." });
+  }
 
   // Aero-Calc security audit 2026-07-10 L1: if the Upstash client never
   // initialised (env vars missing at boot), the per-IP AND per-licence rate
@@ -227,10 +343,12 @@ export default async function handler(req, res) {
     return res.status(400).json({ valid: false, error: "Invalid licence key format." });
   }
 
-  // Phase-2 L6: per-licence bucket. Caps an attacker who has a key from firing
-  // validate-key from many proxy IPs to probe activation state without burning
-  // a single per-IP bucket. Mirrors the two-tier pattern on /api/generate.
-  if (!(await rateLimitOK(`lk:${hashKey(key)}`, RL_LICENCE_MAX, RL_LICENCE_WINDOW_SEC))) {
+  // Phase-2 L6 + H-1 (2026-09-06): per-licence bucket, READ here and written
+  // only where LemonSqueezy has stated a verdict (see the constant block).
+  // A key LS has confirmed is real skips the bucket entirely, so a leaked key
+  // cannot be sprayed into a denial of the owner's own product.
+  const licenceKnownGood = await licenceIsKnownGood(key);
+  if (!licenceKnownGood && (await licenceBucketExceeded(key))) {
     return res.status(429).json({ valid: false, error: "Too many attempts for this licence. Try again in an hour." });
   }
 
@@ -288,11 +406,16 @@ export default async function handler(req, res) {
         // end-to-end before the fix: the mount chain answered this exact body
         // with hhp_key = null. Same idiom as the two legs below that had it.
         const preErr = String(preCheck.json.error);
+        const preLimit = ACTIVATION_LIMIT_RE.test(preErr);
+        // H-1: LS has stated a verdict, so this leg may move the bucket. A
+        // full pool is a verdict that the key is REAL - record that instead.
+        if (preLimit) await markLicenceKnownGood(key);
+        else await bumpLicenceBucket(key);
         return res.status(200).json({
           valid: false,
           error: normaliseLsError(preErr),
           retry_activation: false,
-          activation_limit_reached: ACTIVATION_LIMIT_RE.test(preErr),
+          activation_limit_reached: preLimit,
         });
       }
       // SEC-4 (2026-06-12, Grow 3264c1a / Vertica 6d30289 port): R2-H1
@@ -326,6 +449,11 @@ export default async function handler(req, res) {
       const usagePre = Number(lkPre.activation_usage);
       const limitPre = Number(lkPre.activation_limit);
       if (Number.isFinite(usagePre) && Number.isFinite(limitPre) && limitPre > 0 && usagePre >= limitPre) {
+        // H-1: LS just handed us this key's own activation counters, so the
+        // key is real. Exempt it from the failure bucket rather than counting
+        // it: a customer whose pool is full is exactly the customer who then
+        // reloads over and over.
+        await markLicenceKnownGood(key);
         return res.status(200).json({
           valid: false,
           error: `This licence key has reached its device activation limit (${limitPre}/${limitPre}). Deactivate an old device in your LemonSqueezy account, or contact support.`,
@@ -350,6 +478,9 @@ export default async function handler(req, res) {
       }
       const preMeta = (preCheck.json && preCheck.json.meta) || {};
       if (expectedStoreIdPre && String(preMeta.store_id) !== String(expectedStoreIdPre)) {
+        // Definitive: a real key, but not one of ours. Counted (it is not a
+        // licence this endpoint will ever serve).
+        await bumpLicenceBucket(key);
         return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
       }
       const name = (instanceName && instanceName.length <= 64)
@@ -402,6 +533,11 @@ export default async function handler(req, res) {
       // slice(0,200). Future LS API changes can no longer leak internal info.
       const errStr = String(js.error || "");
       const looksLikeStaleInstance = Boolean(instanceId) && /instance/i.test(errStr);
+      // H-1: same rule as the pre-check leg. Activation-limit wording means
+      // the key is real (exempt); anything else is a definitive rejection and
+      // counts against the bucket.
+      if (ACTIVATION_LIMIT_RE.test(errStr)) await markLicenceKnownGood(key);
+      else await bumpLicenceBucket(key);
       // A-1: the pre-check above can only read the counters LS gave it, so it
       // loses a race - two devices at 2 of 3 both pass it and LS rejects one of
       // them HERE. Unflagged, that rejection is a definitive valid:false and
@@ -438,6 +574,7 @@ export default async function handler(req, res) {
         status === "disabled" ? "This licence key has been disabled." :
         status === "inactive" ? "This licence key is not active yet." :
         "This licence key is not active.";
+      await bumpLicenceBucket(key); // definitive verdict
       return res.status(200).json({ valid: false, error: msg });
     }
 
@@ -457,8 +594,13 @@ export default async function handler(req, res) {
     // skipping the store gate. The env-var side keeps the warn-and-skip
     // hybrid in preview/dev above.
     if (expectedStoreId && String(meta.store_id) !== String(expectedStoreId)) {
+      await bumpLicenceBucket(key); // definitive verdict
       return res.status(200).json({ valid: false, error: "This licence key is for a different product." });
     }
+
+    // H-1: the key is ours and it is live. From here on it can never be
+    // rate-limited out of its owner's hands by someone else holding a copy.
+    await markLicenceKnownGood(key);
 
     // Phase-2 L2: trim response to the fields the client actually consumes.
     // The previously-leaked store_id / activation_limit / activation_usage
@@ -466,6 +608,12 @@ export default async function handler(req, res) {
     // state. Cross-product pattern (Grow Room d87a210 M2). The canonical-
     // instance gate at /api/generate is the actual enforcement; these were
     // legacy fields no caller in src/App.jsx reads.
+    // I-4 (security review 2026-09-06): one deliberate exception, and this
+    // comment names it so the invariant above stays literally true - the
+    // pool-full message a few screens up states `(limit/limit)`, because a
+    // customer who is told to deactivate a device needs to know how many they
+    // have. The caller already holds the key, and LemonSqueezy's own public
+    // API returns the same two numbers to anyone who does.
     return res.status(200).json({
       valid: true,
       instance_id: inst?.id || instanceId || null,

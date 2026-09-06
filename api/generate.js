@@ -24,9 +24,13 @@ import { createHash } from "crypto";
 
 export const config = { maxDuration: 300 }; // Vercel Fluid Compute upper bound
 
-// Production + localhost only. The /api/generate endpoint is cost-sensitive
-// (Anthropic spend), so preview deployments are NOT allowlisted here.
-// validate-key.js still allowlists previews because LS calls are free.
+// Production + localhost. The /api/generate endpoint is cost-sensitive
+// (Anthropic spend), so in PRODUCTION preview deployments are not allowlisted -
+// see isAllowedOrigin, which gates that branch on VERCEL_ENV (security review
+// 2026-09-06 L-1; before that fix this comment described an intention the code
+// did not implement, and any stranger could claim a matching *.vercel.app
+// subdomain). Preview builds keep the branch so they stay testable behind
+// Vercel's SSO gate.
 const ALLOWED_ORIGINS = [
   "https://thehomesteadplan.com",
   "https://www.thehomesteadplan.com",
@@ -91,22 +95,38 @@ function isAllowedOrigin(req) {
   }
   // Vercel-assigned URLs for this project (matches validate-key.js).
   // Licence-key gate still protects Anthropic spend - origin check is defence-in-depth.
-  if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
-  if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
+  // L-1 (security review 2026-09-06): gated on environment, which is what the
+  // header comment at the top of this file already promised. Any stranger can
+  // claim `homestead-harvest-planner-<anything>.vercel.app`, and in production
+  // that origin reached Anthropic. vercel.json 308s every *.vercel.app path to
+  // the apex, so production traffic never legitimately carries a preview origin.
+  if (process.env.VERCEL_ENV !== "production") {
+    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app(\/|$)/i.test(referer)) return true;
+    if (/^https:\/\/homestead-harvest-planner[a-z0-9-]*\.vercel\.app$/i.test(origin)) return true;
+  }
   return false;
 }
 
 function getIp(req) {
   // Phase-2 M4: prefer x-real-ip (Vercel-platform-attested at the edge,
-  // can't be spoofed by client). Fall back to x-forwarded-for[0] for
-  // non-Vercel hosts (localhost dev). Drop the socket.remoteAddress
+  // can't be spoofed by client). Drop the socket.remoteAddress
   // fallback — on Vercel it returns pod-internal IPs that collapse all
   // unknown clients into one rate-limit bucket.
   // Defence-in-depth — the per-licence gate is the actual cost control.
+  // L-7 (security review 2026-09-06): the x-forwarded-for fallback is
+  // unreachable on Vercel, which OVERWRITES that header and always sets
+  // x-real-ip. It is here for localhost and for anyone porting this file behind
+  // another proxy — and there the LEFTMOST entry is the caller's own claim,
+  // i.e. a fresh rate-limit bucket on demand. Take the RIGHTMOST entry, which
+  // the nearest trusted proxy appended. (The comment this replaces said Vercel
+  // appends to the header; it does not.)
   const real = req.headers["x-real-ip"];
   if (typeof real === "string" && real.length > 0) return real.trim();
   const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.length > 0) return xff.split(",")[0].trim();
+  if (typeof xff === "string" && xff.length > 0) {
+    const parts = xff.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
   return "no-ip";
 }
 
@@ -133,6 +153,13 @@ async function rateLimitOK(suffix, max, windowSec) {
 // Cache successful validations for 1 hour to avoid hammering LS on every plan
 // generation. Cache key is the SHA-256 of the licence key (we never store the
 // raw key in Redis).
+// L-6 (security review 2026-09-06), recorded as a priced trade, not a defect:
+// a refunded or disabled licence keeps generating until this cache expires.
+// The per-licence cap bounds that at 20 plans (about $1.40), and the
+// canonical-instance gate runs BEFORE the cache read, so a warm entry can
+// never grant access to a caller who is not the bound device. If revocation
+// ever needs to be prompt, delete `hhp:lk:ok:<hash>` and `hhp:instance:<hash>`
+// from Upstash when you disable the key - no code change.
 const LICENCE_CACHE_TTL_SEC = 3600;
 
 // H-1 (fleet-sweep audit 2026-08-18,
@@ -331,7 +358,12 @@ async function validateLicence(key, instanceId) {
     if (!expectedStoreId) {
       if (process.env.VERCEL_ENV === "production") {
         console.error("[CRITICAL] LEMONSQUEEZY_STORE_ID missing in production — refusing to validate");
-        return { ok: false, reason: "store_id_misconfig" };
+        // L-2 (security review 2026-09-06): a missing store id is OUR fault,
+        // not a statement about the customer's key. Without the flag the
+        // handler answered 401 "re-enter your key on the home page" - the exact
+        // copy the 2026-06-12 verdict split exists to prevent. Still fails
+        // closed; the customer is told to retry rather than to re-buy.
+        return { ok: false, reason: "store_id_misconfig", transient: true };
       }
       console.warn("[WARN] LEMONSQUEEZY_STORE_ID missing — skipping store check in non-production");
     }
@@ -374,7 +406,10 @@ async function validateLicence(key, instanceId) {
     return { ok: true };
   } catch (e) {
     console.error("[generate] licence validation error:", e?.message, e?.code);
-    return { ok: false, reason: "validation_exception" };
+    // L-2 (security review 2026-09-06): an unexpected throw inside this
+    // function is a server fault. The customer's key was never judged, so the
+    // response must not read as a judgement of it.
+    return { ok: false, reason: "validation_exception", transient: true };
   }
 }
 
@@ -667,6 +702,14 @@ export default async function handler(req, res) {
   if (!isAllowedOrigin(req)) {
     return res.status(403).json({ ok: false, error: "Origin not allowed" });
   }
+  // L-5 (security review 2026-09-06): mirror of the validate-key gate. A
+  // `text/plain` body is a CORS "simple request", so no preflight is sent and
+  // the 405-on-OPTIONS that makes a forged origin harmless never runs. Our own
+  // client sends application/json.
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    return res.status(415).json({ ok: false, error: "Unsupported content type." });
+  }
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error("[generate] ANTHROPIC_API_KEY missing");
     return res.status(500).json({ ok: false, error: "Plan generator is not configured. Try again shortly." });
@@ -859,7 +902,26 @@ export default async function handler(req, res) {
     }
 
     const plan = sanitisePlan(toolBlock.input);
-    if (!plan || plan.monthlySchedule.length === 0) {
+    // L-3 (audit-vault-families-2026-08-17): the gate used to read ONE section
+    // out of the whole plan, so a response carrying a single month and nothing
+    // else shipped as `ok:true` - a Summary, one month and silence, billed
+    // against the customer's 20-a-day and treated by the regenerate confirm as
+    // a fresh plan. Every section below is one the model can always produce
+    // for any input (prose the app cannot write for itself); the three that a
+    // legitimate plan may genuinely leave empty - bed layouts for a container
+    // grower, succession for perennials, preservation for a salad garden - are
+    // deliberately NOT required, because refusing those would cost a real
+    // customer a real generation.
+    const missing = [];
+    if (!plan) missing.push("plan");
+    else {
+      if (!plan.summary) missing.push("summary");
+      if (plan.monthlySchedule.length === 0) missing.push("monthlySchedule");
+      if (plan.tips.length === 0) missing.push("tips");
+      if (!plan.savingsEstimate) missing.push("savingsEstimate");
+    }
+    if (missing.length > 0) {
+      console.error("[generate] incomplete plan; empty required sections:", missing.join(","));
       return res.status(502).json({ ok: false, error: "The generated plan was incomplete. Please try again." });
     }
 

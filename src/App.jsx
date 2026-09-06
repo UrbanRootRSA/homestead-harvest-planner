@@ -514,6 +514,16 @@ function fmtMassValue(lbs, metric) {
   return v.toFixed(d);
 }
 
+// The same rule for an ANNUAL total, which people round: whole units above 1,
+// magnitude-aware below it. Without the second half, 23 of 82 crops printed
+// "~0 kg/yr" in metric at fresh-only + rarely while imperial printed "~1 lb/yr"
+// off the identical 0.75 lb - the M-2 class (a displayed zero is a wrong
+// number) on the yield line rather than the space line.
+function fmtMassRounded(lbs, metric) {
+  const v = (Number.isFinite(lbs) ? lbs : 0) * (metric ? LB_TO_KG : 1);
+  return v >= 1 ? String(Math.round(v)) : fmtMassValue(lbs, metric);
+}
+
 // Lightly tints a hex color to use as a card background. Keeps the crop
 // selector legible across 8 category colours - pure primary tint worked
 // for one green theme; per-category tints need a consistent ~12% alpha.
@@ -1003,6 +1013,19 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
 
   const commit = () => {
     if (raw.trim() === "") {
+      // L-4 (audit 2026-08-17, docs/audit-vault-families-2026-08-17.md): an
+      // empty box used to COMMIT the minimum. "I cleared the box" is a far
+      // more natural gesture than "I set my household's annual produce need
+      // to the lowest value this product allows" - and on that field it took
+      // the household target from 1,200 lb to 200 lb and printed a 100%
+      // self-sufficiency KPI for a garden that covers 47.8%. Clearing now puts
+      // the current value back: there is no empty state in the model, so the
+      // safe reading of an empty box is "no change". Only a field that has no
+      // value to restore falls back to the minimum.
+      if (Number.isFinite(value)) {
+        setRaw(String(value));
+        return;
+      }
       onChange(Number.isFinite(min) ? min : 0);
       setRaw(String(Number.isFinite(min) ? min : 0));
       return;
@@ -1061,6 +1084,13 @@ function Field({ label, value, onChange, unit, min = 0, max = 9999, step = 0.1, 
 function PillSelect({ options, value, onChange, size = "md", ariaLabel, activeColor }) {
   const padding = size === "sm" ? "8px 14px" : "10px 18px";
   const fontSize = size === "sm" ? 13 : 15;
+  // L-3 (code review 2026-09-06): the small pills computed 40 px. That is the
+  // frequency control on all 82 crop rows, the bed-shape picker and the
+  // preservation-method picker - i.e. most of the tapping anyone does on a
+  // phone. Lift them to the 44 px floor where a finger is the pointer; the
+  // desktop keeps the tighter row.
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const minHeight = size === "sm" ? (isMobile ? 44 : 40) : 44;
   const btnRefs = useRef([]);
 
   // Arrow-key navigation for the radiogroup (per WAI-ARIA authoring practices).
@@ -1100,7 +1130,7 @@ function PillSelect({ options, value, onChange, size = "md", ariaLabel, activeCo
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(opt.id)}
             style={{
-              flex: "1 1 auto", minHeight: size === "sm" ? 40 : 44,
+              flex: "1 1 auto", minHeight,
               padding, fontSize, fontWeight: active ? 700 : 500,
               fontFamily: T.fontBody, color: active ? "#FEFCF8" : T.tx2,
               background: active ? (activeColor || T.primary) : "transparent",
@@ -1739,7 +1769,7 @@ function CropBreakdownCard({ result, metric, areaConv, massConv, unitArea, unitM
         </span>
         <span style={{ color: T.tx3 }}>Yield</span>
         <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
-          ~{(expectedYieldLbs * massConv).toFixed(0)} {unitMass}/yr
+          ~{fmtMassRounded(expectedYieldLbs, metric)} {unitMass}/yr
         </span>
         <span style={{ color: T.tx3 }}>Maturity</span>
         <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
@@ -3989,6 +4019,26 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
         </a>
 
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${T.border}` }}>
+          {/* H-2 (code review 2026-09-06): this block used to live INSIDE the
+              form below, which is collapsed unless a ?key= prefill opened it.
+              The two states that most need explaining are the two that set no
+              prefill: a full device pool, and a licence server we could not
+              reach. Both showed the customer a bare $39.99 sales page while
+              the app held an accurate message naming the remedy. It renders
+              here now, above the "Already purchased?" affordance, so a
+              customer whose licence is fine is told so without having to open
+              a licence-entry form to find out. */}
+          {keyError && (
+            <div id="hhp-key-error" role="alert" style={{
+              marginBottom: 16, padding: "12px 14px", borderRadius: T.radius,
+              background: T.errorBg, color: T.error,
+              border: `1px solid ${T.error}`,
+              fontSize: 14, lineHeight: 1.45, textAlign: "left",
+              maxWidth: 420, marginLeft: "auto", marginRight: "auto",
+            }}>
+              {keyError}
+            </div>
+          )}
           {!keyInputOpen ? (
             <button type="button"
               onClick={() => setKeyInputOpen(true)}
@@ -4032,13 +4082,8 @@ function PaywallOverlay({ tab, keyError, prefillKey, activating, onActivate, onC
                   outline: "none",
                 }}
               />
-              {keyError && (
-                <div id="hhp-key-error" role="alert" style={{
-                  fontSize: 13, color: T.error, lineHeight: 1.45,
-                }}>
-                  {keyError}
-                </div>
-              )}
+              {/* The message itself is rendered above the disclosure (H-2);
+                  the input keeps its aria-describedby pointer to it. */}
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
                 <button type="button"
                   onClick={() => {
@@ -4256,7 +4301,7 @@ function GardenSpaceField({ value, derived, onChange, metric, isMobile, tight })
                   background: "transparent", border: "none", color: T.primary,
                   fontFamily: T.fontBody, fontSize: 13, fontWeight: 700,
                   cursor: "pointer", textDecoration: "underline",
-                  padding: "6px 4px", minHeight: 32,
+                  padding: "6px 4px", minHeight: 44,
                 }}>
                 Use what my selection needs ({metric
                   ? `${(derived * SQFT_TO_SQM).toFixed(1)} m²`
@@ -4281,35 +4326,33 @@ function GardenSpaceField({ value, derived, onChange, metric, isMobile, tight })
   );
 }
 
+// H-1 (code review 2026-09-06): `generating`, `error` and the AbortController
+// used to live in THIS component, and the tab is conditionally rendered, so
+// switching to any other tab unmounted it and the cleanup aborted the fetch.
+// The server carried on, finished the Anthropic call and answered nobody: the
+// customer came back to an empty form, having spent one of their 20 daily
+// generations and ~$0.06 of credit, with no error and nothing to read. The
+// generation now lives in App, above the tab, and this component renders it.
+// The tab bar stays live throughout - a paid customer may look at their crop
+// list while their plan builds.
 function GrowingPlanTab({
   baseResults, planState, setPlanState,
   familySize, hemisphere, plantingState,
   metric, currency, producePerPerson, setTab,
   costSavings,
   onActivateKey,
+  generating, error, longRun, loadingIdx,
+  onGeneratePlan, setError,
 }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState("");
-  const [loadingIdx, setLoadingIdx] = useState(0);
-  const [longRun, setLongRun] = useState(false); // swap copy after 30 s
   const downloadAnchorRef = useRef(null);
-  // Track the current in-flight request so we can abort on unmount or on a
-  // 90-second timeout. Also revoke any prior blob URL before we create a new
-  // one - see #22, #23, #26.
-  const abortControllerRef = useRef(null);
+  // Revoke any prior blob URL before we create a new one - see #22, #23, #26.
   const blobUrlRef = useRef(null);
 
-  // Cycle the loading copy while we wait so the UI doesn't look frozen.
-  useEffect(() => {
-    if (!generating) return;
-    const t = setInterval(() => setLoadingIdx((i) => (i + 1) % LOADING_MESSAGES.length), 2400);
-    return () => clearInterval(t);
-  }, [generating]);
-
-  // Unmount cleanup: abort any open fetch and revoke any outstanding blob URL.
-  // We also revoke on beforeunload so refresh / tab-close doesn't leak the
-  // last download URL forever (#26).
+  // Unmount cleanup: revoke any outstanding blob URL. It does NOT touch the
+  // in-flight generation any more - that is App's, by design (H-1). We also
+  // revoke on beforeunload so refresh / tab-close doesn't leak the last
+  // download URL forever (#26).
   useEffect(() => {
     const onBeforeUnload = () => {
       if (blobUrlRef.current) {
@@ -4319,10 +4362,6 @@ function GrowingPlanTab({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
-      if (abortControllerRef.current) {
-        try { abortControllerRef.current.abort(); } catch { /* noop */ }
-        abortControllerRef.current = null;
-      }
       if (blobUrlRef.current) {
         try { URL.revokeObjectURL(blobUrlRef.current); } catch { /* noop */ }
         blobUrlRef.current = null;
@@ -4556,87 +4595,34 @@ function GrowingPlanTab({
       );
       if (!ok) return;
     }
-    setGenerating(true);
-    setLoadingIdx(0);
-    setLongRun(false);
-    // 90-second hard timeout for the fetch. Show a reassurance line at 30 s
-    // so the user knows we're still working (#22, #23).
-    const ac = new AbortController();
-    abortControllerRef.current = ac;
-    const longRunTimer = setTimeout(() => setLongRun(true), 30000);
-    const timeoutTimer = setTimeout(() => {
-      try { ac.abort(); } catch { /* noop */ }
-    }, 90000);
-    try {
-      // Read licence from LS at request time (not at mount) so a key entered
-      // mid-session is picked up without a refresh.
-      const licenseKey = loadState(LS_KEY, "");
-      const instanceId = loadState(LS_INSTANCE, "");
-      const resp = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: ac.signal,
-        body: JSON.stringify({
-          licenseKey, instanceId,
-          familySize,
-          zone: zoneStr,
-          lastSpringFrost: lastSpringFrostStr,
-          firstFallFrost: firstFallFrostStr,
-          hemisphere,
-          // Always send sq ft; the server labels accordingly. The LLM is
-          // told via displayUnits which units to use in OUTPUT (#11/#12).
-          gardenSqFt,
-          sunExposure: SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure,
-          soilType: SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType,
-          waterMethod: WATER_OPTIONS.find((o) => o.id === inputs.waterMethod)?.label || inputs.waterMethod,
-          experience: EXPERIENCE_OPTIONS.find((o) => o.id === inputs.experience)?.label || inputs.experience,
-          goals: goalLabels,
-          crops: cropNames,
-          displayUnits: metric ? "metric" : "imperial",
-          currency,
-          // Always send lb; producePerPerson is stored in lb regardless of
-          // metric toggle.
-          producePerPersonLbs: producePerPerson,
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.ok) {
-        setError(data?.error || `The plan generator returned an error (${resp.status}). Please try again.`);
-        setGenerating(false);
-        return;
-      }
-      // Compute the fingerprint at generation time from the same input set
-      // we just sent to /api/generate. We don't reuse the `currentFingerprint`
-      // state var because the useEffect that populates it is async - there's
-      // a brief window on first load where it's still "". This path is
-      // authoritative for what gets persisted.
-      let freshFingerprint = currentFingerprint;
-      try {
-        freshFingerprint = await computeFingerprint(fingerprintInput);
-      } catch { /* fall back to whatever the effect has given us */ }
-      setPlanState((prev) => ({
-        ...prev,
-        plan: data.plan,
-        generatedAt: Date.now(),
-        cropFingerprint: freshFingerprint,
-      }));
-      setGenerating(false);
-    } catch (e) {
-      // AbortError means either we aborted on unmount (no UI needed) or the
-      // 90 s timeout fired. Distinguish by checking the controller's signal.
-      if (e?.name === "AbortError") {
-        if (!ac.signal.aborted) return; // unmount, component is gone
-        setError("The plan generator took too long to respond. Please try again.");
-      } else {
-        console.error("[GrowingPlan] fetch failed:", e?.message);
-        setError("Couldn't reach the plan generator. Check your connection and try again.");
-      }
-      setGenerating(false);
-    } finally {
-      clearTimeout(longRunTimer);
-      clearTimeout(timeoutTimer);
-      abortControllerRef.current = null;
-    }
+    // Hand the request to App (H-1). Everything below this line - the fetch,
+    // its timeouts, the error copy and the write into planState - outlives a
+    // tab change, because it does not live in this component.
+    await onGeneratePlan({
+      payload: {
+        familySize,
+        zone: zoneStr,
+        lastSpringFrost: lastSpringFrostStr,
+        firstFallFrost: firstFallFrostStr,
+        hemisphere,
+        // Always send sq ft; the server labels accordingly. The LLM is
+        // told via displayUnits which units to use in OUTPUT (#11/#12).
+        gardenSqFt,
+        sunExposure: SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure,
+        soilType: SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType,
+        waterMethod: WATER_OPTIONS.find((o) => o.id === inputs.waterMethod)?.label || inputs.waterMethod,
+        experience: EXPERIENCE_OPTIONS.find((o) => o.id === inputs.experience)?.label || inputs.experience,
+        goals: goalLabels,
+        crops: cropNames,
+        displayUnits: metric ? "metric" : "imperial",
+        currency,
+        // Always send lb; producePerPerson is stored in lb regardless of
+        // metric toggle.
+        producePerPersonLbs: producePerPerson,
+      },
+      fingerprintInput,
+      fallbackFingerprint: currentFingerprint,
+    });
   };
 
   const downloadHtml = () => {
@@ -4853,8 +4839,8 @@ function GrowingPlanTab({
             marginTop: 10, fontSize: 13, color: T.tx2, textAlign: "center", lineHeight: 1.5,
           }}>
             {longRun
-              ? "Still working - large plans take longer than usual. Please don't close the tab."
-              : "This usually takes 20-40 seconds. Please don't close the tab."}
+              ? "Still working - large plans take longer than usual. You can look at the other tabs; just don't close or reload this page."
+              : "This usually takes 20-40 seconds. You can look at the other tabs; just don't close or reload this page."}
           </p>
         )}
         {!licenceKeyMissing && cropNames.length === 0 && !generating && (
@@ -4917,6 +4903,71 @@ function GrowingPlanTab({
       <a ref={downloadAnchorRef} style={{ display: "none" }} aria-hidden="true" />
     </section>
   );
+}
+
+// ── The client's own shape gate on a plan body (code review M-5) ───────────
+// Every array access in PlanRenderer and in buildPlanReportHtml was unguarded,
+// and both run inside the app root, so ANY shape drift took the whole product
+// - free calculators included - to "Something went wrong / Reload". It is not
+// hypothetical: the plan schema has already changed twice, and a Vercel
+// rollout window in which a warm old lambda answers a new bundle reproduces it
+// exactly. The 2026-06-10 note at the fetch site records that the client-side
+// mirror was deliberately REMOVED; this is it, restored, at one boundary
+// rather than at eight deref sites.
+//
+// Returns null when the body cannot be read as a plan at all. The caller turns
+// that into a named error on the page. Anything softer than null is coerced:
+// a missing array becomes [], a missing string becomes "".
+const planStr = (v, max = 1200) => (typeof v === "string" ? v.slice(0, max) : "");
+const planStrArr = (v, max = 32) => (Array.isArray(v)
+  ? v.filter((x) => typeof x === "string" && x.length > 0).slice(0, max)
+  : []);
+
+function normalisePlan(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  const plan = {
+    summary: planStr(raw.summary),
+    monthlySchedule: arr(raw.monthlySchedule).slice(0, 12)
+      .map((m) => ({ month: planStr(m?.month, 80), tasks: planStrArr(m?.tasks, 12) }))
+      .filter((m) => m.month && m.tasks.length > 0),
+    bedLayouts: arr(raw.bedLayouts).slice(0, 12)
+      .map((b) => ({
+        bedName: planStr(b?.bedName, 120),
+        crops: planStrArr(b?.crops, 24),
+        notes: planStr(b?.notes, 600),
+      }))
+      .filter((b) => b.bedName),
+    successionPlanting: arr(raw.successionPlanting).slice(0, 24)
+      .map((s) => ({
+        crop: planStr(s?.crop, 80),
+        // clampInt, not a fourth hand-rolled numeric gate: one helper, one
+        // behaviour (bounds suite M-2.7/M-2.8 enforce exactly this).
+        plantings: clampInt(s?.plantings, 1, 1, 12),
+        intervalWeeks: clampInt(s?.intervalWeeks, 1, 1, 52),
+        note: planStr(s?.note, 400),
+      }))
+      .filter((s) => s.crop),
+    preservationGuide: arr(raw.preservationGuide).slice(0, 32)
+      .map((p) => ({
+        crop: planStr(p?.crop, 80),
+        freshShare: planStr(p?.freshShare, 32),
+        preservationMethods: planStrArr(p?.preservationMethods, 8),
+        note: planStr(p?.note, 400),
+      }))
+      .filter((p) => p.crop),
+    savingsEstimate: (raw.savingsEstimate && typeof raw.savingsEstimate === "object")
+      ? {
+          topSavers: planStrArr(raw.savingsEstimate.topSavers, 10),
+          note: planStr(raw.savingsEstimate.note, 600),
+        }
+      : null,
+    tips: planStrArr(raw.tips, 12),
+  };
+  // Nothing to show is not a plan. Say so in words on the page instead of
+  // rendering a heading over silence.
+  if (!plan.summary && plan.monthlySchedule.length === 0) return null;
+  return plan;
 }
 
 // ── PlanRenderer: renders the structured plan returned by the API ──────────
@@ -5028,11 +5079,16 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
           display: "grid", gap: 12,
           gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(260px, 1fr))",
         }}>
+          {/* L-2 (code review 2026-09-06): filter on a real month before
+              sorting. monthIndex returns -1 for a name it does not know, and
+              its own doc-comment says callers that sort MUST filter - so
+              "Marchember" sorted ahead of January and led the schedule. Keyed
+              on the index too: two entries for one month collided on key. */}
           {plan.monthlySchedule
-            .slice()
+            .filter((m) => monthIndex(m.month) >= 0)
             .sort((a, b) => monthIndex(a.month) - monthIndex(b.month))
-            .map((m) => (
-              <div key={m.month} style={{
+            .map((m, mi) => (
+              <div key={`${mi}-${m.month}`} style={{
                 padding: 14, borderRadius: T.radius,
                 background: T.bg2, border: `1.5px solid ${T.border}`,
               }}>
@@ -5356,7 +5412,11 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   const goalLabel = inputs.goals.map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label || id).join(", ");
   const spaceStr = metric ? `${(gardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${gardenSqFt} sq ft`;
 
-  const monthly = plan.monthlySchedule.slice().sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
+  // L-2: same filter-then-sort as the screen. The downloaded report is the
+  // copy the customer keeps, so a phantom month must not survive into it.
+  const monthly = plan.monthlySchedule
+    .filter((m) => monthIndex(m.month) >= 0)
+    .sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
 
   const css = `
     :root { color-scheme: light; }
@@ -6234,7 +6294,15 @@ function CostSavingsCalculator({
       (s, f) => s + (Number(costSavings.setupCosts[f.key]) || 0), 0
     );
     const monthlySavings = totalSavings / 12;
-    const breakEvenMonths = monthlySavings > 0 ? totalSetup / monthlySavings : Infinity;
+    // L-7 (code review 2026-09-06): with no setup costs entered this used to
+    // read "BREAK-EVEN 0.0 mo" directly beside the hero line asking the
+    // customer to add their setup costs so we can tell them when the garden
+    // pays for itself. Zero setup is not a break-even in zero months; it is no
+    // answer yet. Same gate ROI already applies one line down, which is why
+    // ROI correctly read "-" in the same state.
+    const breakEvenMonths = (monthlySavings > 0 && totalSetup > 0)
+      ? totalSetup / monthlySavings
+      : Infinity;
     const roiPct = totalSetup > 0 && totalSavings > 0
       ? ((totalSavings - totalSetup) / totalSetup) * 100
       : null;
@@ -6283,11 +6351,18 @@ function CostSavingsCalculator({
           Estimated annual grocery savings: {currency}{Math.round(totals.totalSavings).toLocaleString()}.
         </span>
         <p style={{ margin: "12px auto 0", fontSize: 15, color: T.tx2, maxWidth: 480, lineHeight: 1.5 }}>
-          {heroBreakEven == null
+          {/* L-7: the branches are ordered by CAUSE now. heroBreakEven went null
+              for three different reasons - no crops, no setup costs, no grocery
+              prices - and the first message was printed for all of them once
+              zero setup stopped being "0.0 months". Ask the question each
+              message answers, in order. */}
+          {!totals.hasCrops
             ? "Add at least one crop in the Self-Sufficiency tab to see your break-even timeline."
             : totals.totalSetup === 0
               ? "Add your setup costs below to see when your garden pays for itself."
-              : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven < 1 || heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
+              : heroBreakEven == null
+                ? "Set a grocery price on at least one crop below to see when your garden pays for itself."
+                : <>Your garden pays for itself in <strong style={{ color: T.tx, fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>{heroBreakEven < 1 ? "under 1" : heroBreakEven.toFixed(1)}</strong> {heroBreakEven < 1 || heroBreakEven.toFixed(1) === "1.0" ? "month" : "months"}.{heroBreakEven > 36 ? " That's a long horizon. Consider trimming setup costs or adding higher-value crops." : ""}</>}
         </p>
       </div>
 
@@ -6346,7 +6421,9 @@ function CostSavingsCalculator({
               style={{
                 background: "transparent", border: "none", color: T.tx2,
                 fontFamily: T.fontBody, fontSize: 12, fontWeight: 600,
-                cursor: "pointer", textDecoration: "underline", padding: "6px 4px",
+                cursor: "pointer", textDecoration: "underline",
+                // L-3: was 106x27. Same 44 px floor as every other control.
+                padding: "6px 4px", minHeight: 44,
               }}>
               Reset to defaults
             </button>
@@ -6416,7 +6493,7 @@ function CostSavingsCalculator({
                         fontSize: 12, color: T.tx3, marginTop: 4,
                         fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
                       }}>
-                        {fmtInt(r.plantsNeeded)} plants · ~{(r.expectedYieldLbs * massConv).toFixed(0)} {unitMass}/yr
+                        {fmtInt(r.plantsNeeded)} plants · ~{fmtMassRounded(r.expectedYieldLbs, metric)} {unitMass}/yr
                       </div>
                     </div>
                     <div>
@@ -6605,6 +6682,13 @@ function PreservationPlanner({
 
   const massConv = metric ? LB_TO_KG : 1;
   const unitMass = metric ? "kg" : "lb";
+  // L-6: the methodology note below quotes NCHFP weights. They are weights, so
+  // they follow the toggle like every other weight on the page. Trailing zeros
+  // are trimmed so "2 lb" does not become "2.0 lb" in imperial.
+  const noteMass = (lbs, decimals = 1) => {
+    const v = lbs * massConv;
+    return String(Number(v.toFixed(decimals)));
+  };
   const freshPct = preservation.freshPct;
 
   // Functional setters per audit #82.
@@ -6711,7 +6795,7 @@ function PreservationPlanner({
           border: `1px solid ${T.warning}`,
           fontSize: 14, lineHeight: 1.5,
         }}>
-          <strong>{(totals.unstorablePreserved * massConv).toFixed(0)} {unitMass}</strong> of your harvest comes from
+          <strong>{fmtMassRounded(totals.unstorablePreserved, metric)} {unitMass}</strong> of your harvest comes from
           fresh-only crops (lettuce, spinach, etc.) that can't be canned, frozen, or stored long-term.
           Eat that share fresh in season - it's not counted in the preservation totals below.
         </div>
@@ -6758,7 +6842,9 @@ function PreservationPlanner({
               style={{
                 background: "transparent", border: "none", color: T.tx2,
                 fontFamily: T.fontBody, fontSize: 12, fontWeight: 600,
-                cursor: "pointer", textDecoration: "underline", padding: "6px 4px",
+                cursor: "pointer", textDecoration: "underline",
+                // L-3: was 106x27. Same 44 px floor as every other control.
+                padding: "6px 4px", minHeight: 44,
               }}>
               Reset to defaults
             </button>
@@ -6779,13 +6865,23 @@ function PreservationPlanner({
         )}
       </div>
 
+      {/* L-6 (code review 2026-09-06): this note was the one place in the app
+          where a unit ignored the toggle - every figure above it read kg while
+          this read lb. The container NAMES stay in imperial because a pint jar
+          and a gallon freezer bag are products, not measurements; the WEIGHTS
+          convert like every other weight in the product. The numbers are read
+          off the same constants the calculation uses, so the note cannot
+          drift from the arithmetic it describes. */}
       <p style={{ marginTop: 24, fontSize: 13, color: T.tx3, lineHeight: 1.5 }}>
         Jar counts use the NCHFP "how much do I need" tables. Where NCHFP publishes a figure
-        for the crop on the same weight basis we estimate yield on, we use it - snap beans
-        2 lb per quart, carrots 2.5, tomato sauce 5. Everything else uses NCHFP's whole-tomato
-        baseline of 3 lb per quart and 1.44 lb per pint, which runs low for dense packs (corn,
-        shelled peas) and high for light ones. Freezer bags assume ~3 lb per gallon bag,
-        dehydrator batches 8 lb. Shelf life is method-typical, not crop-specific.
+        for the crop on the same weight basis we estimate yield on, we use it - snap beans{" "}
+        {noteMass(CROPS.green_beans_bush?.lbsPerQuart ?? 2)} {unitMass} per quart, carrots{" "}
+        {noteMass(CROPS.carrot?.lbsPerQuart ?? 2.5)}, tomato sauce {noteMass(SAUCE_QUART_LBS)}.
+        Everything else uses NCHFP's whole-tomato baseline of {noteMass(QUART_LBS)} {unitMass} per
+        quart and {noteMass(PINT_LBS, 2)} {unitMass} per pint, which runs low for dense packs (corn,
+        shelled peas) and high for light ones. Freezer bags assume ~{noteMass(FREEZER_BAG_LBS)} {unitMass} per
+        gallon bag, dehydrator batches {noteMass(DEHYDRATOR_LBS_PER_BATCH)} {unitMass}. Shelf life is
+        method-typical, not crop-specific.
       </p>
     </section>
   );
@@ -6854,7 +6950,7 @@ function PreservationCropRow({ row, onMethodChange, massConv, unitMass, metric }
             marginTop: 6, fontSize: 12, color: T.tx3,
             fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
           }}>
-            ~{(row.expectedYieldLbs * massConv).toFixed(0)} {unitMass}/yr · fresh {(d.fresh * massConv).toFixed(0)} · preserved {(d.preserved * massConv).toFixed(0)}
+            ~{fmtMassRounded(row.expectedYieldLbs, metric)} {unitMass}/yr · fresh {fmtMassRounded(d.fresh, metric)} · preserved {fmtMassRounded(d.preserved, metric)}
           </div>
         </div>
         <div>
@@ -6947,8 +7043,11 @@ function ComingSoon({ tab }) {
 // ═══════════════════════════════════════════════════════════════════════════
 function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHemisphere }) {
   const isMobile = useMediaQuery("(max-width: 640px)");
+  // L-3 (code review 2026-09-06): 40 px against the product's own 44 px floor
+  // (CLAUDE.md 9), on the most-tapped controls in the app - the unit, currency
+  // and hemisphere pills sit in the header of every tab.
   const pillBtnStyle = (active) => ({
-    padding: "0 14px", minHeight: 40, minWidth: 44, border: "none", cursor: "pointer",
+    padding: "0 14px", minHeight: 44, minWidth: 44, border: "none", cursor: "pointer",
     background: active ? T.card : "transparent",
     color: active ? T.tx : T.tx2,
     fontWeight: active ? 700 : 500,
@@ -7500,13 +7599,22 @@ export default function App() {
   });
   const [selection, setSelection] = useState(() => {
     const saved = loadState(LS_CROPS, null);
-    if (saved && typeof saved === "object") {
+    // M-4 (code review 2026-09-06): an intentionally EMPTY selection used to be
+    // indistinguishable from an absent key, so a customer who cleared every
+    // box to build a short list, then reloaded, silently got the twelve-crop
+    // preset back - and with it different plant counts, a different area, a
+    // different savings figure and a different plan. hhp_crops was written as
+    // `{}` correctly and discarded on read. An object that sanitises to
+    // nothing is now honoured; NoCropsBanner exists for exactly that state.
+    // The preset is the fallback for an ABSENT or non-object key only. An
+    // array is junk here, not a selection, so it takes the preset too.
+    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
       // Sanitize: only known crops, only known frequencies
       const clean = {};
       for (const [k, v] of Object.entries(saved)) {
         if (hasKey(CROPS, k) && hasKey(FREQUENCY_FACTOR, v)) clean[k] = v;
       }
-      if (Object.keys(clean).length > 0) return clean;
+      return clean;
     }
     return { ...PRESETS.family_basics.selection };
   });
@@ -7562,11 +7670,45 @@ export default function App() {
       if (isNestedShape(obj)) return obj;
       return { [validMixId]: obj };
     };
+    // M-2 (fleet-sweep audit 2026-08-18): the loader validated the SHAPE of
+    // mixOverrides and nothing inside it - the one numeric localStorage
+    // surface the 08-17 sanitiser pass did not reach. The consumers read the
+    // leaves with `??`, which catches null and undefined and nothing else, so
+    // a stored price of 99999 (the editor's ceiling is 999) billed $960,086.40
+    // for three beds, a stored pct of 60 (the app stores a FRACTION) ordered
+    // 1,280 bags of soil, and "banana" printed NaN on the tab whose whole job
+    // is telling the customer how much soil to buy. Every leaf now meets the
+    // same bounds the editor declares, and a leaf that is not a number is
+    // DROPPED rather than defaulted to zero, so the `?? c.pricePerCuFt`
+    // fallback below still does its job. Keys are checked against the mixes
+    // the app actually has, which also keeps `__proto__` out of an object
+    // built by assignment.
+    const KNOWN_COMPONENT_KEYS = new Set(
+      SOIL_MIXES.flatMap((m) => m.components.map((c) => c.key)));
+    const cleanBucket = (bucket, min, max) => {
+      const out = {};
+      if (!bucket || typeof bucket !== "object") return out;
+      for (const [mixKey, comps] of Object.entries(bucket)) {
+        if (!SOIL_MIXES.some((m) => m.id === mixKey)) continue;
+        if (!comps || typeof comps !== "object") continue;
+        const clean = {};
+        for (const [compKey, v] of Object.entries(comps)) {
+          if (!KNOWN_COMPONENT_KEYS.has(compKey)) continue;
+          const n = importedNumber(v);
+          if (n === null) continue; // absent stays absent; the default applies
+          clean[compKey] = Math.max(min, Math.min(max, n));
+        }
+        out[mixKey] = clean;
+      }
+      return out;
+    };
     const rawOverrides = (saved?.mixOverrides && typeof saved.mixOverrides === "object")
       ? saved.mixOverrides : null;
     const overrides = rawOverrides ? {
-      prices: migrateBucket(rawOverrides.prices),
-      pcts:   migrateBucket(rawOverrides.pcts),
+      prices: cleanBucket(migrateBucket(rawOverrides.prices), 0, SOIL_PRICE_MAX_PER_CUFT),
+      // Percentages are stored as fractions (setComponentPct divides by 100),
+      // so the editor's 0-100 Field maps to 0-1 here.
+      pcts:   cleanBucket(migrateBucket(rawOverrides.pcts), 0, 1),
     } : null;
     return { mixId: validMixId, mixOverrides: overrides };
   });
@@ -7863,6 +8005,10 @@ export default function App() {
         // each had their turn.
         let urlKeyError = null;
         let urlKeyPrefill = "";
+        // M-6 (code review 2026-09-06): remembers WHICH key was refused for a
+        // conflict, so the deny leg can re-test the conflict against storage
+        // as it stands then, not as it stood before step 2 ran.
+        let urlKeyConflict = "";
         const params = new URLSearchParams(window.location.search);
         const urlKey = params.get("key");
         if (urlKey) {
@@ -7895,8 +8041,11 @@ export default function App() {
             stripKeyFromUrl();
             if (conflictingKey !== urlKey) {
               urlKeyError = "A different licence is already stored on this device. Clear it before activating a new one.";
+              urlKeyConflict = urlKey;
               // Deliberately NO prefill here: a foreign key must not sit one
               // click from activation in the customer's own licence input.
+              // (Unless that licence turns out not to exist any more - see the
+              // M-6 re-test at the deny leg.)
             }
           } else {
             // SECURITY: do NOT read LS_INSTANCE on the URL-key path. The URL
@@ -7909,6 +8058,20 @@ export default function App() {
             stripKeyFromUrl();
             if (r?.valid) {
               commitPaid(urlKey, r.instance_id);
+              // M-1 (code review 2026-09-06): land them on the thing they just
+              // bought. The purchase email and the LemonSqueezy confirmation
+              // both link to thehomesteadplan.com?key=..., and this branch left
+              // the app on the Home tab at "/" - so the first thing a paying
+              // customer saw was the hero, the comparison table and a pricing
+              // tile still reading $39.99 / Get full access, with nothing to
+              // say the unlock had worked. CLAUDE.md 21 already specifies
+              // "URL stripped to #growing-plan". Only this leg moves the tab:
+              // a normal stored-key launch must stay where the customer left
+              // off. Same two calls the rejection leg below already makes.
+              if (window.location.hash.slice(1) !== "growing-plan") {
+                window.history.replaceState({ tab: "growing-plan" }, "", "#growing-plan");
+              }
+              setTab("growing-plan");
               return;
             }
             urlKeyError = r?.error || "We couldn't verify that licence key.";
@@ -7987,6 +8150,18 @@ export default function App() {
           // let it age into range on the next load. Clearing is reserved for a
           // genuinely expired window. Same shape as Grow Room and Vertica.
           if (age >= 0 && age < GRACE_WINDOW_MS) {
+            // L-4 (security review 2026-09-06), recorded so nobody "fixes" it:
+            // a forged hhp_pending unlocks the three client-side paid tabs for
+            // 48 hours with no network call. That is DELIBERATE and bounded.
+            // The window exists because LemonSqueezy's Checkout.Success fires
+            // before the licence email lands, and closing it would lock out
+            // customers in the minutes after they pay. What it grants is a
+            // nicer view of bytes every free visitor already downloaded (the
+            // crop table ships in the bundle); the one asset that is genuinely
+            // withheld - the LLM plan - stays withheld, because /api/generate
+            // re-validates the licence on every call and refuses a bare key.
+            // Revisit if a client-side tab ever renders data that is NOT in
+            // the bundle.
             // Success leg: close any held/stale licence message (see commitPaid).
             setKeyError("");
             setPrefillKey("");
@@ -8000,13 +8175,27 @@ export default function App() {
         // 4. No entry path matched. Not paid.
         setPaid(false);
         setValidating(false);
+        // M-6 (code review 2026-09-06): the refusal above was computed while
+        // the old licence still existed; step 2 has since had its turn and may
+        // have deleted it as definitively rejected. Telling a customer to
+        // "clear the licence already stored on this device" when there is none
+        // - and no UI to clear one with - is the "I bought it again / my key
+        // was reissued" path, and it ends with their new key stripped from the
+        // URL and nothing to paste. Re-read storage: if the conflict is gone,
+        // so is the refusal, and the key from their own email is offered for
+        // one click. Still never auto-activated - prefill only, exactly like
+        // the invalid-?key= path.
+        if (urlKeyConflict && !loadState(LS_KEY, "")) {
+          urlKeyError = null;
+          urlKeyPrefill = urlKeyConflict;
+        }
         // M-3: the one place a held licence message reaches the UI. A
         // transient stored-key failure outranks a URL-key rejection - it is
         // about the customer's own saved key and tells them it is intact.
         if (storedKeyError || urlKeyError) {
           setKeyError(storedKeyError || urlKeyError);
         }
-        if (urlKeyError) {
+        if (urlKeyError || urlKeyPrefill) {
           if (urlKeyPrefill) setPrefillKey(urlKeyPrefill);
           // Send them to the paywall UI instead of silently dropping on Home.
           // Sync the URL hash too so bookmark/copy-link/refresh after a bad
@@ -8117,6 +8306,122 @@ export default function App() {
       return { ok: false, error: r?.error || "We couldn't verify that licence key." };
     } finally {
       setActivating(false);
+    }
+  }, []);
+
+  // ── Growing-plan generation (code review 2026-09-06 H-1) ─────────────────
+  // This used to live inside GrowingPlanTab. The tab is rendered behind
+  // `tab === "growing-plan" &&`, so leaving the tab unmounted it and its
+  // cleanup aborted the fetch - the server finished the plan and returned it
+  // to nobody, and the customer, who had just spent one of twenty daily
+  // generations, came back to an empty form with no error. Owning the request
+  // here means a tab change is free: the state below survives it, and the
+  // result lands in planState, which has always lived at this level.
+  const [planGenerating, setPlanGenerating] = useState(false);
+  const [planError, setPlanError] = useState("");
+  const [planLongRun, setPlanLongRun] = useState(false);   // swap copy after 30 s
+  const [planLoadingIdx, setPlanLoadingIdx] = useState(0);
+  const planAbortRef = useRef(null);
+  // L-5: the abort branch could not tell an unmount from a timeout, because
+  // both called ac.abort() and both therefore saw signal.aborted === true. The
+  // unmount abort is gone (that WAS H-1), and the one remaining reason is
+  // recorded rather than inferred.
+  const planAbortReasonRef = useRef(null);
+  const planGeneratingRef = useRef(false);
+
+  // Cycle the loading copy while we wait so the UI doesn't look frozen. Lives
+  // here so the copy keeps moving while the customer is on another tab.
+  useEffect(() => {
+    if (!planGenerating) return;
+    const t = setInterval(
+      () => setPlanLoadingIdx((i) => (i + 1) % LOADING_MESSAGES.length), 2400);
+    return () => clearInterval(t);
+  }, [planGenerating]);
+
+  const generatePlan = useCallback(async ({ payload, fingerprintInput, fallbackFingerprint }) => {
+    // One generation at a time. `disabled={generating}` covers the button, but
+    // the request no longer belongs to the button's component, so the guard
+    // belongs here too. A ref, not the state, so two clicks inside one tick
+    // cannot both pass.
+    if (planGeneratingRef.current) return;
+    planGeneratingRef.current = true;
+    setPlanError("");
+    setPlanGenerating(true);
+    setPlanLoadingIdx(0);
+    setPlanLongRun(false);
+    // 90-second hard timeout for the fetch. Show a reassurance line at 30 s
+    // so the user knows we're still working (#22, #23).
+    const ac = new AbortController();
+    planAbortRef.current = ac;
+    planAbortReasonRef.current = null;
+    const longRunTimer = setTimeout(() => setPlanLongRun(true), 30000);
+    const timeoutTimer = setTimeout(() => {
+      planAbortReasonRef.current = "timeout";
+      try { ac.abort(); } catch { /* noop */ }
+    }, 90000);
+    try {
+      // Read licence from LS at request time (not at mount) so a key entered
+      // mid-session is picked up without a refresh.
+      const licenseKey = loadState(LS_KEY, "");
+      const instanceId = loadState(LS_INSTANCE, "");
+      const resp = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
+        body: JSON.stringify({ licenseKey, instanceId, ...payload }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        // L-1 (code review 2026-09-06): an HTTP 200 whose body will not parse
+        // used to read "The plan generator returned an error (200)", which is
+        // a contradiction printed at the customer. `null` from the catch above
+        // now distinguishes "no readable body" from "a body that said no".
+        setPlanError(
+          data?.error
+          || (resp.ok
+            ? "The plan generator sent a response we couldn't read. Please try again."
+            : `The plan generator returned an error (${resp.status}). Please try again.`)
+        );
+        return;
+      }
+      // Compute the fingerprint at generation time from the same input set
+      // we just sent to /api/generate. We don't reuse the `currentFingerprint`
+      // state var because the useEffect that populates it is async - there's
+      // a brief window on first load where it's still "". This path is
+      // authoritative for what gets persisted.
+      let freshFingerprint = fallbackFingerprint || "";
+      try {
+        freshFingerprint = await computeFingerprint(fingerprintInput);
+      } catch { /* fall back to whatever the effect has given us */ }
+      // M-5: never store a plan body we have not shaped ourselves. A body we
+      // cannot read is a named error on the page, not an ErrorBoundary over
+      // the whole app.
+      const plan = normalisePlan(data.plan);
+      if (!plan) {
+        setPlanError("The plan generator sent a plan we couldn't read. Please try again.");
+        return;
+      }
+      setPlanState((prev) => ({
+        ...prev,
+        plan,
+        generatedAt: Date.now(),
+        cropFingerprint: freshFingerprint,
+      }));
+    } catch (e) {
+      if (e?.name === "AbortError") {
+        setPlanError(planAbortReasonRef.current === "timeout"
+          ? "The plan generator took too long to respond. Please try again."
+          : "The plan request was cancelled. Please try again.");
+      } else {
+        console.error("[GrowingPlan] fetch failed:", e?.message);
+        setPlanError("Couldn't reach the plan generator. Check your connection and try again.");
+      }
+    } finally {
+      clearTimeout(longRunTimer);
+      clearTimeout(timeoutTimer);
+      planAbortRef.current = null;
+      planGeneratingRef.current = false;
+      setPlanGenerating(false);
     }
   }, []);
 
@@ -8321,9 +8626,18 @@ export default function App() {
               plantingState={plantingState}
               metric={metric} currency={currency}
               producePerPerson={producePerPerson}
-              setTab={setTab}
+              // L-4 (code review 2026-09-06): changeTab, not the raw setter.
+              // The two in-tab links used setTab directly, so the hash kept
+              // saying #growing-plan while another tab was on screen; a reload
+              // or a copied link then landed somewhere else than the customer
+              // was reading, and Back skipped the view entirely.
+              setTab={changeTab}
               costSavings={costSavings}
-              onActivateKey={activateKey} />
+              onActivateKey={activateKey}
+              // H-1: the generation lives above this component now.
+              generating={planGenerating} error={planError}
+              longRun={planLongRun} loadingIdx={planLoadingIdx}
+              onGeneratePlan={generatePlan} setError={setPlanError} />
           </TabPageShell>
         )}
       </main>

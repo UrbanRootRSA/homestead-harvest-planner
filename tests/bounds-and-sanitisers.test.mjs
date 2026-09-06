@@ -126,6 +126,11 @@ const NAMES = [
   'BED_CUTOUT_WIDTH_FT_MIN', 'BED_CUTOUT_WIDTH_FT_MAX',
   'BED_DEPTH_IN_MIN', 'BED_DEPTH_IN_MAX',
   'computeBedVolumeCuFt',
+  // Stage B (2026-09-06): the soil-override loader, the crop-selection loader
+  // and what they feed. Every one of these exists in both revisions, so a
+  // control run reports per-case failures instead of bailing on a name.
+  'MIN_PRODUCE_PER_PERSON_LBS', 'SETTLING_BUFFER', 'SOIL_MIXES',
+  'computeSoilResults', 'PRESETS', 'LS_SOIL', 'LS_CROPS',
 ];
 const missing = NAMES.filter((n) => !sliceDecl(SRC, n));
 if (missing.length) bail(`declarations not found in source: ${missing.join(', ')}`);
@@ -133,6 +138,21 @@ const picked = NAMES.map((n) => {
   const text = sliceDecl(SRC, n);
   return { n, text, at: SRC.indexOf(text) };
 }).sort((a, b) => a.at - b.at);
+
+// A `const [x, setX] = useState(() => {...});` initialiser cannot be sliced by
+// name - the declaration is a destructuring pattern. Anchor on the literal
+// text and hand the tail to the same brace walker, which ends the slice at the
+// first `;` outside braces, strings and comments.
+function sliceStateInit(src, anchor) {
+  const at = src.indexOf(anchor);
+  if (at === -1) return null;
+  return walk(src, at, false);
+}
+const selectionInit = sliceStateInit(SRC, 'const [selection, setSelection] = useState');
+const soilInit = sliceStateInit(SRC, 'const [soilState, setSoilState] = useState');
+if (!selectionInit) bail('could not slice the hhp_crops state initialiser');
+if (!soilInit) bail('could not slice the hhp_soil state initialiser');
+if (!soilInit.includes('mixOverrides')) bail('the hhp_soil slice does not mention mixOverrides');
 
 const bedEditor = sliceDecl(SRC, 'BedEditor');
 if (!bedEditor) bail('BedEditor not found');
@@ -172,7 +192,25 @@ function makeBedEditor(metric) {
   return { bLen, bDepth, commitLen, commitDepth, dLen, dDepth };
 }
 
-return { ${picked.map((p) => p.n).join(', ')}, makeFieldCommit, makeBedEditor };
+// The two state initialisers, verbatim, with useState and loadState injected.
+// Running the REAL loader is the point: a harness that re-implements the
+// sanitising it is checking proves only that the harness works.
+function makeSelectionLoader(saved) {
+  const useState = (fn) => [fn(), () => {}];
+  const loadState = () => saved;
+  ${selectionInit}
+  return selection;
+}
+
+function makeSoilLoader(saved) {
+  const useState = (fn) => [fn(), () => {}];
+  const loadState = () => saved;
+  ${soilInit}
+  return soilState;
+}
+
+return { ${picked.map((p) => p.n).join(', ')}, makeFieldCommit, makeBedEditor,
+         makeSelectionLoader, makeSoilLoader };
 `)(CROPS);
 
 // ------------------------------------------------------------ assertions
@@ -638,6 +676,163 @@ const LOADERS = SRC.slice(LOADERS_FROM, LOADERS_TO);
     unguarded.map((m) => LOADERS.slice(m.index - 30, m.index + 20).trim()).join(' | '));
   check('M-3.18', 'and the render-path destructure is guarded too',
     /Array\.isArray\(crop\.yieldPerPlantLbs\)/.test(SRC), 'computeResults still destructures the raw field');
+}
+
+
+// ═══════════ M-4: hhp_soil.mixOverrides leaves meet the editor's own bounds
+
+group('M-4', 'every soil override leaf meets the bounds the editor declares');
+
+{
+  // Fleet-sweep audit 2026-08-18 M-2 (docs/audit-sweep-families-2026-08-18.md).
+  // mixOverrides was the ONE numeric localStorage surface the 08-17 sanitiser
+  // pass did not reach: the loader checked the SHAPE and nothing inside it,
+  // and both consumers read the leaves with `??`, which catches null and
+  // undefined and nothing else. Measured then: a stored price of 99999 (the
+  // editor's ceiling is 999) billed $960,086.40 for three beds; a stored pct of
+  // 60 - a percentage where the app stores a FRACTION - ordered 1,280 bags of
+  // soil; "banana" printed NaN on the tab whose whole job is telling the
+  // customer how much soil to buy.
+  const load = (saved) => api.makeSoilLoader(saved);
+  const prices = (saved) => (load(saved).mixOverrides || {}).prices || {};
+  const pcts = (saved) => (load(saved).mixOverrides || {}).pcts || {};
+  const withPrice = (v) => ({ mixId: 'classic_60_30_10', mixOverrides: { prices: { classic_60_30_10: { compost: v } }, pcts: {} } });
+  const withPct = (v) => ({ mixId: 'custom', mixOverrides: { prices: {}, pcts: { custom: { a: v } } } });
+
+  const bad = [
+    ['banana', undefined], [true, undefined], [[], undefined], [null, undefined],
+    [{}, undefined], [-50, 0], [99999, api.SOIL_PRICE_MAX_PER_CUFT],
+    ['12', 12], [7.5, 7.5], [0, 0],
+  ];
+  let i = 0;
+  for (const [stored, expected] of bad) {
+    i += 1;
+    const got = prices(withPrice(stored)).classic_60_30_10.compost;
+    check(`M-4.${i}`, `a stored price of ${JSON.stringify(stored)} loads as ${JSON.stringify(expected)}`,
+      got === expected, `got ${JSON.stringify(got)}`);
+  }
+
+  check('M-4.11', 'a percentage written where a fraction belongs is clamped to 1',
+    pcts(withPct(60)).custom.a === 1, JSON.stringify(pcts(withPct(60))));
+  check('M-4.12', 'a negative share cannot order negative soil',
+    pcts(withPct(-1)).custom.a === 0, JSON.stringify(pcts(withPct(-1))));
+  check('M-4.13', 'and a real fraction is untouched',
+    pcts(withPct(0.45)).custom.a === 0.45, JSON.stringify(pcts(withPct(0.45))));
+
+  {
+    // A bucket whose only key is not a mix id reads to migrateBucket as the
+    // legacy FLAT shape, so it is re-filed under the active mix - and every
+    // leaf inside it is then an unknown component key, which is where it dies.
+    // Either way, nothing from it can reach a price.
+    const got = prices({ mixId: 'classic_60_30_10', mixOverrides: { prices: { not_a_mix: { compost: 5 } }, pcts: {} } });
+    const values = Object.values(got).flatMap((m) => Object.values(m));
+    check('M-4.14', 'nothing from an unknown mix id survives as a price',
+      values.length === 0, JSON.stringify(got));
+  }
+  check('M-4.15', 'and so is an unknown component key',
+    prices({ mixId: 'classic_60_30_10', mixOverrides: { prices: { classic_60_30_10: { unicorn: 5 } }, pcts: {} } }).classic_60_30_10.unicorn === undefined);
+  check('M-4.16', 'a prototype-named component key never reaches the object',
+    Object.getPrototypeOf(prices({ mixId: 'classic_60_30_10', mixOverrides: { prices: { classic_60_30_10: { __proto__: { polluted: 1 } } }, pcts: {} } }).classic_60_30_10) === Object.prototype);
+
+  // The consequence, through the real money path.
+  const BED = [{ id: 'b1', shape: 'rect', lengthFt: 8, widthFt: 4, depthIn: 12, qty: 1 }];
+  const mixFor = (saved) => {
+    const over = (load(saved).mixOverrides || {});
+    const base = api.SOIL_MIXES.find((m) => m.id === 'classic_60_30_10');
+    return {
+      components: base.components.map((c) => ({
+        ...c,
+        pct: (over.pcts?.classic_60_30_10 || {})[c.key] ?? c.pct,
+        pricePerCuFt: (over.prices?.classic_60_30_10 || {})[c.key] ?? c.pricePerCuFt,
+      })),
+    };
+  };
+  const honest = api.computeSoilResults(BED, mixFor(null)).totalCost;
+  const poisoned = api.computeSoilResults(BED, mixFor(withPrice(99999))).totalCost;
+  const junk = api.computeSoilResults(BED, mixFor(withPrice('banana'))).totalCost;
+  check('M-4.17', 'the honest default bed still costs what it always did',
+    Math.abs(honest - 163.2) < 0.01, `${honest}`);
+  check('M-4.18', 'a poisoned price can no longer bill six figures for one bed',
+    poisoned <= 32 * api.SOIL_PRICE_MAX_PER_CUFT + 0.01 && poisoned < 10000, `${poisoned}`);
+  check('M-4.19', 'and a junk price cannot make the total NaN',
+    Number.isFinite(junk) && Math.abs(junk - honest) < 0.01, `${junk}`);
+}
+
+// ═════════════ M-5: clearing a Field restores the value, it does not commit min
+
+group('M-5', 'clearing a Field puts the current value back, not the minimum');
+
+{
+  // audit-vault-families-2026-08-17 L-4. Select-all + delete + blur on "Annual
+  // produce per person" committed min = 50 lb: the household target fell from
+  // 1,200 lb to 200 and the hero self-sufficiency KPI read 100.0% for a garden
+  // that honestly covers 47.8%. "I cleared the box" is a far more natural
+  // gesture than "I set my household's annual need to the lowest value this
+  // product allows".
+  const clear = (value, min, max) => {
+    let committed = 'NOT CALLED';
+    let displayed = null;
+    const commit = api.makeFieldCommit({
+      raw: '   ', value, min, max,
+      onChange: (v) => { committed = v; },
+    });
+    displayed = commit();
+    return { committed };
+  };
+
+  const produce = clear(300, api.MIN_PRODUCE_PER_PERSON_LBS ?? 50, 800);
+  check('M-5.1', 'clearing the produce target commits nothing',
+    produce.committed === 'NOT CALLED', `committed ${JSON.stringify(produce.committed)}`);
+  const depth = clear(12, 4, 48);
+  check('M-5.2', 'clearing a bed depth commits nothing either',
+    depth.committed === 'NOT CALLED', `committed ${JSON.stringify(depth.committed)}`);
+  const zero = clear(0, 0, 500);
+  check('M-5.3', 'a field legitimately sitting at zero is left at zero',
+    zero.committed === 'NOT CALLED', `committed ${JSON.stringify(zero.committed)}`);
+  const noValue = clear(undefined, 4, 48);
+  check('M-5.4', 'a field with no value to restore still falls back to its minimum',
+    noValue.committed === 4, `committed ${JSON.stringify(noValue.committed)}`);
+
+  // The KPI the finding is really about, measured through the real engine.
+  const sel = { tomato: 'weekly', carrot: 'weekly', lettuce_leaf: 'weekly' };
+  const honest = api.computeResults(sel, 4, 'full_year', 300);
+  const cleared = api.computeResults(sel, 4, 'full_year', 50);
+  check('M-5.5', 'the household target the KPI divides by is unchanged by a clear',
+    honest.householdTarget === 1200 && cleared.householdTarget === 200,
+    `${honest.householdTarget} / ${cleared.householdTarget}`);
+  check('M-5.6', 'and a cleared target is what inflated the KPI (6x on this basket)',
+    cleared.selfSufficiencyPct > honest.selfSufficiencyPct * 3,
+    `${cleared.selfSufficiencyPct} vs ${honest.selfSufficiencyPct}`);
+}
+
+// ══════════════ M-6: an empty crop selection is a choice, not a missing key
+
+group('M-6', 'an empty crop selection survives a reload');
+
+{
+  // Code review 2026-09-06 M-4. hhp_crops was written as `{}` correctly and
+  // discarded on read, so a customer who cleared every box to build a short
+  // list and then reloaded silently got the twelve-crop preset back - with
+  // different plant counts, a different area, a different savings figure and a
+  // different plan behind them.
+  const load = (saved) => api.makeSelectionLoader(saved);
+  const preset = Object.keys(api.PRESETS.family_basics.selection).length;
+
+  check('M-6.1', 'an empty object stays empty', Object.keys(load({})).length === 0,
+    JSON.stringify(load({})));
+  check('M-6.2', 'an absent key still gets the starter preset',
+    Object.keys(load(null)).length === preset, `${Object.keys(load(null)).length}`);
+  check('M-6.3', 'so does a stored value that is not an object',
+    Object.keys(load('nope')).length === preset && Object.keys(load(7)).length === preset);
+  check('M-6.4', 'an array is junk here, not an empty selection',
+    Object.keys(load([])).length === preset, JSON.stringify(load([])));
+  check('M-6.5', 'a real selection is loaded as stored',
+    JSON.stringify(load({ tomato: 'weekly' })) === JSON.stringify({ tomato: 'weekly' }),
+    JSON.stringify(load({ tomato: 'weekly' })));
+  check('M-6.6', 'and junk entries are still filtered out',
+    Object.keys(load({ tomato: 'weekly', not_a_crop: 'weekly', carrot: 'hourly' })).length === 1);
+  check('M-6.7', 'an empty selection produces no plants and no space, not a preset',
+    api.computeResults(load({}), 4, 'full_year', 300).perCrop.length === 0);
 }
 
 // --------------------------------------------------------------------- report

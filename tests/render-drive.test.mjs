@@ -75,6 +75,13 @@ const WANTED = [
   'SelfSufficiencyCalculator', 'PlantingDateCalculator',
   'computeResults', 'computeSavingsRows', 'engineYieldRows', 'engineHarvestRows',
   'getFrostDates', 'PRESETS',
+  // Stage B (code review 2026-09-06): the paywall overlay's held-message
+  // render (H-2), the client-side plan shape gate (M-5), the two tabs whose
+  // copy carries a unit or a stat that was wrong (L-6, L-7), the small pill
+  // (L-3) and the breakdown card that printed 0.0 m2 (M-2).
+  'PaywallOverlay', 'normalisePlan', 'CostSavingsCalculator',
+  'PreservationPlanner', 'PillSelect', 'CropBreakdownCard', 'AppHeader',
+  'buildPlanReportHtml', 'GrowingPlanTab',
 ];
 const appText = readFileSync(APP_PATH, 'utf8');
 // esbuild refuses to export a name the file does not declare, and in a CONTROL
@@ -289,6 +296,272 @@ safe(() => {
   const reversed = render('PDR', 'PlantingDateCalculator (reversed dates)', React.createElement(M.PlantingDateCalculator,
     plantingProps({ mode: 'manual', manualFrost: { lastSpring: '2026-11-01', firstFall: '2026-03-01' } })));
   has('L8-1', 'a backwards season is explained on screen', reversed, 'has to come after the last spring frost');
+}
+});
+
+// ══════════════════════════════════════════════ STAGE B (code review 09-06)
+
+// ─────────────────────────── H-2: a held licence message must be legible
+group('a held licence message renders outside the collapsed form - H-2');
+safe(() => {
+{
+  // The two states that most need explaining set NO prefill, so the licence
+  // form stays collapsed and, before this fix, the only render site of the
+  // message was inside it. A customer whose device pool is full, or whose
+  // licence server is down, saw a bare $39.99 sales page.
+  const overlay = (keyError, prefillKey = '') => render('PW', 'PaywallOverlay',
+    React.createElement(M.PaywallOverlay, {
+      tab: { id: 'growing-plan', label: 'Growing Plan', paid: true },
+      keyError, prefillKey, activating: false,
+      onActivate() {}, onClearError() {}, onClearPrefill() {},
+    }));
+
+  const pool = overlay('This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support.');
+  has('H2b-1', 'the full-pool message is on the page with the form still collapsed', pool, 'reached its device activation limit');
+  has('H2b-2', 'and it names the remedy', pool, 'Deactivate an old device');
+  hasNot('H2b-3', 'and the licence form is genuinely still collapsed', pool, '<form');
+  has('H2b-4', 'the "Already purchased?" affordance is still offered', pool, 'Already purchased?');
+  has('H2b-5', 'the message is announced, not just coloured', pool, 'role="alert"');
+
+  const outage = overlay('We could not reach the licence server to verify your saved key. It is still saved on this device - reload to try again.');
+  has('H2b-6', 'the outage message is on the page too', outage, 'reload to try again');
+  hasNot('H2b-7', 'with no form to open', outage, '<form');
+
+  const clean = overlay('');
+  hasNot('H2b-8', 'and a customer with no licence problem is shown no alert', clean, 'role="alert"');
+  has('H2b-9', 'control: the sales page itself is unchanged', clean, 'Unlock your full growing plan');
+
+  const prefilled = overlay('We could not verify that licence key.', 'ABCD-1234-EFGH-5678');
+  has('H2b-10', 'the prefill path still opens the form', prefilled, '<form');
+  has('H2b-11', 'and still shows the message', prefilled, 'We could not verify that licence key.');
+  record('H2b-12', 'exactly once, not twice',
+    prefilled.split('We could not verify that licence key.').length - 1 === 1);
+}
+});
+
+// ───────────────── H-1: the tab renders the generation state it is handed
+group('the Growing Plan tab renders the generation state App owns - H-1');
+safe(() => {
+{
+  const res = M.computeResults(M.PRESETS.salad_garden.selection, 2, 'fresh_preserving');
+  // A licence key on the device: without one the tab correctly renders the
+  // 48-hour grace panel ("Payment received. One step left") instead of the
+  // Generate button, and every assertion below would be about the wrong view.
+  globalThis.localStorage.setItem('hhp_key', JSON.stringify('AAAAAAAA-1111-2222-3333-MYOWNLICENCE'));
+  const tab = (over) => render('GP', 'GrowingPlanTab', React.createElement(M.GrowingPlanTab, {
+    baseResults: res,
+    planState: { inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'], gardenSqFt: null }, plan: null, generatedAt: null, cropFingerprint: '' },
+    setPlanState() {}, familySize: 2, hemisphere: 'north',
+    plantingState: { mode: 'zone', zone: 7, manualFrost: null, selectedCrops: ['tomato'], referenceYear: 2026, sowMethodChoice: {} },
+    metric: false, currency: '$', producePerPerson: 300, setTab() {},
+    costSavings: { priceOverrides: {}, setupCosts: {} }, onActivateKey() {},
+    generating: false, error: '', longRun: false, loadingIdx: 0,
+    onGeneratePlan() {}, setError() {}, ...over,
+  }));
+  const idle = tab({});
+  has('H1r-1', 'the idle tab offers to generate', idle, 'Generate my growing plan');
+  const busy = tab({ generating: true, loadingIdx: 1 });
+  has('H1r-2', 'a generation in flight shows the loading copy the parent owns', busy, 'Picking varieties for your zone');
+  has('H1r-3', 'and the reassurance line says the other tabs are safe to visit', busy, 'You can look at the other tabs');
+  hasNot('H1r-4', 'and no longer tells them not to leave', busy, "don't close the tab");
+  const failed = tab({ error: 'The plan generator sent a response we could not read. Please try again.' });
+  has('H1r-5', 'an error from the parent is rendered as an alert', failed, 'we could not read');
+  globalThis.localStorage.removeItem('hhp_key');
+}
+});
+
+// ─────────────────────── M-5: an off-shape plan body may not reach the DOM
+group('a plan body that is not the current shape cannot crash the app - M-5');
+safe(() => {
+{
+  // Each of these took the WHOLE app to the ErrorBoundary before the fix -
+  // free calculators included - because every array access on the plan was
+  // unguarded on both the screen and the report path.
+  const OFF_SHAPE = [
+    ['a partial body', { summary: 'Partial.' }],
+    ['the old documented schema', {
+      summary: 'Old.',
+      monthlySchedule: [{ month: 'March', tasks: ['t'] }],
+      yieldEstimates: [{ crop: 'Tomato', plants: 4, estimatedLbs: 30 }],
+      preservationGuide: [{ crop: 'Tomato', fresh: '30%', can: '50%', freeze: '20%', jarsNeeded: 12 }],
+      savingsEstimate: { annualSavings: 612, currency: '$', topSavers: ['Tomato'] },
+    }],
+    ['arrays where objects belong', { summary: 'X', monthlySchedule: 'nope', tips: 'nope', bedLayouts: {} }],
+    ['nulls throughout', { summary: 'X', monthlySchedule: null, bedLayouts: null, successionPlanting: null, preservationGuide: null, savingsEstimate: null, tips: null }],
+  ];
+  let i = 0;
+  for (const [label, body] of OFF_SHAPE) {
+    i += 1;
+    const plan = M.normalisePlan(body);
+    record(`M5b-n${i}`, `normalisePlan survives ${label}`, plan === null || typeof plan === 'object');
+    if (!plan) continue;
+    const html = render('PLX', `PlanRenderer (${label})`, React.createElement(M.PlanRenderer, {
+      plan, metric: false, currency: '$', isMobile: false, generatedAt: null,
+      engineYields: [], engineHarvest: [], engineSavings: 0,
+      onDownload() {}, onClear() {},
+    }));
+    record(`M5b-r${i}`, `and PlanRenderer renders ${label} without throwing`, html.length > 0);
+  }
+  record('M5b-1', 'a body that is not an object at all is refused outright',
+    M.normalisePlan(null) === null && M.normalisePlan('a plan') === null && M.normalisePlan([]) === null);
+  record('M5b-2', 'a body with nothing to show is refused rather than rendered empty',
+    M.normalisePlan({ tips: ['x'] }) === null);
+  const good = M.normalisePlan({
+    summary: 'S', monthlySchedule: [{ month: 'March', tasks: ['t'] }],
+    bedLayouts: [{ bedName: 'Bed 1', crops: ['Tomato'], notes: 'n' }],
+    successionPlanting: [{ crop: 'Lettuce', plantings: 4, intervalWeeks: 2, note: 'n' }],
+    preservationGuide: [{ crop: 'Tomato', freshShare: '30%', preservationMethods: ['can'], note: 'n' }],
+    savingsEstimate: { topSavers: ['Tomato'], note: 'n' }, tips: ['t'],
+  });
+  record('M5b-3', 'a current-shape body passes through with every section intact',
+    !!good && good.bedLayouts.length === 1 && good.successionPlanting[0].plantings === 4
+    && good.preservationGuide[0].preservationMethods[0] === 'can' && good.tips.length === 1);
+  record('M5b-4', 'and out-of-range numbers are clamped, not trusted',
+    M.normalisePlan({ summary: 'S', monthlySchedule: [{ month: 'March', tasks: ['t'] }],
+      successionPlanting: [{ crop: 'X', plantings: 1e9, intervalWeeks: -4, note: '' }] })
+      .successionPlanting[0].plantings === 12);
+}
+});
+
+// ────────────────────────── L-2: an unknown month must not lead the schedule
+group('the monthly schedule is filtered on a real month - L-2');
+safe(() => {
+{
+  // Built as a literal, not through normalisePlan: this case must be able to
+  // run against a revision that has no normaliser, so the control run shows
+  // the phantom month reaching the DOM.
+  const plan = {
+    summary: 'S',
+    monthlySchedule: [
+      { month: 'March', tasks: ['C'] },
+      { month: 'March', tasks: ['A'] },
+      { month: 'Marchember', tasks: ['B'] },
+      { month: 'January', tasks: ['Z'] },
+    ],
+    bedLayouts: [], successionPlanting: [], preservationGuide: [],
+    tips: [], savingsEstimate: null,
+  };
+  const html = render('PLM2', 'PlanRenderer (bad month)', React.createElement(M.PlanRenderer, {
+    plan, metric: false, currency: '$', isMobile: false, generatedAt: null,
+    engineYields: [], engineHarvest: [], engineSavings: 0, onDownload() {}, onClear() {},
+  }));
+  hasNot('L2b-1', 'a month name we do not know is dropped, not sorted to -1', html, 'Marchember');
+  hasNot('L2b-2', 'and its task list goes with it', html, '>B</li>');
+  record('L2b-3', 'January still leads the schedule',
+    html.indexOf('>January<') > 0 && html.indexOf('>January<') < html.indexOf('>March<'));
+  record('L2b-4', 'both March entries survive (duplicate months are legal)',
+    (html.split('>March<').length - 1) === 2);
+
+  // The downloaded report is the copy the customer keeps, and it builds its own
+  // month list. One filter, every chain.
+  let report = '';
+  try {
+    report = M.buildPlanReportHtml({
+      plan, inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'], gardenSqFt: null },
+      familySize: 4, zoneStr: 'USDA zone 7',
+      lastSpringFrostStr: 'Apr 15', firstFallFrostStr: 'Oct 20', hemisphere: 'north',
+      gardenSqFt: 320, metric: false, currency: '$', cropNames: ['Tomato'],
+      generatedAt: Date.UTC(2026, 8, 6), engineYields: [], engineHarvest: [], engineSavings: 0,
+    });
+  } catch (e) { record('L2b-5', `the report builder ran: ${e?.message}`, false); }
+  if (report) {
+    hasNot('L2b-5', 'the downloaded report drops the phantom month too', report, 'Marchember');
+    has('L2b-6', 'and still carries the real ones', report, 'January');
+  }
+}
+});
+
+// ────────────────────────── L-3: the 44 px floor on the most-tapped controls
+group('mobile tap targets meet the 44 px floor the spec states - L-3');
+safe(() => {
+{
+  const realMatchMedia = globalThis.matchMedia;
+  globalThis.matchMedia = (q) => ({
+    matches: /max-width:\s*640px/.test(q), media: q,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
+    onchange: null, dispatchEvent: () => false,
+  });
+  try {
+    const small = render('PS', 'PillSelect (sm, mobile)', React.createElement(M.PillSelect, {
+      options: [{ id: 'a', label: 'Rarely' }, { id: 'b', label: 'Sometimes' }],
+      value: 'a', onChange() {}, size: 'sm', ariaLabel: 'Frequency',
+    }));
+    has('L3b-1', 'the small pills are 44 px on a phone', small, 'min-height:44px');
+    hasNot('L3b-2', 'and no longer 40', small, 'min-height:40px');
+    const header = render('AH', 'AppHeader', React.createElement(M.AppHeader, {
+      metric: false, setMetric() {}, currency: '$', setCurrency() {},
+      hemisphere: 'north', setHemisphere() {},
+    }));
+    has('L3b-3', 'the header unit/currency/hemisphere pills are 44 px', header, 'min-height:44px');
+    hasNot('L3b-4', 'with none left at 40', header, 'min-height:40px');
+  } finally {
+    globalThis.matchMedia = realMatchMedia;
+  }
+  const desktop = render('PSD', 'PillSelect (sm, desktop)', React.createElement(M.PillSelect, {
+    options: [{ id: 'a', label: 'Rarely' }], value: 'a', onChange() {}, size: 'sm', ariaLabel: 'F',
+  }));
+  has('L3b-5', 'control: the desktop row keeps its tighter pill', desktop, 'min-height:40px');
+}
+});
+
+// ───────────── L-6 + L-7 + M-2: units and stats on the two paid calculators
+group('paid-tab copy and stats - L-6, L-7, M-2');
+safe(() => {
+{
+  const res = M.computeResults(M.PRESETS.family_basics.selection, 4, 'fresh_preserving');
+  const preserv = (metric) => render('PP', 'PreservationPlanner', React.createElement(M.PreservationPlanner, {
+    baseResults: res, preservation: { freshPct: 30, methodChoice: {} },
+    setPreservation() {}, metric,
+  }));
+  const imp = preserv(false);
+  has('L6b-1', 'imperial keeps the NCHFP figures in lb', imp, '1.44 lb');
+  const met = preserv(true);
+  has('L6b-2', 'metric converts the quart baseline to 1.4 kg', met, '1.4 kg');
+  has('L6b-3', 'and the pint to 0.66 kg', met, '0.66 kg');
+  has('L6b-4', 'and the dehydrator batch to 3.6 kg', met, '3.6 kg');
+  hasNot('L6b-5', 'no pound weight survives the metric note', met, ' lb ');
+  has('L6b-6', 'the container names stay the products they are', met, 'gallon bag');
+
+  const savings = (setupCosts) => render('CS', 'CostSavingsCalculator', React.createElement(M.CostSavingsCalculator, {
+    baseResults: res, beds: BEDS, soilState: { mixId: 'classic_60_30_10', mixOverrides: null },
+    costSavings: { priceOverrides: {}, setupCosts },
+    setCostSavings() {}, metric: false, currency: '$',
+  }));
+  const zero = savings({ beds: 0, soil: 0, seeds: 0, tools: 0, irrigation: 0 });
+  hasNot('L7b-1', 'with no setup costs entered, break-even is not "0.0"', zero, '>0.0<');
+  has('L7b-2', 'and the copy still asks for the setup costs', zero, 'Add your setup costs');
+  const priced = savings({ beds: 350, soil: 0, seeds: 0, tools: 0, irrigation: 0 });
+  record('L7b-3', 'control: a real setup cost still produces a real break-even',
+    /Break-even/i.test(priced) && !/>0\.0</.test(priced));
+
+  const card = render('CB', 'CropBreakdownCard (metric)', React.createElement(M.CropBreakdownCard, {
+    result: res.perCrop.find((r) => r.cropId === 'basil') || res.perCrop[0],
+    metric: true, areaConv: 0.09290304, massConv: 0.45359237, unitArea: 'm²', unitMass: 'kg',
+  }));
+  hasNot('M2b-1', 'the self-sufficiency breakdown never prints 0.0 m2', card, '0.0 m²');
+
+  // The same rule on the annual-yield line: 23 of 82 crops printed "~0 kg/yr"
+  // in metric while imperial printed "~1 lb/yr" off the identical 0.75 lb.
+  const tiny = M.computeResults({ arugula: 'rarely' }, 4, 'fresh_only');
+  const tinyCard = (metric) => render('CBT', 'CropBreakdownCard (small crop)', React.createElement(M.CropBreakdownCard, {
+    result: tiny.perCrop[0], metric,
+    areaConv: metric ? 0.09290304 : 1, massConv: metric ? 0.45359237 : 1,
+    unitArea: metric ? 'm²' : 'sq ft', unitMass: metric ? 'kg' : 'lb',
+  }));
+  const tinyMetric = tinyCard(true);
+  hasNot('M2b-2', 'a real harvest never reads as ~0 kg/yr', tinyMetric, '~0 kg');
+  has('M2b-3', 'it reads as the fraction it is', tinyMetric, '0.34');
+  // Imperial has the same defect in the other direction: 0.75 lb printed as
+  // "~1 lb/yr" overstates a small harvest by a third. Both units now print the
+  // number.
+  has('M2b-4', 'imperial prints the fraction too, instead of rounding 0.75 up to 1', tinyCard(false), '~0.75 lb');
+  const big = M.computeResults({ potato: 'weekly' }, 4, 'full_year');
+  const bigCard = render('CBB', 'CropBreakdownCard (large crop)', React.createElement(M.CropBreakdownCard, {
+    result: big.perCrop[0], metric: false, areaConv: 1, massConv: 1, unitArea: 'sq ft', unitMass: 'lb',
+  }));
+  record('M2b-5', 'control: a real harvest is still a whole number, not 3 decimals',
+    /~\d+ lb\/yr/.test(bigCard) && !/~\d+\.\d+ lb\/yr/.test(bigCard),
+    (bigCard.match(/~[\d.]+ lb\/yr/) || [''])[0]);
 }
 });
 

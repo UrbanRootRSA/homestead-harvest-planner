@@ -359,21 +359,54 @@ group('M-1', 'a ?key= link may not overwrite a DIFFERENT stored licence');
 }
 
 {
-  // Same conflict, but the victim's own stored key has since been revoked.
-  // The refusal must still hold, the message must be legible, and the foreign
-  // key must NOT be pre-filled into the licence input - a phishing key one
-  // click from activation is the thing being defended against.
+  // Same conflict, and the victim's own stored key is STILL THERE - the licence
+  // server just could not be reached to check it. This is the case the M-1
+  // refusal exists for: while a licence is stored on this device, a foreign key
+  // from a link must not sit one click from activation in the customer's own
+  // licence input. (The message the customer reads is about their OWN key, per
+  // M-3's ranking - it is the more urgent truth and it tells them the key is
+  // intact.)
+  const r = await mount({
+    url: `https://thehomesteadplan.com/?key=${KEY_THEIRS}`,
+    store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+    plan: [OUTAGE],
+  });
+
+  check('M-1.7', 'the stored licence survives the transient failure', r.storedKey === KEY_MINE && r.storedInstance === 'inst-mine', `hhp_key=${JSON.stringify(r.storedKey)}`);
+  check('M-1.8', 'the foreign key is NOT pre-filled while a licence is stored', !r.prefillKey || r.prefillKey !== KEY_THEIRS, `prefillKey=${JSON.stringify(r.prefillKey)}`);
+  check('M-1.9', 'the app is not unlocked by the refused link', r.everPaid === false && r.validating === false);
+  check('M-1.10', 'and the customer is told their own key is fine', typeof r.keyError === 'string' && /reload to try again/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
+  check('M-1.11', 'still no validator call for the foreign key', !r.calls.some((c) => c.key === KEY_THEIRS));
+}
+
+// ══════════════════════════════ M-6: a refusal that is false by the time it shows
+
+group('M-6', 'a conflict refusal must be re-tested against storage before it is shown');
+
+{
+  // Code review 2026-09-06 M-6. The two legs disagreed across time: the URL leg
+  // refused because A key was stored, and the stored leg then DELETED that key
+  // as definitively rejected. What the customer read was "A different licence
+  // is already stored on this device. Clear it before activating a new one" -
+  // with nothing to clear, no UI to clear it with, and their new key stripped
+  // out of the URL and not offered anywhere. That is the "I bought it again /
+  // my key was reissued" path, and on a $39.99 product it reads as the product
+  // refusing a key it has just taken money for.
   const r = await mount({
     url: `https://thehomesteadplan.com/?key=${KEY_THEIRS}`,
     store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
     plan: [REVOKED],
   });
 
-  check('M-1.7', 'the conflict is explained to the customer', typeof r.keyError === 'string' && /different licence is already stored/i.test(r.keyError), `keyError=${JSON.stringify(r.keyError)}`);
-  check('M-1.8', 'the foreign key is NOT pre-filled into the licence input', !r.prefillKey || r.prefillKey !== KEY_THEIRS, `prefillKey=${JSON.stringify(r.prefillKey)}`);
-  check('M-1.9', 'the app is not unlocked by the refused link', r.everPaid === false && r.validating === false);
-  check('M-1.10', 'the revoked stored key was wiped (definitive verdict)', r.storedKey === null && r.storedInstance === null);
-  check('M-1.11', 'still no validator call for the foreign key', !r.calls.some((c) => c.key === KEY_THEIRS));
+  check('M-6.1', 'the dead stored key is wiped, as before', r.storedKey === null && r.storedInstance === null);
+  check('M-6.2', 'the refusal is NOT shown once the conflict has ceased to exist',
+    !(typeof r.keyError === 'string' && /different licence is already stored/i.test(r.keyError)), `keyError=${JSON.stringify(r.keyError)}`);
+  check('M-6.3', 'the key from the purchase email is offered for one click',
+    r.prefillKey === KEY_THEIRS, `prefillKey=${JSON.stringify(r.prefillKey)}`);
+  check('M-6.4', 'but it is still never auto-activated - no validator call for it',
+    !r.calls.some((c) => c.key === KEY_THEIRS), `calls=${JSON.stringify(r.calls.map((c) => c.key))}`);
+  check('M-6.5', 'the app is not unlocked', r.everPaid === false && r.validating === false);
+  check('M-6.6', 'and they land on the paywall route, not on Home', r.tab === 'growing-plan', `tab=${JSON.stringify(r.tab)}`);
 }
 
 {
@@ -413,6 +446,33 @@ group('M-1', 'a ?key= link may not overwrite a DIFFERENT stored licence');
   check('M-1.16', 'a fresh device still unlocks from the email link', r.paid === true && r.validating === false);
   check('M-1.17', 'the key and instance are persisted', r.storedKey === KEY_MINE && r.storedInstance === 'inst-new');
   check('M-1.18', 'the key is stripped from the address bar', !r.href.includes('key='), r.href);
+
+  // Code review 2026-09-06 M-1: and it must land them on what they bought.
+  // The LemonSqueezy confirmation modal and the receipt email both link to
+  // thehomesteadplan.com?key=..., and this leg used to leave the app on the
+  // Home tab at "/" - so a customer's first post-purchase impression was the
+  // hero, the comparison table and a pricing tile still reading $39.99 / Get
+  // full access, with nothing saying the unlock had worked. CLAUDE.md 21
+  // specifies "URL stripped to #growing-plan"; this is the code catching up
+  // with the spec.
+  check('M-1.19', 'the customer lands on the Growing Plan tab', r.tab === 'growing-plan', `tab=${JSON.stringify(r.tab)}`);
+  check('M-1.20', 'and the URL says so, so a reload or a copied link stays there',
+    r.href.endsWith('#growing-plan'), r.href);
+}
+
+{
+  // The control that keeps M-1.19 honest: an ordinary launch on a stored key
+  // must NOT move the customer. They land wherever they left off.
+  const r = await mount({
+    url: 'https://thehomesteadplan.com/#soil',
+    store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+    plan: [OK('inst-mine')],
+  });
+
+  check('M-1.21', 'a stored-key launch still unlocks', r.paid === true);
+  check('M-1.22', 'and does not drag the customer to the Growing Plan tab',
+    r.tab === null, `tab=${JSON.stringify(r.tab)}`);
+  check('M-1.23', 'and leaves the hash they arrived on alone', r.href.endsWith('#soil'), r.href);
 }
 
 // ═════════════════════════════════════ M-3: a rejected ?key= must fall through
@@ -715,7 +775,18 @@ group('A-1s', 'the server raises activation_limit_reached before /activate');
     const w = console.warn; const e = console.error;
     console.warn = () => {}; console.error = () => {};
     try {
-      await handler({ method: 'POST', headers: { origin: 'https://thehomesteadplan.com', 'x-real-ip': '203.0.113.9' }, body }, res);
+      // content-type is required by the handler as of the 2026-09-06 L-5 fix
+      // (a preflight-free `text/plain` POST is refused). The real client has
+      // always sent it; the fixture used to under-specify the request.
+      await handler({
+        method: 'POST',
+        headers: {
+          origin: 'https://thehomesteadplan.com',
+          'x-real-ip': '203.0.113.9',
+          'content-type': 'application/json',
+        },
+        body,
+      }, res);
     } finally {
       console.warn = w; console.error = e;
       globalThis.fetch = realFetch;
