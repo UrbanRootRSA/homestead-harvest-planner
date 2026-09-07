@@ -461,6 +461,74 @@ group('the completeness gate reads the plan, not one section of it');
     JSON.stringify(ok.body?.plan && Object.keys(ok.body.plan)));
 }
 
+group('R3-9: the savings note may not carry a second figure under the engine\'s total');
+
+{
+  // Code review round 3, 2026-09-07 (PLAUSIBLE, reproduced here with stubs).
+  // H-2 removed every numeric field the model could fill; the prose fields
+  // stayed unconstrained, and savingsEstimate.note renders directly beneath
+  // the engine's total on the savings card. A note that says "$1,234" or
+  // "42 lb" puts a second number in the card the engine owns. The server drops
+  // the sentence that carries the figure and keeps the rest.
+  const ACTIVE = { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } };
+  const withNote = (note, topSavers = ['Tomatoes']) => ({
+    content: [{
+      type: 'tool_use', name: 'submit_growing_plan',
+      input: {
+        summary: 'A test plan.',
+        monthlySchedule: [{ month: 'March', tasks: ['Sow tomatoes under cover'] }],
+        tips: ['Water in the morning.'],
+        savingsEstimate: { topSavers, note },
+      },
+    }],
+    usage: { input_tokens: 1, output_tokens: 1 },
+  });
+  const noisy = await runGenerate({ ...INPUT, licenseKey: 'CGCCCCCC-1111-2222-3333-NOISYNOTE0' }, {
+    ls: ACTIVE,
+    anthropic: { status: 200, body: withNote(
+      'Tomatoes carry the total. You should save roughly $1,234 a year. Expect about 42 lb of tomatoes. Water in the morning.',
+      ['Tomatoes', 'Squash ($120)'],
+    ) },
+  });
+  const note = String(noisy.body?.plan?.savingsEstimate?.note ?? '');
+  check('R3-9.1', 'the plan still ships', noisy.status === 200 && noisy.body?.ok === true, `http=${noisy.status} ${JSON.stringify(noisy.body?.error || '')}`);
+  check('R3-9.2', 'the dollar sentence is gone from the note', !/\$1,234/.test(note), note);
+  check('R3-9.3', 'and the weight sentence', !/42 lb/.test(note), note);
+  check('R3-9.4', 'the sentences without a figure survive, in order', note === 'Tomatoes carry the total. Water in the morning.', note);
+  check('R3-9.5', 'a top-saver carrying a figure is dropped whole; the plain crop name stays',
+    JSON.stringify(noisy.body?.plan?.savingsEstimate?.topSavers) === '["Tomatoes"]', JSON.stringify(noisy.body?.plan?.savingsEstimate?.topSavers));
+
+  const shapes = [
+    ['a kilogram figure', 'You can expect 19 kg of squash. Rotate the beds.', 'Rotate the beds.'],
+    ['a plant count', 'Plant 12 plants of basil. Rotate the beds.', 'Rotate the beds.'],
+    ['a rand amount', 'That is about R450 a month. Rotate the beds.', 'Rotate the beds.'],
+    ['a spelled-out currency', 'Roughly 900 dollars a year. Rotate the beds.', 'Rotate the beds.'],
+  ];
+  let i = 0;
+  for (const [label, text, expected] of shapes) {
+    i += 1;
+    const r = await runGenerate({ ...INPUT, licenseKey: `CGDDDDD${i}-1111-2222-3333-FIGURESHAPE` }, {
+      ls: ACTIVE, anthropic: { status: 200, body: withNote(text) },
+    });
+    check(`R3-9.6.${i}`, `${label} is dropped with its sentence`, r.body?.plan?.savingsEstimate?.note === expected, JSON.stringify(r.body?.plan?.savingsEstimate?.note));
+  }
+
+  const onlyFigure = await runGenerate({ ...INPUT, licenseKey: 'CGEEEEEE-1111-2222-3333-ONLYFIGURE' }, {
+    ls: ACTIVE, anthropic: { status: 200, body: withNote('Around $900 a year.') },
+  });
+  check('R3-9.7', 'a note that is nothing but a figure ships EMPTY rather than refusing the plan',
+    onlyFigure.status === 200 && onlyFigure.body?.plan?.savingsEstimate?.note === '', `http=${onlyFigure.status} note=${JSON.stringify(onlyFigure.body?.plan?.savingsEstimate?.note)}`);
+
+  const clean = await runGenerate({ ...INPUT, licenseKey: 'CGFFFFFF-1111-2222-3333-CLEANNOTE0' }, {
+    ls: ACTIVE, anthropic: { status: 200, body: withNote('Tomatoes and beans carry most of it; herbs are cheap to buy but pricey per ounce at the shop.') },
+  });
+  check('R3-9.8', 'control: a note with no figure is untouched',
+    clean.body?.plan?.savingsEstimate?.note === 'Tomatoes and beans carry most of it; herbs are cheap to buy but pricey per ounce at the shop.',
+    JSON.stringify(clean.body?.plan?.savingsEstimate?.note));
+  check('R3-9.9', 'control: the prose sections outside the savings card are not touched (a month task may count plants)',
+    noisy.body?.plan?.monthlySchedule?.[0]?.tasks?.[0] === 'Sow tomatoes under cover' && noisy.body?.plan?.tips?.[0] === 'Water in the morning.');
+}
+
 group('the mirror: the two handlers must not drift apart on the rule');
 
 {

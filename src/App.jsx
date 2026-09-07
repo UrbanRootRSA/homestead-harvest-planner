@@ -98,6 +98,16 @@ const LS_CORRUPT_PREFIX = "hhp.corrupt.";
 const LS_KEY = "hhp_key";
 const LS_INSTANCE = "hhp_instance";
 const LS_PENDING = "hhp_pending";
+// The client's wall-clock cap on one /api/validate-key round trip. It must
+// OUTLAST the server's worst path, or the browser gives up on a request the
+// server then completes: a fresh-device activation is two sequential
+// LemonSqueezy legs at api/validate-key.js LS_TIMEOUT_MS (8 s each, pre-check
+// validate then activate) plus five Upstash round trips and a cold start. At
+// the old 15 s the abort could land inside the activate leg, LemonSqueezy
+// minted the instance, the answer reached nobody, and the customer's retry
+// minted another - an orphaned activation slot (round 3, 2026-09-07; the
+// fleet pair is 15 s against 2 x 8 s). 2 x 8 s + 9 s of headroom.
+const VALIDATE_TIMEOUT_MS = 25000;
 const GRACE_WINDOW_MS = 48 * 60 * 60 * 1000;
 const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/6aecd238-c4b2-41a1-9a05-255dc8bfc822";
 const PRICE_USD = "39.99";
@@ -503,15 +513,21 @@ const moneyDecimals = (currency) => (ZERO_DECIMAL_CURRENCIES.includes(currency) 
 // magnitude so every crop in the table reads as a distinct, non-zero number,
 // and use ONE helper on both the desktop table and the mobile card so they can
 // never disagree again.
+// R3-3 (code review round 3, 2026-09-07): the decimals rule is one function,
+// so the count-up stat on the Self-Sufficiency hero can read it too. The M-2
+// sweep reached the crop cards and the crop database; the category legend and
+// the hero stat kept a fixed one decimal and printed "Herbs 0.0 m²" beside a
+// basil card reading 0.023 m².
+function magnitudeDecimals(v) {
+  return v < 0.1 ? 3 : v < 1 ? 2 : 1;
+}
 function fmtAreaValue(sqft, metric) {
   const v = (Number.isFinite(sqft) ? sqft : 0) * (metric ? SQFT_TO_SQM : 1);
-  const d = v < 0.1 ? 3 : v < 1 ? 2 : 1;
-  return v.toFixed(d);
+  return v.toFixed(magnitudeDecimals(v));
 }
 function fmtMassValue(lbs, metric) {
   const v = (Number.isFinite(lbs) ? lbs : 0) * (metric ? LB_TO_KG : 1);
-  const d = v < 0.1 ? 3 : v < 1 ? 2 : 1;
-  return v.toFixed(d);
+  return v.toFixed(magnitudeDecimals(v));
 }
 
 // The same rule for an ANNUAL total, which people round: whole units above 1,
@@ -666,6 +682,7 @@ function computePlantingDates(crop, frostDates, sowMethodOverride = null) {
     harvestStart: null, harvestEnd: null, harvestEndEffective: null,
     anchorMethod: null,
     frostRiskAtHarvest: false,
+    noHarvestBeforeFrost: false,
   };
   if (!crop || !frostDates) return out;
   const { lastSpring, firstFall } = frostDates;
@@ -707,7 +724,23 @@ function computePlantingDates(crop, frostDates, sowMethodOverride = null) {
   // DRAW at first frost for warm-season crops; leave harvestEnd itself alone,
   // because the badge test above reads it. Cool-season and perennial crops
   // genuinely run past frost, so they are untouched.
-  out.harvestEndEffective = out.frostRiskAtHarvest ? firstFall : out.harvestEnd;
+  //
+  // R3-2 (code review round 3, 2026-09-07): M-8 clamped the END of the window
+  // without asking whether the START was already past first frost. A zone-3
+  // sweet potato (harvest from 18 Sep against a 15 Sep frost) printed
+  // "Harvest Sep 18 – Sep 15", drew no harvest bar, dropped out of the paid
+  // harvest timeline without a word and still promised 42 lb three cards
+  // below. A window that begins at or after first frost is a third state, not
+  // a shorter window: flag it, print no range at all, and let every surface
+  // that reads these dates say the same thing (card, timeline row, paid
+  // harvest timeline, yield section, report).
+  if (crop.season === "warm" && out.harvestStart && firstFall && out.harvestStart >= firstFall) {
+    out.noHarvestBeforeFrost = true;
+    out.frostRiskAtHarvest = true;
+  }
+  out.harvestEndEffective = out.noHarvestBeforeFrost
+    ? null
+    : (out.frostRiskAtHarvest ? firstFall : out.harvestEnd);
 
   return out;
 }
@@ -847,12 +880,13 @@ function clearLS(key) {
 // every re-paste burned one of their 3 LS activation slots.
 async function validateKeyRemote(key, instanceId, opts) {
   opts = opts || {};
-  // 15s wall-clock cap keeps the paywall mount effect from spinning forever
+  // A wall-clock cap keeps the paywall mount effect from spinning forever
   // when cold-start Vercel + cold Upstash + cold LS upstream stack on a slow
   // first request. /api/generate has a 90s timeout already; this path didn't,
-  // until audit #M12.
+  // until audit #M12. The value is derived from the server's budget - see
+  // VALIDATE_TIMEOUT_MS.
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 15000);
+  const timer = setTimeout(() => ac.abort(), VALIDATE_TIMEOUT_MS);
   try {
     const resp = await fetch("/api/validate-key", {
       method: "POST",
@@ -1230,7 +1264,7 @@ function CategoryBar({ categorySpaceMap, totalSpaceSqft, metric }) {
       }}>
         {entries.map((e) => (
           <div key={e.id}
-            title={`${e.label}: ${(e.space * conv).toFixed(1)} ${unit}`}
+            title={`${e.label}: ${fmtAreaValue(e.space, metric)} ${unit}`}
             style={{
               width: `${(e.space / maxSpace) * 100}%`,
               background: e.color,
@@ -1244,7 +1278,8 @@ function CategoryBar({ categorySpaceMap, totalSpaceSqft, metric }) {
             <span style={{ width: 10, height: 10, borderRadius: 3, background: e.color, display: "inline-block" }} />
             <span style={{ fontWeight: 600 }}>{e.label}</span>
             <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums", color: T.tx3 }}>
-              {(e.space * conv).toFixed(1)} {unit}
+              {/* R3-3: the M-2 precision rule, on the legend as well as the cards. */}
+              {fmtAreaValue(e.space, metric)} {unit}
             </span>
           </div>
         ))}
@@ -1363,9 +1398,21 @@ function computeSavingsRows(perCrop, priceOverrides = {}) {
 // widely. Letting the user override keeps the KPI honest across regions.
 function ProduceTargetField({ value, onChange, metric, isMobile }) {
   const displayUnit = metric ? "kg" : "lb";
-  const displayValue = metric ? Number((value * LB_TO_KG).toFixed(1)) : value;
-  const min = metric ? MIN_PRODUCE_PER_PERSON_LBS * LB_TO_KG : MIN_PRODUCE_PER_PERSON_LBS;
-  const max = metric ? MAX_PRODUCE_PER_PERSON_LBS * LB_TO_KG : MAX_PRODUCE_PER_PERSON_LBS;
+  // R3-1 (code review round 3, 2026-09-07): the N-5 rule, on the one other
+  // Field that converts its bounds. ONE expression turns a canonical lb figure
+  // into what this field shows, and the bounds go through it too. The bounds
+  // used to be rounded separately - Math.round(22.68) = 23 kg, ABOVE the 22.7
+  // the field displayed at the 50 lb floor - so an untouched focus + blur
+  // clamped the display up to the bound and committed 50 -> 50.706 lb, a 1.4%
+  // jump from a gesture that changed nothing.
+  // R3-5: the imperial branch rounds as well. A value typed in metric is stored
+  // at full float precision (25 kg -> 55.11556554621939 lb) and the box printed
+  // it unrounded once the header toggle went back to imperial. Rounding lives
+  // here, at the display boundary; the canonical value is never rounded.
+  const toDisplay = (lbs) => (metric ? Number((lbs * LB_TO_KG).toFixed(1)) : Number(lbs.toFixed(1)));
+  const displayValue = toDisplay(value);
+  const min = toDisplay(MIN_PRODUCE_PER_PERSON_LBS);
+  const max = toDisplay(MAX_PRODUCE_PER_PERSON_LBS);
   // Canonical storage is lb/person/yr. The Field displays kg in metric
   // mode and commits through the kg→lb conversion on blur. Without a
   // skip-if-unchanged guard, every blur re-encoded the displayed 1-decimal
@@ -1373,10 +1420,10 @@ function ProduceTargetField({ value, onChange, metric, isMobile }) {
   // blur in metric mode. Mirror the Cost Savings Price fix (L5573-5598):
   // if the committed displayed value equals what the current canonical
   // lb already renders as, skip the write entirely. Audit #25 / Fix 5.
+  // The guard expression is the same toDisplay the value prop uses, or the
+  // skip silently stops firing (drift-guard canon).
   const commit = (v) => {
-    const displayedNow = metric
-      ? Number((value * LB_TO_KG).toFixed(1))
-      : value;
+    const displayedNow = toDisplay(value);
     if (v === displayedNow) return;
     const asLbs = metric ? v / LB_TO_KG : v;
     onChange(Math.max(MIN_PRODUCE_PER_PERSON_LBS, Math.min(MAX_PRODUCE_PER_PERSON_LBS, asLbs)));
@@ -1389,7 +1436,7 @@ function ProduceTargetField({ value, onChange, metric, isMobile }) {
       <Field label="Annual produce per person"
         unit={displayUnit}
         value={displayValue} onChange={commit}
-        min={Math.round(min)} max={Math.round(max)} step={10} />
+        min={min} max={max} step={10} />
       <p style={{
         margin: isMobile ? "-4px 0 0" : "0 0 12px",
         fontSize: 13, color: T.tx3, lineHeight: 1.5,
@@ -1650,7 +1697,7 @@ function SelfSufficiencyCalculator({
           <MiniStat label="Plants to grow" value={results.totalPlants} unit="plants" />
           <MiniStat label="Garden space (incl. paths)"
             value={results.totalSpaceSqft * areaConv}
-            decimals={1} unit={unitArea} />
+            decimals={magnitudeDecimals(results.totalSpaceSqft * areaConv)} unit={unitArea} />
           <MiniStat label="Estimated yield (mid-range)" value={results.totalYieldLbs * massConv}
             decimals={0} unit={unitMass} />
         </div>
@@ -3003,7 +3050,10 @@ function PlantingTimelineChart({ rows, referenceYear }) {
     // Show pills at the left/right edge for out-of-year phases (garlic etc).
     const results = [];
     const earliest = [dates.startIndoors, dates.transplant, dates.directSow].filter(Boolean).sort((a, b) => a - b)[0];
-    const latest = dates.harvestEndEffective || dates.harvestEnd;
+    // R3-2: a crop with no harvest before frost has no harvest edge to point
+    // at. Without this gate the null harvestEndEffective fell through to the
+    // raw harvestEnd and drew a right-edge pill for a harvest that never comes.
+    const latest = dates.noHarvestBeforeFrost ? null : (dates.harvestEndEffective || dates.harvestEnd);
     if (earliest && earliest < new Date(referenceYear, 0, 1)) {
       results.push({ side: "left", label: `${formatDate(earliest, referenceYear)}` });
     }
@@ -3111,6 +3161,20 @@ function PlantingTimelineChart({ rows, referenceYear }) {
                         borderRadius: 2, opacity: 0.7,
                       }} />
                     ))}
+                    {/* R3-2: the row says why there is no harvest bar, in the
+                        same words as the card's badge. A bare growing bar with
+                        nothing after it read as "not drawn yet". */}
+                    {dates.noHarvestBeforeFrost && (
+                      <span title="Harvest would start after the first fall frost in this zone" style={{
+                        position: "absolute", top: 2, bottom: 2, right: 8,
+                        display: "flex", alignItems: "center",
+                        fontSize: 11, fontWeight: 700, color: T.error,
+                        background: T.errorBg, borderRadius: 3, padding: "0 6px",
+                        whiteSpace: "nowrap",
+                      }}>
+                        {isMobile ? "No harvest" : "No harvest before frost"}
+                      </span>
+                    )}
                   </>
                 )}
               </div>
@@ -3164,8 +3228,12 @@ function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChan
             fontSize: 11, fontWeight: 700, color: T.error,
             padding: "2px 8px", borderRadius: T.radiusPill,
             background: T.errorBg,
-          }} title="Harvest window extends past the first fall frost">
-            Frost risk
+          }} title={dates.noHarvestBeforeFrost
+            ? "Harvest would start after the first fall frost in this zone"
+            : "Harvest window extends past the first fall frost"}>
+            {/* R3-2: the badge names the third state. "Frost risk" beside an
+                inverted range read as a window that survives the frost. */}
+            {dates.noHarvestBeforeFrost ? "No harvest before frost" : "Frost risk"}
           </span>
         )}
       </div>
@@ -3216,8 +3284,14 @@ function CropDatesCard({ cropId, crop, dates, sowMethodOverride, onSowMethodChan
           <>
             <span style={{ color: T.tx3 }}>Harvest</span>
             <span style={{ fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums" }}>
-              {formatDate(dates.harvestStart, referenceYear)}
-              {dates.harvestEndEffective && ` – ${formatDate(dates.harvestEndEffective, referenceYear)}`}
+              {dates.noHarvestBeforeFrost
+                ? `None before first frost (would start ${formatDate(dates.harvestStart, referenceYear)})`
+                : (
+                  <>
+                    {formatDate(dates.harvestStart, referenceYear)}
+                    {dates.harvestEndEffective && ` – ${formatDate(dates.harvestEndEffective, referenceYear)}`}
+                  </>
+                )}
             </span>
           </>
         )}
@@ -4326,7 +4400,13 @@ function GardenSpaceField({ value, derived, onChange, metric, isMobile, tight })
   // the floor. The ceiling had the mirror of it (9290.3 rounded down to 9290).
   // A guard that compares a displayed value against a bound must express both
   // the same way.
-  const toDisplay = (sqft) => (metric ? Number((sqft * SQFT_TO_SQM).toFixed(1)) : sqft);
+  // R3-5 (code review round 3, 2026-09-07): the imperial branch rounds too. A
+  // value typed as 37.2 m² is stored as 400.41746750160166 sq ft, and the box
+  // printed exactly that once the header toggle went back to imperial. The
+  // canonical value stays unrounded; only what the box shows is rounded, and
+  // the commit guard below reads the same expression, so an untouched blur
+  // on that value still writes nothing.
+  const toDisplay = (sqft) => (metric ? Number((sqft * SQFT_TO_SQM).toFixed(1)) : Number(sqft.toFixed(1)));
   const displayValue = toDisplay(canonical);
   const min = toDisplay(GARDEN_SQFT_MIN);
   const max = toDisplay(GARDEN_SQFT_MAX);
@@ -4558,8 +4638,14 @@ function GrowingPlanTab({
   // The customer can now state what they actually have; the derived figure
   // stays as the default and as the prefill.
   const derivedGardenSqFt = Math.max(50, Math.round(baseResults.totalSpaceRaw));
+  // R3-5 (code review round 3, 2026-09-07): a figure typed in metric is stored
+  // at full float precision (37.2 m² -> 400.41746750160166 sq ft). Everything
+  // below this line is a boundary - the request payload, the report's meta
+  // line, the too-small banner - so it reads the figure at the one decimal the
+  // field itself shows. The stored value is never rounded; the field's own
+  // toDisplay rounds it the same way.
   const gardenSqFt = typeof inputs.gardenSqFt === "number" && Number.isFinite(inputs.gardenSqFt)
-    ? inputs.gardenSqFt
+    ? Number(inputs.gardenSqFt.toFixed(1))
     : derivedGardenSqFt;
   const gardenSpaceIsTight = gardenSqFt < derivedGardenSqFt;
 
@@ -4644,12 +4730,16 @@ function GrowingPlanTab({
     // cancels should not stay staring at the last run's error message.
     setError("");
     // Confirm before regenerating when the current plan still matches the
-    // selected crops. Each call consumes one of the user's 20/hr quota and
-    // spends ~$0.06 on the Anthropic side. Stale-fingerprint case skips the
-    // prompt because the user has visibly changed inputs and expects a fresh plan.
+    // selected crops. Each call consumes one of the user's 20 generations per
+    // rolling 24 hours (api/generate.js RL_LICENCE_MAX / RL_LICENCE_WINDOW_SEC,
+    // and the Terms say the same) and spends ~$0.06 on the Anthropic side.
+    // R3-4 (code review round 3, 2026-09-07): this dialog said "hourly", which
+    // understated the cost of the slot by a factor of 24. Stale-fingerprint
+    // case skips the prompt because the user has visibly changed inputs and
+    // expects a fresh plan.
     if (plan && !fingerprintStale) {
       const ok = window.confirm(
-        "You already have a fresh plan for this crop selection. Regenerate anyway? This will use one of your 20 hourly generations."
+        "You already have a fresh plan for this crop selection. Regenerate anyway? This will use one of your 20 generations per day."
       );
       if (!ok) return;
     }
@@ -4675,8 +4765,9 @@ function GrowingPlanTab({
         displayUnits: metric ? "metric" : "imperial",
         currency,
         // Always send lb; producePerPerson is stored in lb regardless of
-        // metric toggle.
-        producePerPersonLbs: producePerPerson,
+        // metric toggle. R3-5: at the one decimal the field shows, never the
+        // raw float a metric entry stores (25 kg -> 55.11556554621939 lb).
+        producePerPersonLbs: Number(producePerPerson.toFixed(1)),
       },
       fingerprintInput,
       fallbackFingerprint: currentFingerprint,
@@ -5073,6 +5164,20 @@ function engineHarvestRows(perCrop, frostDates, sowMethodChoice = {}) {
   for (const r of perCrop) {
     const d = computePlantingDates(r.crop, frostDates, sowMethodChoice?.[r.cropId] || null);
     const start = d.harvestStart;
+    // R3-2: a crop whose harvest would begin after first frost is kept and
+    // MARKED, never dropped. The chart and the report print the reason in the
+    // row, and the yield section reads the same flag. Dropping it here left
+    // "~42 lb" three cards below a timeline that never mentioned the crop.
+    // No months travel with it, so nothing downstream can draw a bar by
+    // accident: the flag is the reason, the null months are the consequence.
+    if (d.noHarvestBeforeFrost) {
+      rows.push({
+        crop: r.crop.name,
+        startMonth: null, endMonth: null, peakMonth: null,
+        noHarvestBeforeFrost: true,
+      });
+      continue;
+    }
     const end = d.harvestEndEffective || d.harvestEnd || start;
     if (!start || !end || end < start) continue;
     const spanDays = Math.round((end - start) / 86400000);
@@ -5095,6 +5200,12 @@ function engineHarvestRows(perCrop, frostDates, sowMethodChoice = {}) {
 function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
                         engineYields = [], engineHarvest = [], engineSavings = 0,
                         onDownload, onClear }) {
+  // R3-2: the crops the harvest timeline marks as "no harvest before frost",
+  // so the yield section three cards below says the same thing instead of
+  // promising a weight the timeline just said cannot be picked.
+  const noHarvestCrops = new Set(
+    engineHarvest.filter((r) => r && r.noHarvestBeforeFrost).map((r) => r.crop)
+  );
   return (
     <div style={{ marginTop: 32 }}>
       {/* ── Action bar ── */}
@@ -5242,16 +5353,32 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
                 alignItems: "baseline",
               }}>
                 <div style={{ fontWeight: 700, color: T.tx, fontSize: 14 }}>{y.crop}</div>
-                <div style={{
-                  fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
-                  fontSize: 14, color: T.primary, fontWeight: 700,
-                }}>
-                  {fmtInt(y.plants)} plants · ~{fmtMassValue(y.yieldLbs, metric)} {metric ? "kg" : "lb"}
-                </div>
-                <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
-                  Range {fmtMassValue(y.lowLbs, metric)}–{fmtMassValue(y.highLbs, metric)}{" "}
-                  {metric ? "kg" : "lb"} depending on the season.
-                </div>
+                {noHarvestCrops.has(y.crop) ? (
+                  <>
+                    <div style={{
+                      fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+                      fontSize: 14, color: T.error, fontWeight: 700,
+                    }}>
+                      {fmtInt(y.plants)} plants · no harvest before frost
+                    </div>
+                    <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+                      In your zone the first fall frost comes before this crop is ready to pick.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{
+                      fontFamily: T.fontNum, fontVariantNumeric: "tabular-nums",
+                      fontSize: 14, color: T.primary, fontWeight: 700,
+                    }}>
+                      {fmtInt(y.plants)} plants · ~{fmtMassValue(y.yieldLbs, metric)} {metric ? "kg" : "lb"}
+                    </div>
+                    <div style={{ fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+                      Range {fmtMassValue(y.lowLbs, metric)}–{fmtMassValue(y.highLbs, metric)}{" "}
+                      {metric ? "kg" : "lb"} depending on the season.
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -5384,6 +5511,9 @@ function PlanHarvestChart({ rows }) {
   // a phantom January bar (#13).
   const filtered = rows
     .map((r) => {
+      // R3-2: a row the engine flagged has no months on purpose. Keep it and
+      // let the row say why, instead of dropping it with the malformed ones.
+      if (r.noHarvestBeforeFrost) return { ...r, startIdx: -1, endIdx: -1, peakIdx: -1 };
       const startIdx = monthIndex(r.startMonth);
       let endIdx = monthIndex(r.endMonth);
       let peakIdx = monthIndex(r.peakMonth);
@@ -5392,7 +5522,7 @@ function PlanHarvestChart({ rows }) {
       if (peakIdx === -1) peakIdx = startIdx;
       return { ...r, startIdx, endIdx, peakIdx };
     })
-    .filter((r) => r.startIdx >= 0);
+    .filter((r) => r.startIdx >= 0 || r.noHarvestBeforeFrost);
   if (filtered.length === 0) return null;
   return (
     <div style={{ overflowX: "auto" }}>
@@ -5424,7 +5554,11 @@ function PlanHarvestChart({ rows }) {
                 fontSize: 13, fontWeight: 600, color: T.tx,
                 whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               }}>{r.crop}</div>
-              {Array.from({ length: 12 }, (_, m) => {
+              {r.noHarvestBeforeFrost ? (
+                <div style={{ gridColumn: "2 / -1", fontSize: 12, fontWeight: 600, color: T.error, lineHeight: 1.4 }}>
+                  No harvest before your first fall frost. The plants would be ready after the season ends in your zone.
+                </div>
+              ) : Array.from({ length: 12 }, (_, m) => {
                 const inRange = segments.some(([a, b]) => m >= a && m <= b);
                 const isPeak = m === r.peakIdx && inRange;
                 return (
@@ -5468,7 +5602,8 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   const waterLabel = WATER_OPTIONS.find((o) => o.id === inputs.waterMethod)?.label || inputs.waterMethod;
   const expLabel = EXPERIENCE_OPTIONS.find((o) => o.id === inputs.experience)?.label || inputs.experience;
   const goalLabel = inputs.goals.map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label || id).join(", ");
-  const spaceStr = metric ? `${(gardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${gardenSqFt} sq ft`;
+  // R3-5: one decimal on the imperial branch too, whatever the caller passed.
+  const spaceStr = metric ? `${(gardenSqFt * SQFT_TO_SQM).toFixed(1)} m²` : `${Number(gardenSqFt.toFixed(1))} sq ft`;
 
   // L-2: same filter-then-sort as the screen. The downloaded report is the
   // copy the customer keeps, so a phantom month must not survive into it.
@@ -5555,6 +5690,8 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   // report for a row the on-screen chart correctly hid.
   const harvestRows = (engineHarvest || [])
     .map((r) => {
+      // R3-2: same rule as PlanHarvestChart - a flagged row is kept and says why.
+      if (r.noHarvestBeforeFrost) return { ...r, startIdx: -1, endIdx: -1, peakIdx: -1 };
       const startIdx = monthIndex(r.startMonth);
       let endIdx = monthIndex(r.endMonth);
       let peakIdx = monthIndex(r.peakMonth);
@@ -5563,7 +5700,9 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
       if (peakIdx === -1) peakIdx = startIdx;
       return { ...r, startIdx, endIdx, peakIdx };
     })
-    .filter((r) => r.startIdx >= 0);
+    .filter((r) => r.startIdx >= 0 || r.noHarvestBeforeFrost);
+  // R3-2: the crops the timeline marks, so the yield cards below agree with it.
+  const noHarvestCrops = new Set(harvestRows.filter((r) => r.noHarvestBeforeFrost).map((r) => r.crop));
   const harvestHtml = harvestRows.length > 0 ? `
     <h2>Harvest timeline</h2>
     <div style="overflow-x:auto;">
@@ -5572,6 +5711,9 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
           <div></div>${MONTH_ORDER.map((m) => `<div>${m.slice(0, 3)}</div>`).join("")}
         </div>
         ${harvestRows.map((r) => {
+          if (r.noHarvestBeforeFrost) {
+            return `<div class="timeline"><div class="label">${escapeHtml(r.crop)}</div><div style="grid-column:2 / -1;font-size:12px;font-weight:600;color:#B84233;">No harvest before your first fall frost. The plants would be ready after the season ends in your zone.</div></div>`;
+          }
           const segments = r.endIdx >= r.startIdx ? [[r.startIdx, r.endIdx]] : [[r.startIdx, 11], [0, r.endIdx]];
           const cells = Array.from({ length: 12 }, (_, m) => {
             const on = segments.some(([a, b]) => m >= a && m <= b);
@@ -5589,7 +5731,15 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
   const yieldRows = engineYields || [];
   const yieldHtml = yieldRows.length > 0 ? `
     <h2>Estimated yields</h2>
-    ${yieldRows.map((y) => `
+    ${yieldRows.map((y) => (noHarvestCrops.has(y.crop) ? `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
+          <strong>${escapeHtml(y.crop)}</strong>
+          <span class="num" style="color:#B84233;">${fmtInt(y.plants)} plants &middot; no harvest before frost</span>
+        </div>
+        <p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">In your zone the first fall frost comes before this crop is ready to pick.</p>
+      </div>
+    ` : `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
           <strong>${escapeHtml(y.crop)}</strong>
@@ -5597,7 +5747,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
         </div>
         <p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">Range ${fmtMassValue(y.lowLbs, metric)}&ndash;${fmtMassValue(y.highLbs, metric)} ${escapeHtml(massUnit)} depending on the season.</p>
       </div>
-    `).join("")}
+    `)).join("")}
   ` : "";
 
   const presHtml = plan.preservationGuide.length > 0 ? `
@@ -8041,7 +8191,13 @@ export default function App() {
       // ?key= value is attacker-controllable; wiping LS_INSTANCE here would
       // burn the legit customer's activation slot on next reload.
       // Pattern: workspace memory `feedback_url_key_instance_trust.md`.
-      if (r1?.retry_activation && !skip) {
+      // Sibling shape (a) (round 3, 2026-09-07): the await above is a window
+      // in which another tab can activate and store a NEWER licence. Re-read
+      // the slot before touching it: if it no longer holds the key that was
+      // just validated, this leg has nothing to clean up and no instance it
+      // may wipe - the wipe would delete the new key's pointer and the bare
+      // retry below would burn a slot on the old one.
+      if (r1?.retry_activation && !skip && loadState(LS_KEY, "") === key) {
         clearLS(LS_INSTANCE);
         const r2 = await validateKeyRemote(key, "", opts);
         if (r2?.valid) return r2;
@@ -8168,19 +8324,41 @@ export default function App() {
         if (storedKey) {
           const r = await attempt(storedKey, storedInstance);
           if (cancelled) return;
+          // Sibling shape (a) (round 3, 2026-09-07): re-read the slot AFTER
+          // the await. A licence email's ?key= link opened in another tab
+          // during that round trip activates and stores a NEWER key; this
+          // leg then judged the OLD key and, on a definitive rejection, wiped
+          // the slot it no longer owned - deleting the new key and its
+          // instance pointer, so the next re-paste was a fresh activation and
+          // burned a slot. The verdict below is about `storedKey` only: it may
+          // unlock this session, but it may neither overwrite nor wipe a slot
+          // that now holds a different key.
+          const slotReplaced = loadState(LS_KEY, "") !== storedKey;
           if (r?.valid) {
+            if (slotReplaced) {
+              setKeyError("");
+              setPrefillKey("");
+              setPaid(true);
+              setValidating(false);
+              return;
+            }
             commitPaid(storedKey, r.instance_id);
             return;
           }
-          // C1 closure 2026-06-10: only a DEFINITIVE HTTP-200 `valid:false`
-          // verdict may de-license this device. Transient failures (rate
-          // limit, LS/Upstash outage, offline launch, timeout) keep the
-          // stored key + instance so the next launch revalidates cleanly -
-          // wiping here forced a re-paste that burned one of the customer's
-          // 3 LS activation slots per transient failure. Paid stays false
-          // for this session (the render gate never fails open); the paywall
-          // overlay explains why if they open it.
-          if (r?.transient) {
+          if (slotReplaced) {
+            // The verdict is about a key this device no longer holds. Nothing
+            // to wipe; the newer licence is validated on the next load.
+            storedKeyError = "A licence was saved in another tab while this one was loading. Reload to use it.";
+          } else if (r?.transient) {
+            // C1 closure 2026-06-10: only a DEFINITIVE HTTP-200 `valid:false`
+            // verdict may de-license this device. Transient failures (rate
+            // limit, LS/Upstash outage, offline launch, timeout) keep the
+            // stored key + instance so the next launch revalidates cleanly -
+            // wiping here forced a re-paste that burned one of the customer's
+            // 3 LS activation slots per transient failure. Paid stays false
+            // for this session (the render gate never fails open); the paywall
+            // overlay explains why if they open it.
+            //
             // Held, not committed: the grace window below may still unlock
             // this session, and an unlocked customer must not be shown a
             // licence error. Committed at the deny leg (step 4), where it
@@ -8376,6 +8554,38 @@ export default function App() {
     setActivating(true);
     setKeyError("");
     try {
+      // R3-7 (code review round 3, 2026-09-07): the R2-L3 rule the grace
+      // panel already follows, on the paywall form. This always validated
+      // BARE, so a customer who re-pasted the key already stored on this
+      // device (after a transient outage at mount, say) took the server's
+      // fresh-device path: LS_ACTIVATE minted a second instance for one
+      // physical device and the old one stayed counted against the 3-device
+      // pool. When the pasted key IS the stored key and an instance is stored
+      // with it, validate with that instance first, which mutates nothing.
+      // Only a definitive rejection or a stale instance falls through to the
+      // bare activation; a transient failure and a full pool are answered as
+      // themselves, so an outage cannot be turned into a spent slot.
+      const storedKey = loadState(LS_KEY, "");
+      const storedInstance = storedKey === key ? loadState(LS_INSTANCE, "") : "";
+      if (storedInstance) {
+        const rs = await validateKeyRemote(key, storedInstance);
+        if (rs?.valid) {
+          persistState(LS_KEY, key);
+          if (rs.instance_id) persistState(LS_INSTANCE, rs.instance_id);
+          clearLS(LS_PENDING);
+          setPaid(true);
+          setPrefillKey("");
+          return { ok: true };
+        }
+        if (rs?.transient) {
+          return { ok: false, error: rs?.error || "We couldn't reach the licence server. Try again." };
+        }
+        if (rs?.activation_limit_reached) {
+          return { ok: false, error: rs?.error || "This licence key has reached its device activation limit. Deactivate an old device in your LemonSqueezy account, or contact support." };
+        }
+        // Definitively rejected with this instance (revoked, or the instance
+        // was deactivated remotely): fall through to a fresh activation.
+      }
       const r = await validateKeyRemote(key, "");
       if (r?.valid) {
         persistState(LS_KEY, key);

@@ -226,7 +226,12 @@ const APP_NAMES = [
   'DEFAULT_PRODUCE_PER_PERSON_LBS', 'GOAL_MULTIPLIER', 'FREQUENCY_FACTOR',
   'PRESETS', 'BAG_SIZES_CUFT', 'BAG_SIZES_L', 'ZONE_FROST_DATES',
   'fmtDecimal', 'fmtInt', 'ZERO_DECIMAL_CURRENCIES', 'moneyDecimals',
+  // R3-3 (round 3, 2026-09-07): the decimals rule is its own function now and
+  // fmtAreaValue / fmtMassValue read it.
+  'magnitudeDecimals',
   'fmtAreaValue', 'fmtMassValue', 'fmtMassRounded',
+  // R3-6: the client ceiling, pinned equal to the server's below.
+  'GARDEN_SQFT_MIN', 'GARDEN_SQFT_MAX',
   'monthDayToDate', 'addWeeks', 'shiftMonths', 'SHORT_MONTHS',
   'daysInYear', 'dayOfYear', 'getFrostDates', 'parseIsoDate',
   'computePlantingDates', 'splitRange',
@@ -245,6 +250,11 @@ const app = buildModule(APP_SRC, APP_NAMES, 'CROPS', CROPS, 'App.jsx');
 const GEN_NAMES = [
   'MONTH_NAMES', 'SYSTEM_PROMPT', 'PLAN_SCHEMA', 'buildUserPrompt',
   'PLAN_STR_MAX', 'PLAN_SHORT_MAX', 's', 'sArr', 'n', 'sanitisePlan',
+  // Round 3 (2026-09-07): the input sanitiser and its bound (R3-6), and the
+  // savings-note scrubber sanitisePlan now calls (R3-9).
+  'MAX_CROPS', 'MAX_GOALS', 'MAX_STR', 'UNSAFE_CHAR_RE', 'stripUnsafeChars',
+  'clampStr', 'clampNum', 'GARDEN_SQFT_MAX', 'clampStrArray', 'sanitiseInput',
+  'ENGINE_FIGURE_RE', 'scrubEngineFigures',
 ];
 const gen = buildModule(GEN_SRC, GEN_NAMES, '__unused', null, 'api/generate.js');
 
@@ -910,6 +920,138 @@ eq('L9-6', 'an unknown symbol takes two', app.moneyDecimals('kr'), 2);
 eq('L9-7', 'a yen price formats without cents', app.fmtDecimal(910.21, app.moneyDecimals('¥')), '910');
 eq('L9-8', 'a rand price keeps cents', app.fmtDecimal(910.21, app.moneyDecimals('R')), '910.21');
 eq('L9-9', 'a NaN cost degrades to a dash, never to $NaN', app.fmtDecimal(NaN, 2), '-');
+});
+
+// ══════════════════════════════════════════ 10. round 3 (2026-09-07)
+group('R3-2: a harvest that would start after first frost is a state, not an inverted window');
+safe(() => {
+{
+  const z3 = app.getFrostDates('zone', 3, 'north', null, 2026);
+  const sp = app.computePlantingDates(CROPS.sweet_potato, z3);
+  check('R3-2.1', 'zone 3 sweet potato: the harvest would start after the 15 Sep first frost',
+    !!sp.harvestStart && sp.harvestStart > z3.firstFall, `start=${sp.harvestStart}`);
+  check('R3-2.2', 'so it is flagged noHarvestBeforeFrost', sp.noHarvestBeforeFrost === true, JSON.stringify(sp.noHarvestBeforeFrost));
+  check('R3-2.3', 'and no printable window is offered: harvestEndEffective is null, not a date before the start',
+    sp.harvestEndEffective === null, `harvestEndEffective=${sp.harvestEndEffective}`);
+  check('R3-2.4', 'the frost badge still fires for it', sp.frostRiskAtHarvest === true);
+  const t3 = app.computePlantingDates(CROPS.tomato, z3);
+  check('R3-2.5', 'control: a window that straddles the frost is truncated (M-8), not flagged',
+    t3.noHarvestBeforeFrost === false && !!t3.harvestEndEffective && t3.harvestEndEffective.getTime() === z3.firstFall.getTime());
+  const z7 = app.getFrostDates('zone', 7, 'north', null, 2026);
+  const sp7 = app.computePlantingDates(CROPS.sweet_potato, z7);
+  check('R3-2.6', 'control: zone 7 sweet potato harvests before frost and is not flagged',
+    sp7.noHarvestBeforeFrost === false && sp7.harvestEndEffective !== null);
+  const kale3 = app.computePlantingDates(CROPS.kale, z3);
+  check('R3-2.7', 'a cool-season crop is never flagged, whatever its dates', kale3.noHarvestBeforeFrost === false);
+
+  // The paid plan: kept and marked, never dropped.
+  const res = app.computeResults({ sweet_potato: 'weekly', tomato: 'weekly' }, 4, 'fresh_preserving');
+  const rows = app.engineHarvestRows(res.perCrop, z3, {});
+  const spRow = rows.find((r) => r.crop === CROPS.sweet_potato.name);
+  const tRow = rows.find((r) => r.crop === CROPS.tomato.name);
+  check('R3-2.8', 'engineHarvestRows keeps the sweet potato and marks it',
+    !!spRow && spRow.noHarvestBeforeFrost === true, JSON.stringify(spRow));
+  check('R3-2.9', 'with no months a chart could draw a bar from',
+    !!spRow && spRow.startMonth === null && spRow.endMonth === null && spRow.peakMonth === null, JSON.stringify(spRow));
+  check('R3-2.10', 'control: the tomato row still carries its truncated August-September window',
+    !!tRow && tRow.startMonth === 'August' && tRow.endMonth === 'September' && !tRow.noHarvestBeforeFrost, JSON.stringify(tRow));
+
+  // The report says the same on both of its surfaces.
+  const html = app.buildPlanReportHtml({
+    plan: { summary: 's', monthlySchedule: [{ month: 'March', tasks: ['t'] }], bedLayouts: [], successionPlanting: [], preservationGuide: [], savingsEstimate: null, tips: [] },
+    inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: [] },
+    familySize: 4, zoneStr: 'USDA zone 3', lastSpringFrostStr: 'Jun 1', firstFallFrostStr: 'Sep 15', hemisphere: 'north',
+    gardenSqFt: 200, metric: false, currency: '$', cropNames: [], generatedAt: Date.UTC(2026, 8, 7),
+    engineYields: app.engineYieldRows(res.perCrop), engineHarvest: rows, engineSavings: 0,
+  });
+  const spName = app.escapeHtml(CROPS.sweet_potato.name);
+  check('R3-2.11', 'the report harvest timeline names the crop with the no-harvest note',
+    new RegExp(`<div class="label">${spName}</div><div[^>]*>No harvest before your first fall frost`).test(html));
+  check('R3-2.12', 'and the yield card carries the same note instead of a promised weight',
+    new RegExp(`<strong>${spName}</strong>\\s*<span class="num"[^>]*>\\d+ plants &middot; no harvest before frost`).test(html));
+  check('R3-2.13', 'control: the tomato yield card still promises its weight',
+    /Tomatoes \(General\)<\/strong>\s*<span class="num"[^>]*>\d+ plants &middot; ~[\d.]+ lb/.test(html));
+
+  // The sweep the review ran: no crop in any zone, either hemisphere, prints
+  // an end before its start, and the flag fires for exactly the cells it
+  // counted (sweet potato in zone 3, ginger in zones 3-7, both hemispheres).
+  let inverted = 0;
+  const flagged = [];
+  for (const zone of Object.keys(app.ZONE_FROST_DATES).map(Number)) {
+    for (const hemi of ['north', 'south']) {
+      const fd = app.getFrostDates('zone', zone, hemi, null, 2026);
+      for (const [id, crop] of Object.entries(CROPS)) {
+        const d = app.computePlantingDates(crop, fd);
+        if (d.harvestStart && d.harvestEndEffective && d.harvestEndEffective < d.harvestStart) inverted += 1;
+        if (d.noHarvestBeforeFrost) flagged.push(`${hemi}-z${zone}:${id}`);
+      }
+    }
+  }
+  eq('R3-2.14', 'no (zone, hemisphere, crop) cell prints a harvest end before its start', inverted, 0);
+  eq('R3-2.15', 'the flag fires for the 12 cells the review counted', flagged.length, 12);
+  check('R3-2.16', 'and for no crop other than sweet potato and ginger',
+    flagged.every((c) => /:(sweet_potato|ginger)$/.test(c)), flagged.join(' '));
+}
+});
+
+group('R3-5: a metric-entered figure prints rounded on the imperial surfaces');
+safe(() => {
+{
+  const field = sliceDecl(APP_SRC, 'GardenSpaceField');
+  const minC = sliceDecl(APP_SRC, 'GARDEN_SQFT_MIN');
+  const maxC = sliceDecl(APP_SRC, 'GARDEN_SQFT_MAX');
+  const commitText = field && sliceLocal(field, 'commit');
+  const toDisplayText = field && sliceLocal(field, 'toDisplay');
+  const minLocal = field && sliceLocal(field, 'min');
+  const maxLocal = field && sliceLocal(field, 'max');
+  if (!field || !commitText || !minC || !maxC || !toDisplayText || !minLocal || !maxLocal) {
+    check('R3-5.0', 'GardenSpaceField and its display transform exist', false, 'not found');
+    return;
+  }
+  const make = new Function('SQFT_TO_SQM', `${minC}\n${maxC}
+    return function make(metric, canonical, onChange) {
+      ${toDisplayText}
+      ${minLocal}
+      ${maxLocal}
+      ${commitText}
+      return { commit, min, max, display: toDisplay(canonical) };
+    };`)(app.SQFT_TO_SQM);
+  const fromM2 = 37.2 / app.SQFT_TO_SQM; // 400.41746750160166 sq ft
+  const writes = [];
+  const f = make(false, fromM2, (v) => writes.push(v));
+  eq('R3-5.1', 'the imperial box shows a metric-entered 37.2 m2 as 400.4 sq ft, not 400.41746750160166', f.display, 400.4);
+  f.commit(f.display);
+  eq('R3-5.2', 'and an untouched blur on it writes nothing (the guard reads the same expression)', writes.length, 0);
+  eq('R3-5.3', 'control: the bounds still agree with the display at the imperial floor', make(false, 10, () => {}).min, make(false, 10, () => {}).display);
+  const html = app.buildPlanReportHtml({
+    plan: { summary: 's', monthlySchedule: [{ month: 'March', tasks: ['t'] }], bedLayouts: [], successionPlanting: [], preservationGuide: [], savingsEstimate: null, tips: [] },
+    inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: [] },
+    familySize: 1, zoneStr: 'USDA zone 7', lastSpringFrostStr: '', firstFallFrostStr: '', hemisphere: 'north',
+    gardenSqFt: fromM2, metric: false, currency: '$', cropNames: [], generatedAt: Date.UTC(2026, 8, 7),
+    engineYields: [], engineHarvest: [], engineSavings: 0,
+  });
+  check('R3-5.4', 'the report meta line prints the space at one decimal', /Garden space:<\/span> <strong>400\.4 sq ft<\/strong>/.test(html), html.match(/Garden space:[^<]*<strong>[^<]*/)?.[0]);
+  check('R3-5.5', 'and never the raw float', !html.includes('400.41746750160166'));
+}
+});
+
+group('R3-6: one garden-space ceiling on both sides of the wire');
+safe(() => {
+{
+  eq('R3-6.1', 'the server clamps to the same GARDEN_SQFT_MAX the client accepts', gen.GARDEN_SQFT_MAX, app.GARDEN_SQFT_MAX);
+  const at = gen.sanitiseInput({ gardenSqFt: app.GARDEN_SQFT_MAX, crops: ['Tomato'] });
+  eq('R3-6.2', 'a garden at the client ceiling reaches the prompt unclamped', at.gardenSqFt, app.GARDEN_SQFT_MAX);
+  eq('R3-6.3', '65,000 sq ft (a 1.5-acre customer) is no longer cut to 50,000 in silence',
+    gen.sanitiseInput({ gardenSqFt: 65000, crops: ['x'] }).gardenSqFt, 65000);
+  eq('R3-6.4', 'above the ceiling still clamps', gen.sanitiseInput({ gardenSqFt: 10 * app.GARDEN_SQFT_MAX, crops: ['x'] }).gardenSqFt, app.GARDEN_SQFT_MAX);
+  eq('R3-6.5', 'the server floor is at or below the client floor, so nothing the client sends is raised',
+    gen.sanitiseInput({ gardenSqFt: app.GARDEN_SQFT_MIN, crops: ['x'] }).gardenSqFt, app.GARDEN_SQFT_MIN);
+  // R3-5's prompt boundary: the figure the model reads is the one the box shows.
+  const p = gen.buildUserPrompt(gen.sanitiseInput({ gardenSqFt: 37.2 / app.SQFT_TO_SQM, producePerPersonLbs: 25 / app.LB_TO_KG, crops: ['Tomato'] }));
+  check('R3-5.6', 'the prompt prints the garden space at one decimal', /Garden space: 400\.4 sq ft/.test(p), p.match(/Garden space: [^\n]*/)?.[0]);
+  check('R3-5.7', 'and the produce target too', /Annual produce target: 55\.1 lb\/person/.test(p), p.match(/Annual produce target: [^\n]*/)?.[0]);
+  check('R3-5.8', 'control: a whole number prints whole', /Garden space: 320 sq ft/.test(gen.buildUserPrompt(gen.sanitiseInput({ gardenSqFt: 320, crops: ['x'] }))));
+}
 });
 
 // ------------------------------------------------------------------- report

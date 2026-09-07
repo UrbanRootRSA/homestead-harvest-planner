@@ -85,6 +85,10 @@ const WANTED = [
   'PaywallOverlay', 'normalisePlan', 'CostSavingsCalculator',
   'PreservationPlanner', 'PillSelect', 'CropBreakdownCard', 'AppHeader',
   'buildPlanReportHtml', 'GrowingPlanTab',
+  // Round 3 (2026-09-07): the category legend (R3-3) and the four surfaces
+  // the no-harvest state has to reach (R3-2).
+  'CategoryBar', 'fmtAreaValue', 'CropDatesCard', 'PlantingTimelineChart',
+  'PlanHarvestChart', 'PHASE_COLORS',
 ];
 const appText = readFileSync(APP_PATH, 'utf8');
 // esbuild refuses to export a name the file does not declare, and in a CONTROL
@@ -893,6 +897,86 @@ safe(() => {
     metric: false, producePerPerson: 300, setProducePerPerson() {},
   }));
   has('N2-5', 'a desktop crop row is still 32 px', html, 'min-height:32px');
+}
+});
+
+// ═══════════════════════════════════════════════ round 3 (2026-09-07)
+group('the category legend and the hero stat use the M-2 precision rule - R3-3');
+safe(() => {
+{
+  const res = M.computeResults(M.PRESETS.family_basics.selection, 4, 'fresh_preserving');
+  const legend = (metric) => render('CBM', `CategoryBar (${metric ? 'metric' : 'imperial'}, Family Basics)`, React.createElement(M.CategoryBar, {
+    categorySpaceMap: res.categorySpaceMap, totalSpaceSqft: res.totalSpaceRaw, metric,
+  }));
+  const metricHtml = legend(true);
+  // Digit-bounded: "10.0 m²" is a real figure that contains the substring.
+  hasNot('R3-3.1', 'the metric legend never prints a category as 0.0 m2', metricHtml, /(^|[^\d.])0\.0 m²/);
+  const herbsM = M.fmtAreaValue(res.categorySpaceMap[CROPS.basil.category], true);
+  has('R3-3.2', `herbs print at their magnitude (${herbsM} m2), the crop card's rule`, metricHtml, `${herbsM} m²`);
+  has('R3-3.3', 'and the tooltip on the bar segment says the same', metricHtml, `Herbs: ${herbsM} m²`);
+  const herbsI = M.fmtAreaValue(res.categorySpaceMap[CROPS.basil.category], false);
+  has('R3-3.4', `control: imperial prints herbs as ${herbsI} sq ft`, legend(false), `${herbsI} sq ft`);
+
+  // The hero stat, on the review's zero case: one herb, rarely, one person.
+  const tiny = M.computeResults({ basil: 'rarely' }, 1, 'fresh_only');
+  const v = tiny.totalSpaceSqft * 0.09290304;
+  const expected = v.toFixed(v < 0.1 ? 3 : v < 1 ? 2 : 1);
+  const hero = render('SSH', 'SelfSufficiencyCalculator (metric, one herb)', React.createElement(M.SelfSufficiencyCalculator, {
+    familySize: 1, setFamilySize() {}, goal: 'fresh_only', setGoal() {},
+    selection: { basil: 'rarely' }, setSelection() {},
+    metric: true, producePerPerson: 300, setProducePerPerson() {},
+  }));
+  hasNot('R3-3.5', 'the "Garden space (incl. paths)" stat never reads 0.0 m2', hero, 'Garden space (incl. paths): 0.0 m²');
+  has('R3-3.6', `it reads the buffered footprint at its magnitude (${expected} m2)`, hero, `Garden space (incl. paths): ${expected} m²`);
+}
+});
+
+group('the no-harvest state reaches every surface - R3-2');
+safe(() => {
+{
+  const z3 = M.getFrostDates('zone', 3, 'north', null, 2026);
+  const dates = M.computePlantingDates(CROPS.sweet_potato, z3);
+  const name = CROPS.sweet_potato.name;
+  const count = (html, needle) => (html.split(needle).length - 1);
+  const card = render('CDC', 'CropDatesCard (zone 3 sweet potato)', React.createElement(M.CropDatesCard, {
+    cropId: 'sweet_potato', crop: CROPS.sweet_potato, dates,
+    sowMethodOverride: null, onSowMethodChange() {}, referenceYear: 2026,
+  }));
+  has('R3-2.r1', 'the card badge names the state', card, 'No harvest before frost');
+  hasNot('R3-2.r2', 'and no inverted range is printed', card, 'Sep 18 – Sep 15');
+  has('R3-2.r3', 'the Harvest row says none, and when it would have started', card, 'None before first frost (would start Sep 18)');
+
+  const timeline = (d) => render('PTC', 'PlantingTimelineChart (sweet potato)', React.createElement(M.PlantingTimelineChart, {
+    rows: [{ cropId: 'sweet_potato', crop: CROPS.sweet_potato, dates: d }], referenceYear: 2026,
+  }));
+  const rowZ3 = timeline(dates);
+  has('R3-2.r4', 'the timeline row says why there is no harvest bar', rowZ3, 'No harvest before frost');
+  // The legend swatch is one harvest-coloured box; a drawn bar would be a second.
+  record('R3-2.r5', 'and draws no harvest bar (only the legend swatch carries the harvest colour)',
+    count(rowZ3, `background:${M.PHASE_COLORS.harvest}`) === 1, `count=${count(rowZ3, `background:${M.PHASE_COLORS.harvest}`)}`);
+  record('R3-2.r6', 'control: the growing bar is still drawn',
+    count(rowZ3, `background:${M.PHASE_COLORS.grow}`) >= 2, `count=${count(rowZ3, `background:${M.PHASE_COLORS.grow}`)}`);
+  const rowZ7 = timeline(M.computePlantingDates(CROPS.sweet_potato, M.getFrostDates('zone', 7, 'north', null, 2026)));
+  record('R3-2.r7', 'control: zone 7 draws the harvest bar and carries no note',
+    count(rowZ7, `background:${M.PHASE_COLORS.harvest}`) === 2 && !rowZ7.includes('No harvest before frost'));
+
+  const res = M.computeResults({ sweet_potato: 'weekly', tomato: 'weekly' }, 4, 'fresh_preserving');
+  const harvest = M.engineHarvestRows(res.perCrop, z3, {});
+  const plan = render('PLF', 'PlanRenderer (zone 3, sweet potato)', React.createElement(M.PlanRenderer, {
+    plan: { summary: 's', monthlySchedule: [{ month: 'March', tasks: ['t'] }], bedLayouts: [], successionPlanting: [], preservationGuide: [], savingsEstimate: null, tips: [] },
+    metric: false, currency: '$', isMobile: false, generatedAt: null,
+    engineYields: M.engineYieldRows(res.perCrop), engineHarvest: harvest,
+    engineSavings: 0, onDownload() {}, onClear() {},
+  }));
+  has('R3-2.r8', 'the paid harvest timeline lists the crop with the reason', plan, 'No harvest before your first fall frost');
+  record('R3-2.r9', 'the yield section says the same instead of promising a weight',
+    new RegExp(`${name}</div><div[^>]*>\\d+ plants · no harvest before frost`).test(plan));
+  record('R3-2.r10', 'control: the tomato yield row still promises its weight',
+    /Tomatoes \(General\)<\/div><div[^>]*>\d+ plants · ~[\d.]+ lb/.test(plan));
+  const chart = render('PHC', 'PlanHarvestChart (flagged row only)', React.createElement(M.PlanHarvestChart, {
+    rows: harvest.filter((r) => r.noHarvestBeforeFrost),
+  }));
+  has('R3-2.r11', 'a chart of only flagged rows still renders them, instead of returning null', chart, name);
 }
 });
 

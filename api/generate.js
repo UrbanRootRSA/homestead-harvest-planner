@@ -469,6 +469,14 @@ function clampNum(v, min, max, fallback) {
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
 }
+// R3-6 (code review round 3, 2026-09-07): ONE ceiling for the garden space,
+// the same number src/App.jsx GARDEN_SQFT_MAX accepts, persists and prints in
+// the report's meta line. This used to be a literal 50,000 while the client
+// took 100,000, so a 1.5-acre customer entering 65,000 sq ft saw 65,000 on the
+// tab and in the report and got a plan the model wrote for 50,000. The two
+// files cannot import each other (separate bundles), so tests/calc-golden
+// pins the pair equal.
+const GARDEN_SQFT_MAX = 100000;
 function clampStrArray(arr, maxItems, maxStrLen = MAX_STR) {
   if (!Array.isArray(arr)) return [];
   const out = [];
@@ -488,7 +496,7 @@ function sanitiseInput(body) {
   const firstFallFrost = clampStr(body.firstFallFrost, 32);
   const hemisphere = body.hemisphere === "south" ? "south" : "north";
   // gardenSqFt is ALWAYS in sq ft - the client converts before posting.
-  const gardenSqFt = clampNum(body.gardenSqFt, 1, 50000, 200);
+  const gardenSqFt = clampNum(body.gardenSqFt, 1, GARDEN_SQFT_MAX, 200);
   const sunExposure = clampStr(body.sunExposure, 32);
   const soilType = clampStr(body.soilType, 32);
   const waterMethod = clampStr(body.waterMethod, 32);
@@ -633,14 +641,14 @@ function buildUserPrompt(input) {
 - Hardiness reference: ${input.zone}
 - Last spring frost: ${input.lastSpringFrost || "(not provided)"}
 - First fall frost: ${input.firstFallFrost || "(not provided)"}
-- Garden space: ${input.gardenSqFt} sq ft
+- Garden space: ${Number(input.gardenSqFt.toFixed(1))} sq ft
 - Sun exposure: ${input.sunExposure || "(not specified)"}
 - Soil type: ${input.soilType || "(not specified)"}
 - Watering: ${input.waterMethod || "(not specified)"}
 - Experience: ${input.experience || "(not specified)"}
 - Goals: ${goalsLine}
 - Selected crops: ${cropsLine}
-- Annual produce target: ${input.producePerPersonLbs} lb/person
+- Annual produce target: ${Number(input.producePerPersonLbs.toFixed(1))} lb/person
 - displayUnits: ${input.displayUnits} (write any prose measurement in this system)
 
 Emphasise companion planting. If the garden space above is smaller than the crop list needs, say which crops to grow first and which to defer. Anchor every monthly task to the frost dates above. The app prints the plant counts, yields, harvest months and savings total itself - leave those out of your text. Submit via the submit_growing_plan tool.`;
@@ -672,6 +680,26 @@ function n(v, min = 0, max = 1e9) {
   const x = Number(v);
   if (!Number.isFinite(x)) return 0;
   return Math.max(min, Math.min(max, x));
+}
+
+// R3-9 (code review round 3, 2026-09-07): the engine owns every figure on the
+// savings card - the total, the yields, the plant counts - and the prompt asks
+// the model not to state them. The prompt is the only guard, and the note sits
+// directly under the engine's total, so a model that writes "you should save
+// roughly $900 a year" puts a second number in the same card as the $815 the
+// engine printed: the "two numbers for one thing" shape the 2026-09-06 wave was
+// raised to remove. Drop the SENTENCE that carries a currency amount, a weight
+// or a plant count, keep the rest, and log it so the prompt can be tightened.
+// A top-saver entry is a crop name; one that carries a figure is dropped whole.
+const ENGINE_FIGURE_RE = /(?:[$€£¥]|\bR)\s?\d|\b\d[\d,]*(?:\.\d+)?\s?(?:lbs?|pounds?|kg|kilograms?|plants?|dollars|euros|rand)\b/i;
+function scrubEngineFigures(text, field) {
+  if (!text) return "";
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter((sentence) => !ENGINE_FIGURE_RE.test(sentence));
+  if (kept.length !== sentences.length) {
+    console.warn(`[generate] ${field}: dropped ${sentences.length - kept.length} sentence(s) carrying an engine figure`);
+  }
+  return kept.join(" ").trim();
 }
 
 function sanitisePlan(raw) {
@@ -711,8 +739,9 @@ function sanitisePlan(raw) {
         })).filter((p) => p.crop)
       : [],
     savingsEstimate: raw.savingsEstimate && typeof raw.savingsEstimate === "object" ? {
-      topSavers: sArr(raw.savingsEstimate.topSavers, 10, PLAN_SHORT_MAX),
-      note: s(raw.savingsEstimate.note, 600),
+      topSavers: sArr(raw.savingsEstimate.topSavers, 10, PLAN_SHORT_MAX)
+        .filter((crop) => !ENGINE_FIGURE_RE.test(crop)),
+      note: scrubEngineFigures(s(raw.savingsEstimate.note, 600), "savingsEstimate.note"),
     } : null,
     tips: sArr(raw.tips, 12, 400),
   };

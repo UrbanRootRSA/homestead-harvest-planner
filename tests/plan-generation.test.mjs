@@ -484,8 +484,11 @@ group('L-6b', 'the payload literal carries the customer\'s garden space, not the
       currency: '$', producePerPerson: 300,
       derivedGardenSqFt: 241,
     };
-    const build = (inputs) => new Function(...Object.keys(SCOPE), 'inputs',
-      `const gardenSqFt = ${derivedM[1]};\n return (${payloadM[1]});`)(...Object.values(SCOPE), inputs);
+    const build = (inputs, over = {}) => {
+      const scope = { ...SCOPE, ...over };
+      return new Function(...Object.keys(scope), 'inputs',
+        `const gardenSqFt = ${derivedM[1]};\n return (${payloadM[1]});`)(...Object.values(scope), inputs);
+    };
 
     const stated = build({ gardenSqFt: 120, sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'] });
     check('L6b-3', 'a customer who states 120 sq ft sends 120, not the derived 241',
@@ -496,6 +499,41 @@ group('L-6b', 'the payload literal carries the customer\'s garden space, not the
     check('L6b-5', 'the space still travels as sq ft, never converted for a metric customer',
       build({ gardenSqFt: 120 }).gardenSqFt === 120 && stated.producePerPersonLbs === 300,
       JSON.stringify({ g: stated.gardenSqFt, p: stated.producePerPersonLbs }));
+    // R3-5 (round 3, 2026-09-07): a figure typed in metric is stored at full
+    // float precision; the wire carries it at the one decimal the box shows.
+    const fromMetric = build({ gardenSqFt: 37.2 / 0.09290304 });
+    check('R3-5.w1', 'a metric-entered space travels as 400.4, not 400.41746750160166',
+      fromMetric.gardenSqFt === 400.4, String(fromMetric.gardenSqFt));
+    const fromKg = build({ gardenSqFt: 120 }, { producePerPerson: 25 / 0.45359237 });
+    check('R3-5.w2', 'and a metric-entered produce target travels as 55.1 lb',
+      fromKg.producePerPersonLbs === 55.1, String(fromKg.producePerPersonLbs));
+  }
+}
+
+// ══ R3-4 (round 3, 2026-09-07): the regenerate dialog names the server's quota
+//
+// The one dialog a customer reads before spending a slot said "20 hourly
+// generations"; api/generate.js enforces 20 per rolling 24 hours and the Terms
+// say the same. The number and the period are read off the server file here,
+// so the copy cannot drift from the constant again without this going red.
+
+group('R3-4', 'the regenerate confirm names the quota the server enforces');
+
+{
+  const tab = sliceDecl(SRC, 'GrowingPlanTab');
+  // The tab has two confirms; the regenerate one is the one that spends a slot.
+  const confirmM = tab && /window\.confirm\(\s*"([^"]*Regenerate anyway[^"]*)"/.exec(tab);
+  check('R3-4.1', 'the regenerate confirm string was found in GrowingPlanTab', !!confirmM, 'extractor out of step');
+  if (confirmM) {
+    const genSrc = readFileSync(join(HERE, '..', 'api', 'generate.js'), 'utf8');
+    const max = Number(/^const RL_LICENCE_MAX = (\d+);/m.exec(genSrc)?.[1]);
+    const win = Number(/^const RL_LICENCE_WINDOW_SEC = (\d+);/m.exec(genSrc)?.[1]);
+    check('R3-4.2', 'the server constants were read', Number.isFinite(max) && Number.isFinite(win), `${max}/${win}`);
+    const period = win === 86400 ? /per day|a day|24 hours/ : win === 3600 ? /per hour|hourly/ : null;
+    check('R3-4.3', `the copy names ${max} generations`, confirmM[1].includes(`${max} generations`), confirmM[1]);
+    check('R3-4.4', `and the period the server enforces (${win} s)`, !!period && period.test(confirmM[1]), confirmM[1]);
+    check('R3-4.5', 'and never calls a daily window hourly',
+      !(win === 86400 && /hourly|per hour/i.test(confirmM[1])), confirmM[1]);
   }
 }
 

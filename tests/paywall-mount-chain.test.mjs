@@ -61,6 +61,12 @@ const REQUIRED = [
   'clearLS',
   'validateKeyRemote',
 ];
+// Declarations the fixed source has and the pre-fix control does not. Lifted
+// when present; a case that needs one fails on its own row in a control run
+// instead of the whole file bailing before the behavioural cases print.
+const OPTIONAL = [
+  'VALIDATE_TIMEOUT_MS', // round 3 (2026-09-07): the client abort budget, derived from the server's
+];
 
 // Slice one top-level declaration out of the source by name. Tracks string,
 // template, line-comment and block-comment state so a brace or semicolon inside
@@ -144,12 +150,24 @@ for (const marker of ['validateKeyRemote(', 'onActivateKey', 'setGraceError']) {
   if (!GRACE_SAVE.includes(marker)) bail(`the sliced saveGraceKey is missing "${marker}"`);
 }
 
+// R3-7 (round 3, 2026-09-07): the paywall form's activation, a useCallback
+// inside App. Sliced like saveGraceKey and wrapped with useCallback injected.
+const ACTIVATE = sliceMethod(SRC, 'activateKey');
+if (!ACTIVATE) bail('could not slice activateKey out of the source');
+for (const marker of ['validateKeyRemote(', 'persistState(LS_KEY', 'setActivating(']) {
+  if (!ACTIVATE.includes(marker)) bail(`the sliced activateKey is missing "${marker}"`);
+}
+
 function buildModule() {
   const picked = [];
   for (const name of REQUIRED) {
     const text = sliceDecl(SRC, name);
     if (!text) throw new Error(`required declaration not found in source: ${name}`);
     picked.push({ name, text, at: SRC.indexOf(text) });
+  }
+  for (const name of OPTIONAL) {
+    const text = sliceDecl(SRC, name);
+    if (text) picked.push({ name, text, at: SRC.indexOf(text) });
   }
   picked.sort((a, b) => a.at - b.at); // a const that feeds another keeps its order
 
@@ -169,7 +187,12 @@ ${GRACE_SAVE}
   return saveGraceKey;
 }
 
-return { ${picked.map((p) => p.name).join(', ')}, __mountPaywall, __graceSave };
+function __activateKey(useCallback, setActivating, setKeyError, setPaid, setPrefillKey) {
+${ACTIVATE}
+  return activateKey;
+}
+
+return { ${picked.map((p) => p.name).join(', ')}, __mountPaywall, __graceSave, __activateKey };
 `;
   return new Function('localStorage', 'console', 'fetch', body);
 }
@@ -274,10 +297,16 @@ async function drain(isSettled) {
 }
 
 let mountCount = 0;
-async function mount({ url = 'https://thehomesteadplan.com/', store = {}, plan = [] }) {
+// onFetch(storage, request, index) runs on the way INTO each validator call,
+// i.e. while the chain is awaiting it: the hook another tab uses to change
+// storage under the mount (sibling shape (a), round 3, 2026-09-07).
+async function mount({ url = 'https://thehomesteadplan.com/', store = {}, plan = [], onFetch = null }) {
   mountCount += 1;
   const storage = makeStorage(store);
-  const { fetchStub, calls } = makeServer(plan);
+  const { fetchStub: rawFetch, calls } = makeServer(plan);
+  const fetchStub = onFetch
+    ? async (u, init) => { onFetch(storage, JSON.parse(init.body), calls.length); return rawFetch(u, init); }
+    : rawFetch;
   const api = make(storage, quietConsole, fetchStub);
   const win = makeWindow(url);
 
@@ -1203,6 +1232,172 @@ group('M-1o', 'the ?key= link must survive a StrictMode double mount');
     s2.calls.length === 1 && s2.calls[0].key === KEY_MINE, JSON.stringify(s2.calls));
   check('M-1o.3', 'and the address bar is clean once the chain settles',
     !String(win.location.href).includes(KEY_MINE), win.location.href);
+}
+
+// ═══════════ R3-7: the paywall form must not activate bare while its key is stored
+//
+// Code review round 3, 2026-09-07. activateKey always called
+// validateKeyRemote(key, "") - the fresh-device path, on which the server's
+// LS_ACTIVATE mints a NEW instance. A customer whose mount validation hit a
+// transient outage read "reload to try again", opened "Already purchased?" and
+// pasted the same key instead: a second browser-xxxx instance for one physical
+// device, the old one still counted against the 3-device pool. The grace
+// panel's saveGraceKey has re-read storage first since R2-L3; this is the same
+// rule on the sibling site.
+
+group('R3-7', 'the paywall form validates a stored key with its instance before it activates bare');
+
+async function runActivate({ store, plan, pasted }) {
+  const storage = makeStorage(store);
+  const { fetchStub, calls } = makeServer(plan);
+  const api = make(storage, quietConsole, fetchStub);
+  const out = { activating: [], keyError: [], paid: null, prefill: null };
+  const activate = api.__activateKey(
+    (fn) => fn,
+    (v) => out.activating.push(v),
+    (v) => out.keyError.push(v),
+    (v) => { out.paid = v; },
+    (v) => { out.prefill = v; },
+  );
+  const result = await activate(pasted);
+  const read = (k) => {
+    const raw = storage.getItem(k);
+    if (raw == null) return null;
+    try { return JSON.parse(raw); } catch { return raw; }
+  };
+  return { ...out, result, calls, storedKey: read('hhp_key'), storedInstance: read('hhp_instance'), pending: storage.getItem('hhp_pending') };
+}
+
+const STALE_INSTANCE = { status: 200, body: { valid: false, error: 'Instance not found.', retry_activation: true } };
+
+{
+  const r = await runActivate({ store: seed({ key: KEY_MINE, instance: 'inst-mine', pending: Date.now() }), plan: [OK('inst-mine')], pasted: KEY_MINE });
+  check('R3-7.1', 'a re-paste of the stored key sends the stored instance (a non-mutating /validate), not a bare activation',
+    r.calls.length === 1 && r.calls[0].instance_id === 'inst-mine', JSON.stringify(r.calls));
+  check('R3-7.2', 'and unlocks', r.result.ok === true && r.paid === true, JSON.stringify(r.result));
+  check('R3-7.3', 'and the instance pointer is unchanged and the grace stamp is closed',
+    r.storedInstance === 'inst-mine' && r.pending === null, `hhp_instance=${JSON.stringify(r.storedInstance)} pending=${r.pending}`);
+  check('R3-7.4', 'and the busy flag is released', r.activating.length >= 2 && r.activating[r.activating.length - 1] === false, JSON.stringify(r.activating));
+}
+{
+  const r = await runActivate({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [OUTAGE], pasted: KEY_MINE });
+  check('R3-7.5', 'an outage answers as an outage: no bare activation is fired behind it',
+    r.calls.length === 1 && r.result.ok === false && /try again/i.test(String(r.result.error)), `calls=${r.calls.length} ${JSON.stringify(r.result)}`);
+  check('R3-7.6', 'and the stored licence is untouched', r.storedKey === KEY_MINE && r.storedInstance === 'inst-mine');
+}
+{
+  const r = await runActivate({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [POOL_FULL], pasted: KEY_MINE });
+  check('R3-7.7', 'a full pool is reported, not re-activated', r.calls.length === 1 && /activation limit/i.test(String(r.result.error || '')), `calls=${r.calls.length} ${JSON.stringify(r.result)}`);
+}
+{
+  const r = await runActivate({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [STALE_INSTANCE, OK('inst-new')], pasted: KEY_MINE });
+  check('R3-7.8', 'a stale instance falls through to exactly one fresh activation',
+    r.calls.length === 2 && r.calls[1].instance_id === undefined && r.result.ok === true, JSON.stringify(r.calls));
+  check('R3-7.9', 'and the new instance is stored', r.storedInstance === 'inst-new', JSON.stringify(r.storedInstance));
+}
+{
+  const r = await runActivate({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [REVOKED, REVOKED], pasted: KEY_MINE });
+  check('R3-7.10', 'control: a genuinely dead key is still refused after the fall-through', r.result.ok === false && r.calls.length === 2, JSON.stringify(r.result));
+}
+{
+  const r = await runActivate({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [OK('inst-theirs')], pasted: KEY_THEIRS });
+  check('R3-7.11', 'control: a different key still activates bare (the paste box is the only way to change licences)',
+    r.calls.length === 1 && r.calls[0].instance_id === undefined && r.calls[0].key === KEY_THEIRS, JSON.stringify(r.calls));
+}
+{
+  const r = await runActivate({ store: {}, plan: [OK('inst-first')], pasted: KEY_MINE });
+  check('R3-7.12', 'control: a first activation on a clean device is bare and stores what it is given',
+    r.calls.length === 1 && r.calls[0].instance_id === undefined && r.storedInstance === 'inst-first', JSON.stringify(r.calls));
+}
+
+// ═══════ sibling shape (a): the stored-key leg re-reads the slot after its await
+//
+// Round 3, 2026-09-07. Step 2 read hhp_key, awaited the validator, and on a
+// definitive rejection wiped hhp_key and hhp_instance without looking again.
+// A licence email's ?key= link opened in ANOTHER tab during that round trip
+// activates and stores a newer key; the old key's verdict then deleted it, and
+// the customer's next re-paste was a fresh activation that burned a slot.
+
+group('shape (a)', 'a verdict on the old key may not wipe or overwrite a key another tab stored during the await');
+
+const swapToNew = (storage, _req, i) => {
+  if (i === 0) {
+    storage.setItem('hhp_key', JSON.stringify(KEY_THEIRS));
+    storage.setItem('hhp_instance', JSON.stringify('inst-new'));
+  }
+};
+
+{
+  const r = await mount({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [REVOKED], onFetch: swapToNew });
+  check('a.1', 'a definitive rejection of the OLD key does not wipe the NEW key stored during the await',
+    r.storedKey === KEY_THEIRS && r.storedInstance === 'inst-new',
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('a.2', 'this tab stays locked; the newer licence is validated on the next load', r.everPaid === false && r.validating === false);
+  check('a.3', 'and says so', /another tab/i.test(String(r.keyError || '')) && /reload/i.test(String(r.keyError || '')), `keyError=${JSON.stringify(r.keyError)}`);
+}
+{
+  const r = await mount({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [OK('inst-mine')], onFetch: swapToNew });
+  check('a.4', 'a VALID verdict on the old key still unlocks this session', r.everPaid === true && r.validating === false);
+  check('a.5', 'but does not write the old key over the newer one',
+    r.storedKey === KEY_THEIRS && r.storedInstance === 'inst-new',
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+}
+{
+  const r = await mount({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [STALE_INSTANCE, OK('inst-old-2')], onFetch: swapToNew });
+  check('a.6', 'a stale-instance verdict on the old key fires no bare retry once the slot has moved', r.calls.length === 1, JSON.stringify(r.calls));
+  check('a.7', 'and leaves the new key and its instance alone',
+    r.storedKey === KEY_THEIRS && r.storedInstance === 'inst-new',
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+}
+{
+  const r = await mount({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [REVOKED] });
+  check('a.c1', 'control: with no swap, a revoked stored key is still wiped', r.storedKey === null && r.storedInstance === null);
+  const s = await mount({ store: seed({ key: KEY_MINE, instance: 'inst-mine' }), plan: [STALE_INSTANCE, OK('inst-fresh')] });
+  check('a.c2', 'control: with no swap, a stale instance still retries bare and stores the fresh one',
+    s.calls.length === 2 && s.storedInstance === 'inst-fresh' && s.everPaid === true, JSON.stringify(s.calls));
+}
+
+// ════════════ the client abort budget must outlast the validator's worst path
+//
+// Round 3, 2026-09-07. validateKeyRemote aborted at 15 s; api/validate-key.js
+// runs two SEQUENTIAL LemonSqueezy legs at LS_TIMEOUT_MS on a fresh-device
+// activation (pre-check validate, then activate) plus its Redis round trips and
+// a cold start. When the browser gave up inside the activate leg, LemonSqueezy
+// minted the instance, the answer reached nobody, and the customer's retry
+// minted another: an orphaned activation slot.
+
+group('T', 'the client waits longer than the validator\'s worst path');
+
+{
+  const vkSrc = readFileSync(join(HERE, '..', 'api', 'validate-key.js'), 'utf8');
+  const lsMs = Number(/^const LS_TIMEOUT_MS = (\d+);/m.exec(vkSrc)?.[1]);
+  const clientMs = Number(/^const VALIDATE_TIMEOUT_MS = (\d+);/m.exec(SRC)?.[1]);
+  const REDIS_AND_COLD_START_MS = 4000;
+  check('T.1', 'the server LS budget was read', Number.isFinite(lsMs), `LS_TIMEOUT_MS=${lsMs}`);
+  check('T.2', 'the client timeout is a named constant', Number.isFinite(clientMs), `VALIDATE_TIMEOUT_MS=${clientMs}`);
+  check('T.3', 'validateKeyRemote arms its abort with that constant, not a literal',
+    /setTimeout\(\(\) => ac\.abort\(\), VALIDATE_TIMEOUT_MS\)/.test(sliceDecl(SRC, 'validateKeyRemote') || ''));
+  check('T.4', `it outlasts two sequential LemonSqueezy legs at ${lsMs} ms plus ${REDIS_AND_COLD_START_MS} ms of Redis and cold start`,
+    clientMs >= 2 * lsMs + REDIS_AND_COLD_START_MS, `client=${clientMs} server worst path=${2 * lsMs}`);
+
+  // The timer is what fires the abort, the abort is reported transient, and the
+  // delay that was armed is the constant. A fetch that settles ONLY through its
+  // AbortSignal proves the signal is wired, not merely that a timer exists.
+  const realSetTimeout = globalThis.setTimeout;
+  let armed = null;
+  globalThis.setTimeout = (fn, ms, ...rest) => { armed = ms; return realSetTimeout(fn, 0, ...rest); };
+  try {
+    const hang = (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })));
+    });
+    const api = make(makeStorage({}), quietConsole, hang);
+    const r = await api.validateKeyRemote(KEY_MINE, 'inst-mine');
+    check('T.5', 'a validator that never answers is abandoned by the timer and reported transient, never definitive',
+      r.valid === false && r.transient === true && /slow/i.test(String(r.error)), JSON.stringify(r));
+    check('T.6', 'and the timer that fired was armed with the constant', armed === clientMs, `armed=${armed} constant=${clientMs}`);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
 }
 
 // --------------------------------------------------------------------- report

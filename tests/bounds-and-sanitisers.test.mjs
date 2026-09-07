@@ -916,6 +916,91 @@ group('N-5', 'the garden-space Field does not drift at the bound it displays');
   }
 }
 
+// ═════ R3-1: the produce-target Field at its metric floor, five focus/blur cycles
+
+group('R3-1', 'the produce-target Field does not drift at the bound it displays');
+
+{
+  // Code review round 3, 2026-09-07. The N-5 class on the one other Field that
+  // converts its bounds: the value was displayed at one decimal (22.7 kg at
+  // the 50 lb floor) while the JSX handed Field a bound of Math.round(22.68)
+  // = 23, so an untouched focus + Tab clamped 22.7 up to 23 and wrote
+  // 23 / LB_TO_KG = 50.706 lb. The harness lifts the closure's own display
+  // transform, its bounds AND the min/max props the JSX passes, so it measures
+  // the shipped pair on either revision: the pre-fix source rounds the props,
+  // the fix passes the closure's bounds straight through.
+  const produce = sliceDecl(SRC, 'ProduceTargetField');
+  const pMin = sliceDecl(SRC, 'MIN_PRODUCE_PER_PERSON_LBS');
+  const pMax = sliceDecl(SRC, 'MAX_PRODUCE_PER_PERSON_LBS');
+  const pieces = produce && ['toDisplay', 'displayValue', 'min', 'max', 'commit']
+    .map((name) => sliceLocal(produce, name))
+    .filter(Boolean);
+  const props = produce && /<Field label="Annual produce per person"[\s\S]*?min=\{([^}]+)\}\s*max=\{([^}]+)\}/.exec(produce);
+  if (!produce || !pMin || !pMax || !props || !pieces || pieces.length < 4) {
+    check('R3-1.0', 'ProduceTargetField, its bounds and its Field props are all liftable',
+      false, 'the extractor is out of step with the source');
+  } else {
+    const makeProduce = new Function('LB_TO_KG', `${pMin}\n${pMax}
+      return function makeProduce(metric, value, onChange) {
+        ${pieces.join('\n')}
+        return { commit, min: (${props[1]}), max: (${props[2]}), display: displayValue };
+      };`)(api.LB_TO_KG);
+
+    const cyclesP = (metric, start, n) => {
+      let canonical = start;
+      const seen = [];
+      for (let i = 0; i < n; i += 1) {
+        const p = makeProduce(metric, canonical, (v) => { canonical = v; });
+        seen.push(p.display);
+        api.makeFieldCommit({
+          raw: String(p.display), value: p.display, min: p.min, max: p.max,
+          onChange: p.commit,
+        })();
+      }
+      return { canonical, seen };
+    };
+
+    const floorM = cyclesP(true, 50, 5);
+    check('R3-1.1', 'five untouched cycles at the metric floor leave 50 lb alone',
+      Math.abs(floorM.canonical - 50) < 1e-9, `stored=${floorM.canonical} shown=${floorM.seen.join(',')}`);
+    const ceilM = cyclesP(true, 800, 5);
+    check('R3-1.2', 'and five at the metric ceiling leave 800 lb alone',
+      Math.abs(ceilM.canonical - 800) < 1e-9, `stored=${ceilM.canonical}`);
+    const midM = cyclesP(true, 300, 5);
+    check('R3-1.3', 'control: the default 300 lb still holds',
+      Math.abs(midM.canonical - 300) < 1e-9, `stored=${midM.canonical}`);
+    const floorI = cyclesP(false, 50, 5);
+    check('R3-1.4', 'control: the imperial floor was never affected', floorI.canonical === 50, `stored=${floorI.canonical}`);
+
+    // Typing the floor, or below it, in kg lands within one display step of
+    // the 50 lb minimum: 22.7 kg is 50.04 lb; the pre-fix bound of 23 kg put
+    // it at 50.71.
+    const stepLb = 0.1 / api.LB_TO_KG;
+    let typed = null;
+    const p20 = makeProduce(true, 300, (v) => { typed = v; });
+    api.makeFieldCommit({ raw: '20', value: p20.display, min: p20.min, max: p20.max, onChange: p20.commit })();
+    check('R3-1.5', 'typing 20 kg lands on the 50 lb floor, within the display step',
+      typed !== null && typed >= 50 && typed < 50 + stepLb, `stored=${typed}`);
+    let typedMax = null;
+    const p999 = makeProduce(true, 300, (v) => { typedMax = v; });
+    api.makeFieldCommit({ raw: '999', value: p999.display, min: p999.min, max: p999.max, onChange: p999.commit })();
+    check('R3-1.6', 'typing above the ceiling clamps to 800 lb, within the display step',
+      typedMax !== null && typedMax <= 800 && typedMax > 800 - stepLb, `stored=${typedMax}`);
+    check('R3-1.7', 'the <Field> is handed the closure\'s own bounds, not a separately rounded pair',
+      props[1].trim() === 'min' && props[2].trim() === 'max', `min={${props[1]}} max={${props[2]}}`);
+
+    // R3-5: a value stored from a metric entry prints rounded once the header
+    // toggle goes back to imperial, and an untouched blur on it writes nothing.
+    const fromKg = 25 / api.LB_TO_KG; // 55.11556554621939 lb
+    let wrote = null;
+    const pI = makeProduce(false, fromKg, (v) => { wrote = v; });
+    check('R3-5.p1', 'imperial shows a metric-entered value at one decimal (55.1, not 55.11556554621939)',
+      pI.display === 55.1, `display=${pI.display}`);
+    api.makeFieldCommit({ raw: String(pI.display), value: pI.display, min: pI.min, max: pI.max, onChange: pI.commit })();
+    check('R3-5.p2', 'and an untouched blur on it writes nothing', wrote === null, `wrote=${wrote}`);
+  }
+}
+
 // --------------------------------------------------------------------- report
 
 const w = Math.max(...rows.map((r) => `${r.id} ${r.label}`.length));
