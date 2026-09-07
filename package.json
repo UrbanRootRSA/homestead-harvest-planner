@@ -11,7 +11,7 @@
     "rasterize-og": "node scripts/rasterize-og.mjs"
   },
   "dependencies": {
-    "@upstash/redis": "^1.38.3",
+    "@upstash/redis": "^1.38.4",
     "@vercel/analytics": "^1.1.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
