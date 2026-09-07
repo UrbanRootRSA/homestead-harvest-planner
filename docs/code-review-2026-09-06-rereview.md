@@ -28,7 +28,7 @@
 
 This is a good fix wave. Both fixers did the thing that usually does not happen: they built the tests *first* against the pre-fix tree and proved the control fails, and the two new suites (`calc-golden`, `render-drive`) are the reason 23 of my 27 mutants died. `render-drive` in particular bundles the real `src/App.jsx` with esbuild and renders the real components — that is why `npm run build` passing now means something it did not mean a day ago.
 
-I drove the two HIGHs to their customer-visible outcome rather than reading them. **H-1 is closed**: in a real Chrome against the production bundle, a generation started on the Growing Plan tab, survived a click to Self-Sufficiency and back, landed, rendered, and cost exactly **one** request at the wire — and three synchronous clicks on Generate still produce one request, because the `planGeneratingRef` guard beats the `disabled` prop that has not re-rendered yet. **H-2 (option b) is closed and is the strongest change in the wave**: the plan's yields, harvest windows and savings total now come from the engine, and I confirmed the *same* number appears on the Growing Plan tab, on the Cost Savings tab, and in the downloaded HTML report — $761 in all three — in the customer's own currency and units, with `$` and `lb` absent from a metric/Rand render of both the screen and the report.
+I drove the two HIGHs to their customer-visible outcome rather than reading them. **H-1 is closed**: in a real Chrome against the production bundle, a generation started on the Growing Plan tab, survived a click to Self-Sufficiency and back, landed, rendered, and cost exactly **one** request at the wire — and three synchronous clicks on Generate still produce one request, because the `planGeneratingRef` guard beats the `disabled` prop that has not re-rendered yet. **H-2 (option b) is closed and is the strongest change in the wave**: the plan's yields, harvest windows and savings total now come from the engine, and I confirmed the *same* number appears on the Growing Plan tab, on the Cost Savings tab, and in the downloaded HTML report — $761 in all three *(figure corrected 2026-09-07, R3-8: the shipped preset at the default goal prints $815.40; the point, one number on three surfaces, stands)* — in the customer's own currency and units, with `$` and `lb` absent from a metric/Rand render of both the screen and the report.
 
 Six new findings. One is MEDIUM and it is the same defect class as the fix that created it: **the Soil tab's H-3 fix moved the bag counts, the subtotals and the estimated cost onto the settled volume and left the 72 px headline volume and the "Volume (cu yd)" stat on the raw one**, so the card now shows two volumes in the same units on different bases, and the biggest number on the page is the one a bulk-soil buyer must not order. The rest are LOW: 97 mobile controls still under the 44 px floor the L-3 fix claimed (the fix reached the four control types the finding named and none of the 82 crop rows or 14 footer links), a true zero now printing as `0.000` on the Preservation tab because the M-2 precision sweep routes 0 through the sub-0.1 branch, a dead first branch in the reordered Cost Savings hero, a one-step 7.6 % drift on the new garden-space field at its metric floor, an inverted direction claim in the new preservation footnote, and four surviving mutants that name four untested consumers.
 
@@ -234,8 +234,8 @@ Reachable path: attacker mails `thehomesteadplan.com/?key=<attacker key>`; the v
 
 | Id | Claim | Verdict | How I settled it |
 |---|---|---|---|
-| **H-1** | savings on the wrong yield basis; surplus counted as money | **CLOSED, CONFIRMED** | headline now on `totalYieldConservativeLbs`; cap is `min(expectedYieldLbs, annualNeedLbs)`. Three households re-derived: 1p salad $143.87→**$96.53**; 4p basics $1062.99→**$761.04**, self-suff 44.9%→**33.7%**; 4p full homestead $3098.11→**$1996.54**, 102.3%→**72.0%**. Mutants M2, M3 killed by `golden` + `render`. |
-| **H-2** | every number in the paid plan invented by the model | **CLOSED, CONFIRMED (option b)** | `harvestTimeline`/`yieldEstimates` gone from `PLAN_SCHEMA`, `sanitisePlan`, the prompt and `src/`: **0 hits** outside comments. Rendered the real `GrowingPlanTab` **with a plan**: yields/harvest/savings all engine-sourced, identical on screen, in the report, and on the Cost Savings tab ($761 in all three). Metric/Rand render contains no `$` and no ` lb` on either surface. Mutants M6 (rename), M13 (report), M22 (screen) all killed. |
+| **H-1** | savings on the wrong yield basis; surplus counted as money | **CLOSED, CONFIRMED** | headline now on `totalYieldConservativeLbs`; cap is `min(expectedYieldLbs, annualNeedLbs)`. Three households re-derived: 1p salad $143.87→**$96.53**; 4p basics $1062.99→**$761.04**, self-suff 44.9%→**33.7%** *(corrected 2026-09-07, R3-8: the shipped Family Basics preset at the default goal prints **35.9 %** and **$815.40**, pinned by calc-golden SB-3/SB-4)*; 4p full homestead $3098.11→**$1996.54**, 102.3%→**72.0%**. Mutants M2, M3 killed by `golden` + `render`. |
+| **H-2** | every number in the paid plan invented by the model | **CLOSED, CONFIRMED (option b)** | `harvestTimeline`/`yieldEstimates` gone from `PLAN_SCHEMA`, `sanitisePlan`, the prompt and `src/`: **0 hits** outside comments. Rendered the real `GrowingPlanTab` **with a plan**: yields/harvest/savings all engine-sourced, identical on screen, in the report, and on the Cost Savings tab ($761 in all three; *figure corrected 2026-09-07, R3-8: $815.40 for the shipped preset at the default goal*). Metric/Rand render contains no `$` and no ` lb` on either surface. Mutants M6 (rename), M13 (report), M22 (screen) all killed. |
 | **H-3** | soil bill on the un-buffered volume | **CLOSED for bags/cost/prefill; PARTIAL** | 39/20/7 bags @ $489.60 → **45/23/8 @ $563.04**, "incl. settling" on every label, Cost Savings prefill follows `totalCostWithSettling`, dead `bags1/1_5/2` fields gone (verified `none` on the returned component). **The 72 px volume headline and the Volume stat are still raw → N-1.** Mutant M4 killed. |
 | **M-1** | `PATH_BUFFER = 1.30` fails its own dimensional check | **CLOSED, CONFIRMED** | `PATH_BUFFER = 1/(1-0.30) = 1.4285714…`; path share back-computes to **30.0 %**; copy derived from the same constant ("about 30% of the total footprint"). Mutant M1 killed. |
 | **M-2** | five crops 2–4× denser than the SFG chart | **CLOSED, CONFIRMED** | peas_snap/peas_shell 0.0625→0.125, arugula 0.0625→0.25, lettuce/parsnip 0.11→0.25. Diffed against `main`: 15 spacing changes, no others. |
@@ -308,12 +308,21 @@ Reachable path: attacker mails `thehomesteadplan.com/?key=<attacker key>`; the v
 
 ## Expected customer-visible movement (not defects — brief support if anyone writes in)
 
+> **Correction, 2026-09-07 (round 3, R3-8).** The first two rows of this table, and the
+> figures quoted at three places above ("$761 in all three", "$761.04", "33.7%"), were
+> re-derived on a basis that is not the shipped preset at the default goal. What HEAD
+> prints for Family Basics, 4 people, 300 lb, "fresh + some preserving" is **35.9 %** and
+> **$815.40**, and `tests/calc-golden.test.mjs` SB-3 / SB-4 have pinned exactly those two
+> figures since stage A (`e9cf852`). No Family Basics input combination prints $761. Support
+> should quote 35.9 % and $815. The rows below are corrected; the three prose mentions are
+> left as written and flagged inline so the record of what was measured stays intact.
+
 For an existing customer on the 12-crop Family Basics preset, family of 4, the wave changes numbers they may have written down:
 
 | Figure | Before | After | Cause |
 |---|---|---|---|
-| Self-sufficiency headline | 44.9 % | **33.7 %** | H-1, conservative basis |
-| Annual grocery savings | $1,062.99 | **$761.04** | H-1, cap at household need |
+| Self-sufficiency headline | 47.8 % | **35.9 %** | H-1, conservative basis |
+| Annual grocery savings | $815.40 (uncapped basis) | **$815.40** | H-1, cap at household need (no crop in this preset over-produces its need at the default goal, so the cap moves this case by $0) |
 | Garden space (incl. paths) | ~277 sq ft | **324.6 sq ft** | M-1 path multiplier + M-2 SFG spacings |
 | Soil bill, three 8×4×12 beds | $489.60, 39/20/7 bags | **$563.04, 45/23/8 bags** | H-3 settling |
 | Snap-bean canning quarts (100 lb) | 34 | **50** | M-3 |
