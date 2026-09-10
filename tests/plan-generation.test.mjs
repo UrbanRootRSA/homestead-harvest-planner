@@ -483,6 +483,10 @@ group('L-6b', 'the payload literal carries the customer\'s garden space, not the
       goalLabels: ['Fresh eating'], cropNames: ['Tomato'], metric: false,
       currency: '$', producePerPerson: 300,
       derivedGardenSqFt: 241,
+      // LOW-2 (fix round, 2026-09-10): the payload now carries the crops the
+      // engine has ruled unharvestable, so the model cannot schedule a harvest
+      // the yield card denies. It is a value in the tab's scope like the rest.
+      frostBlockedCrops: ['Sweet Potatoes'],
     };
     const build = (inputs, over = {}) => {
       const scope = { ...SCOPE, ...over };
@@ -507,6 +511,27 @@ group('L-6b', 'the payload literal carries the customer\'s garden space, not the
     const fromKg = build({ gardenSqFt: 120 }, { producePerPerson: 25 / 0.45359237 });
     check('R3-5.w2', 'and a metric-entered produce target travels as 55.1 lb',
       fromKg.producePerPersonLbs === 55.1, String(fromKg.producePerPersonLbs));
+    // LOW-2: the frost-blocked set travels with the crop list, so the prose the
+    // model writes cannot contradict the engine's own harvest verdict.
+    check('LOW-2.w1', 'the payload carries the frost-blocked crops beside the crop list',
+      Array.isArray(stated.frostBlockedCrops) && stated.frostBlockedCrops.join('|') === 'Sweet Potatoes',
+      JSON.stringify(stated.frostBlockedCrops));
+    const nothingBlocked = build(
+      { gardenSqFt: 120, sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'] },
+      { frostBlockedCrops: [] },
+    );
+    check('LOW-2.w2', 'control: with nothing blocked it travels as an empty array, never undefined',
+      Array.isArray(nothingBlocked.frostBlockedCrops) && nothingBlocked.frostBlockedCrops.length === 0,
+      JSON.stringify(nothingBlocked.frostBlockedCrops));
+    check('LOW-2.w3', 'and the crops list itself is unchanged by any of it',
+      JSON.stringify(stated.crops) === JSON.stringify(['Tomato']), JSON.stringify(stated.crops));
+    // The set is DERIVED from inputs the fingerprint already covers (crops,
+    // zone, frost dates, hemisphere), so it must not be added to it: a second
+    // copy of a derived value is a second thing that can disagree.
+    const fpInput = sliceDecl(SRC, 'GrowingPlanTab') || '';
+    const fpLiteral = /const fingerprintInput = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[/.exec(fpInput);
+    check('LOW-2.w4', 'the fingerprint does NOT carry the derived set',
+      !!fpLiteral && !/frostBlockedCrops/.test(fpLiteral[1]), fpLiteral ? 'found frostBlockedCrops in the fingerprint' : 'fingerprint literal not found');
   }
 }
 

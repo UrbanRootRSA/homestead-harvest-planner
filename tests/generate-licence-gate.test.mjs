@@ -24,6 +24,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_SRC = process.env.HHP_APP_SRC || join(HERE, '..', 'src', 'App.jsx');
@@ -125,6 +126,10 @@ function redisCommand(cmd) {
   const [name, key, ...rest] = cmd;
   const op = String(name).toLowerCase();
   if (op === 'incr') { const n = (Number(redisStore.get(key)) || 0) + 1; redisStore.set(key, String(n)); return n; }
+  // LOW-7 (fix round, 2026-09-10): the refund path. Without decr here the
+  // handler's refund would be swallowed by its own try/catch and every LOW-7
+  // row would pass against a handler that refunds nothing.
+  if (op === 'decr') { const n = (Number(redisStore.get(key)) || 0) - 1; redisStore.set(key, String(n)); return n; }
   if (op === 'get') return redisStore.has(key) ? enc(redisStore.get(key)) : null;
   if (op === 'set') { redisStore.set(key, String(rest[0])); return 'OK'; }
   if (op === 'expire') return redisStore.has(key) ? 1 : 0;
@@ -133,6 +138,7 @@ function redisCommand(cmd) {
 
 async function runGenerate(body, { ls, anthropic, extraHeaders, env } = {}) {
   const attempts = [];
+  const sent = [];
   const realFetch = globalThis.fetch;
   const prevEnv = process.env.VERCEL_ENV;
   if (env) process.env.VERCEL_ENV = env;
@@ -155,6 +161,9 @@ async function runGenerate(body, { ls, anthropic, extraHeaders, env } = {}) {
     }
     if (u === ANTHROPIC) {
       if (!anthropic) throw new Error('unscripted Anthropic call');
+      // LOW-2 (fix round, 2026-09-10): keep the request body so a case can read
+      // the PROMPT the handler actually sent, not the payload it was given.
+      try { sent.push(JSON.parse(init.body)); } catch { sent.push(null); }
       return {
         ok: anthropic.status === 200,
         status: anthropic.status,
@@ -195,10 +204,19 @@ async function runGenerate(body, { ls, anthropic, extraHeaders, env } = {}) {
   return {
     ...out,
     attempts,
+    sent,
+    prompt: String(sent[sent.length - 1]?.messages?.[0]?.content || ''),
     lsCalls: attempts.filter((u) => u === LS_VALIDATE).length,
     anthropicCalls: attempts.filter((u) => u === ANTHROPIC).length,
   };
 }
+
+// LOW-7: the per-licence bucket, read straight out of the emulator. The key
+// shape is the handler's own: `hhp:rl:generate:lk:<sha256(key).slice(0,16)>`.
+const bucketOf = (key) => {
+  const k = `hhp:rl:generate:lk:${createHash('sha256').update(String(key)).digest('hex').slice(0, 16)}`;
+  return redisStore.has(k) ? Number(redisStore.get(k)) : null;
+};
 
 const REENTER = /re-enter your key/i;
 
@@ -579,6 +597,151 @@ group('the client end: a generate failure may never touch licence state');
     !/clearLS\(/.test(branch), 'clearLS( appears in the generate failure path');
   check('G-1.w4', 'and never drops the paid session',
     !/setPaid\(false\)/.test(branch), 'setPaid(false) appears in the generate failure path');
+}
+
+// ══════════════════ the fix round for the round-3 diff review (2026-09-10)
+
+group('LOW-2: the prompt learns which crops cannot be harvested');
+
+{
+  const ACTIVE = { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } };
+  const blocked = await runGenerate({
+    ...INPUT,
+    licenseKey: 'CGL2AAAA-1111-2222-3333-FROSTBLOCKD',
+    crops: ['Tomatoes (General)', 'Sweet Potatoes'],
+    frostBlockedCrops: ['Sweet Potatoes'],
+  }, { ls: ACTIVE, anthropic: { status: 200, body: GOOD_PLAN } });
+  check('LOW-2.g1', 'the plan still ships', blocked.status === 200 && blocked.body?.ok === true, `http=${blocked.status}`);
+  check('LOW-2.g2', 'the prompt names the crop the engine has ruled out',
+    /Cannot be harvested in this zone[^\n]*Sweet Potatoes/.test(blocked.prompt),
+    blocked.prompt.match(/Cannot be harvested[^\n]*/)?.[0] || '(no such line)');
+  check('LOW-2.g3', 'and tells the model not to schedule a harvest for it',
+    /Never schedule a harvest[^\n]*unable to be harvested in this zone/.test(blocked.prompt),
+    blocked.prompt.match(/Never schedule[^.]*\./)?.[0] || '(no such instruction)');
+  check('LOW-2.g4', 'a name that is not in this request\'s crop list never reaches the prompt', await (async () => {
+    const r = await runGenerate({
+      ...INPUT, licenseKey: 'CGL2BBBB-1111-2222-3333-FROSTBLOCKD',
+      crops: ['Tomatoes (General)'], frostBlockedCrops: ['Ginger'],
+    }, { ls: ACTIVE, anthropic: { status: 200, body: GOOD_PLAN } });
+    return !/Ginger/.test(r.prompt) && !/Cannot be harvested in this zone/.test(r.prompt);
+  })());
+  const plain = await runGenerate({ ...INPUT, licenseKey: 'CGL2CCCC-1111-2222-3333-NOTHINGBLKD' },
+    { ls: ACTIVE, anthropic: { status: 200, body: GOOD_PLAN } });
+  check('LOW-2.g5', 'control: with nothing blocked the prompt carries no such line',
+    plain.status === 200 && !/Cannot be harvested in this zone/.test(plain.prompt));
+  check('LOW-2.g6', 'control: the frost dates and the crop list are still in the prompt either way',
+    /First fall frost: 2026-10-20/.test(plain.prompt) && /Selected crops: Tomato, Lettuce/.test(plain.prompt),
+    plain.prompt.slice(0, 200));
+}
+
+group('LOW-3: the savings scrub, driven through the handler, in both directions');
+
+{
+  const ACTIVE = { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } };
+  const withNote = (note, topSavers = ['Tomatoes']) => ({
+    content: [{
+      type: 'tool_use', name: 'submit_growing_plan',
+      input: {
+        summary: 'A test plan.',
+        monthlySchedule: [{ month: 'March', tasks: ['Sow tomatoes under cover'] }],
+        tips: ['Water in the morning.'],
+        savingsEstimate: { topSavers, note },
+      },
+    }],
+    usage: { input_tokens: 1, output_tokens: 1 },
+  });
+  // The four money shapes R3-9's single regex let through, and the two advice
+  // sentences it deleted. `keep` is what must survive the scrub.
+  const shapes = [
+    ['a currency CODE', 'About 900 USD across the season. Rotate the beds.', 'Rotate the beds.'],
+    ['a euro code', 'Savings near 900 EUR a year. Rotate the beds.', 'Rotate the beds.'],
+    ['a bare figure in a savings claim', 'That should save you roughly 900 a year. Rotate the beds.', 'Rotate the beds.'],
+    ['a spelled amount', 'Save about nine hundred dollars. Rotate the beds.', 'Rotate the beds.'],
+    ['a share of the grocery bill', 'Cut roughly 30% off your grocery bill. Rotate the beds.', 'Rotate the beds.'],
+    ['a container spec (must SURVIVE)', 'Grow potatoes in 20 kg grow bags to save space. Rotate the beds.',
+      'Grow potatoes in 20 kg grow bags to save space. Rotate the beds.'],
+    ['a spacing instruction (must SURVIVE)', 'Space your 12 plants a foot apart. Rotate the beds.',
+      'Space your 12 plants a foot apart. Rotate the beds.'],
+    ['a year (must SURVIVE)', 'By 2027 your beds will be productive. Rotate the beds.',
+      'By 2027 your beds will be productive. Rotate the beds.'],
+  ];
+  let i = 0;
+  for (const [label, text, expected] of shapes) {
+    i += 1;
+    const r = await runGenerate({ ...INPUT, licenseKey: `CGL3${String(i).padStart(4, '0')}-1111-2222-3333-SCRUBSHAPES` },
+      { ls: ACTIVE, anthropic: { status: 200, body: withNote(text) } });
+    check(`LOW-3.g${i}`, `${label}`, r.body?.plan?.savingsEstimate?.note === expected,
+      JSON.stringify(r.body?.plan?.savingsEstimate?.note));
+  }
+  // The regression guards from R3-9 itself: the shapes that already worked.
+  const held = await runGenerate({ ...INPUT, licenseKey: 'CGL3HELD-1111-2222-3333-SCRUBSHAPES' }, {
+    ls: ACTIVE,
+    anthropic: { status: 200, body: withNote(
+      'Tomatoes carry the total. You should save roughly $1,234 a year. Expect about 42 lb of tomatoes. Water in the morning.',
+      ['Tomatoes', 'Squash ($120)'],
+    ) },
+  });
+  check('LOW-3.g9', 'R3-9 still holds: the money and yield sentences go, the prose stays',
+    held.body?.plan?.savingsEstimate?.note === 'Tomatoes carry the total. Water in the morning.',
+    JSON.stringify(held.body?.plan?.savingsEstimate?.note));
+  check('LOW-3.g10', 'and a top saver carrying a figure is still dropped whole',
+    JSON.stringify(held.body?.plan?.savingsEstimate?.topSavers) === '["Tomatoes"]',
+    JSON.stringify(held.body?.plan?.savingsEstimate?.topSavers));
+}
+
+group('LOW-7: a generation this server refuses must not spend one of the 20');
+
+{
+  const ACTIVE = { status: 200, body: { valid: true, license_key: { status: 'active' }, meta: LS_META } };
+  const TRUNCATED = {
+    status: 200,
+    body: { stop_reason: 'max_tokens', content: [], usage: { input_tokens: 1, output_tokens: 4096 } },
+  };
+  const NO_TOOL = { status: 200, body: { content: [{ type: 'text', text: 'I cannot help with that.' }], usage: {} } };
+  const INCOMPLETE = {
+    status: 200,
+    body: {
+      content: [{ type: 'tool_use', name: 'submit_growing_plan', input: { summary: '', monthlySchedule: [], tips: [], savingsEstimate: null } }],
+      usage: {},
+    },
+  };
+  const cases = [
+    ['LOW-7.1', 'an Anthropic 5xx refunds the slot', { status: 503, body: { error: { message: 'overloaded' } } }, 502, 0],
+    ['LOW-7.2', 'an Anthropic 429 refunds the slot', { status: 429, body: { error: { message: 'rate limited' } } }, 502, 0],
+    ['LOW-7.3', 'an auth failure refunds the slot', { status: 401, body: { error: { message: 'bad key' } } }, 502, 0],
+    ['LOW-7.4', 'a response with no tool_use block refunds the slot', NO_TOOL, 502, 0],
+    ['LOW-7.5', 'an incomplete plan refunds the slot', INCOMPLETE, 502, 0],
+    ['LOW-7.6', 'a truncated plan deliberately does NOT (the customer can fix it, and it is repeatable)', TRUNCATED, 502, 1],
+  ];
+  let i = 0;
+  for (const [id, label, anthropic, status, expected] of cases) {
+    i += 1;
+    const key = `CGL7${String(i).padStart(4, '0')}-1111-2222-3333-REFUNDSLOTS`;
+    const r = await runGenerate({ ...INPUT, licenseKey: key }, { ls: ACTIVE, anthropic });
+    check(id, label, r.status === status && bucketOf(key) === expected,
+      `http=${r.status} bucket=${bucketOf(key)} (expected ${expected})`);
+  }
+  // The bucket still counts what it is for: a plan that SHIPPED is charged, and
+  // a refund can never leave a negative count that would grant a 21st plan.
+  const paidKey = 'CGL7OK00-1111-2222-3333-REFUNDSLOTS';
+  const ok = await runGenerate({ ...INPUT, licenseKey: paidKey }, { ls: ACTIVE, anthropic: { status: 200, body: GOOD_PLAN } });
+  check('LOW-7.7', 'control: a plan that ships is charged one slot',
+    ok.status === 200 && bucketOf(paidKey) === 1, `http=${ok.status} bucket=${bucketOf(paidKey)}`);
+  const mixKey = 'CGL7MIX0-1111-2222-3333-REFUNDSLOTS';
+  await runGenerate({ ...INPUT, licenseKey: mixKey }, { ls: ACTIVE, anthropic: { status: 200, body: GOOD_PLAN } });
+  await runGenerate({ ...INPUT, licenseKey: mixKey }, { ls: ACTIVE, anthropic: { status: 503, body: { error: { message: 'overloaded' } } } });
+  await runGenerate({ ...INPUT, licenseKey: mixKey }, { ls: ACTIVE, anthropic: { status: 200, body: GOOD_PLAN } });
+  check('LOW-7.8', 'two shipped plans and one outage leave the count at two',
+    bucketOf(mixKey) === 2, `bucket=${bucketOf(mixKey)}`);
+  const floorKey = 'CGL7FLR0-1111-2222-3333-REFUNDSLOTS';
+  await runGenerate({ ...INPUT, licenseKey: floorKey }, { ls: ACTIVE, anthropic: { status: 503, body: { error: { message: 'overloaded' } } } });
+  await runGenerate({ ...INPUT, licenseKey: floorKey }, { ls: ACTIVE, anthropic: { status: 503, body: { error: { message: 'overloaded' } } } });
+  check('LOW-7.9', 'and the count never goes below zero', bucketOf(floorKey) === 0, `bucket=${bucketOf(floorKey)}`);
+  // A refusal BEFORE the bump must not refund something it never spent.
+  const earlyKey = 'CGL7EARL-1111-2222-3333-REFUNDSLOTS';
+  const early = await runGenerate({ ...INPUT, licenseKey: earlyKey, crops: [] }, { ls: ACTIVE });
+  check('LOW-7.10', 'control: a request refused before the bucket is bumped leaves no count at all',
+    early.status === 400 && bucketOf(earlyKey) === null, `http=${early.status} bucket=${bucketOf(earlyKey)}`);
 }
 
 // --------------------------------------------------------------------- report

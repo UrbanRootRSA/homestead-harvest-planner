@@ -106,8 +106,25 @@ const LS_PENDING = "hhp_pending";
 // the old 15 s the abort could land inside the activate leg, LemonSqueezy
 // minted the instance, the answer reached nobody, and the customer's retry
 // minted another - an orphaned activation slot (round 3, 2026-09-07; the
-// fleet pair is 15 s against 2 x 8 s). 2 x 8 s + 9 s of headroom.
-const VALIDATE_TIMEOUT_MS = 25000;
+// fleet pair is 15 s against 2 x 8 s).
+// MED-3 (code review of the round-3 diff, 2026-09-09): the 25 s that fix chose
+// was budgeted against the HANDLER'S CODE, and nobody asked what the platform
+// allows the handler. api/validate-key.js declared no maxDuration at all while
+// its sibling api/generate.js sets 300, so the Vercel default - not this
+// constant - was the shortest fuse, and the orphaned mint happened one layer
+// down where the browser cannot see it. The chain is now declared end to end,
+// longest first, and each link is pinned against the next in
+// tests/paywall-mount-chain.test.mjs (group T):
+//   client abort         30 s  (this constant)
+//   >  function ceiling  25 s  (api/validate-key.js `export const config`)
+//   >  handler worst path ~22 s: 2 x 8 s of sequential LemonSqueezy legs
+//      (LS_TIMEOUT_MS, pre-check validate then activate) + one degraded Upstash
+//      call at the client's default 5 retries of exponential backoff (~4.3 s)
+//      + a cold start.
+// The 5 s between the client and the ceiling is request queueing, cold-start
+// routing and response transit: time the browser spends waiting that the
+// function's own clock never sees.
+const VALIDATE_TIMEOUT_MS = 30000;
 const GRACE_WINDOW_MS = 48 * 60 * 60 * 1000;
 const CHECKOUT_URL = "https://thehomesteadplan.lemonsqueezy.com/checkout/buy/6aecd238-c4b2-41a1-9a05-255dc8bfc822";
 const PRICE_USD = "39.99";
@@ -518,16 +535,27 @@ const moneyDecimals = (currency) => (ZERO_DECIMAL_CURRENCIES.includes(currency) 
 // sweep reached the crop cards and the crop database; the category legend and
 // the hero stat kept a fixed one decimal and printed "Herbs 0.0 m²" beside a
 // basil card reading 0.023 m².
+// LOW-1 (code review of the round-3 diff, 2026-09-09): a TRUE zero is a whole
+// number, not a measurement - the N-3 rule fmtMassRounded states ten lines
+// below. R3-3 taught the Self-Sufficiency hero stat to read this rule, and
+// magnitudeDecimals(0) was 3, so an empty crop selection printed "Garden space
+// (incl. paths) 0.000 sq ft" where the pre-R3-3 fixed decimal printed "0.0".
+// The rule lives here so every future caller inherits it.
 function magnitudeDecimals(v) {
-  return v < 0.1 ? 3 : v < 1 ? 2 : 1;
+  return v === 0 ? 0 : v < 0.1 ? 3 : v < 1 ? 2 : 1;
 }
+// The two per-crop MEASUREMENT formatters keep their 3-decimal degrade at zero,
+// and now say so instead of inheriting it: there a zero means "this input was
+// not a number", which is a different fact from "the customer has selected
+// nothing". calc-golden L1-10 (a non-numeric input) and N3-5 (a true zero) pin
+// both, and fmtMassRounded's own v === 0 line still answers the total.
 function fmtAreaValue(sqft, metric) {
   const v = (Number.isFinite(sqft) ? sqft : 0) * (metric ? SQFT_TO_SQM : 1);
-  return v.toFixed(magnitudeDecimals(v));
+  return v.toFixed(v === 0 ? 3 : magnitudeDecimals(v));
 }
 function fmtMassValue(lbs, metric) {
   const v = (Number.isFinite(lbs) ? lbs : 0) * (metric ? LB_TO_KG : 1);
-  return v.toFixed(magnitudeDecimals(v));
+  return v.toFixed(v === 0 ? 3 : magnitudeDecimals(v));
 }
 
 // The same rule for an ANNUAL total, which people round: whole units above 1,
@@ -3161,23 +3189,30 @@ function PlantingTimelineChart({ rows, referenceYear }) {
                         borderRadius: 2, opacity: 0.7,
                       }} />
                     ))}
-                    {/* R3-2: the row says why there is no harvest bar, in the
-                        same words as the card's badge. A bare growing bar with
-                        nothing after it read as "not drawn yet". */}
-                    {dates.noHarvestBeforeFrost && (
-                      <span title="Harvest would start after the first fall frost in this zone" style={{
-                        position: "absolute", top: 2, bottom: 2, right: 8,
-                        display: "flex", alignItems: "center",
-                        fontSize: 11, fontWeight: 700, color: T.error,
-                        background: T.errorBg, borderRadius: 3, padding: "0 6px",
-                        whiteSpace: "nowrap",
-                      }}>
-                        {isMobile ? "No harvest" : "No harvest before frost"}
-                      </span>
-                    )}
                   </>
                 )}
               </div>
+              {/* R3-2: the row says why there is no harvest bar, in the same
+                  words as the card's badge. A bare growing bar with nothing
+                  after it read as "not drawn yet".
+                  LOW-6 (code review of the round-3 diff, 2026-09-09): the badge
+                  used to be absolutely positioned at right: 8 INSIDE the track,
+                  and a flagged crop's growing bar can fill the track (zone 3
+                  ginger reaches 99.7 % of it, because its harvest would start
+                  the following January) - so the pill was drawn over the bar and
+                  the bar read as truncated. It sits BESIDE the track now: the
+                  track is flex: 1 and gives up the width the badge needs, so no
+                  bar can ever run under it. */}
+              {dates.noHarvestBeforeFrost && (
+                <span title="Harvest would start after the first fall frost in this zone" style={{
+                  flexShrink: 0, display: "inline-flex", alignItems: "center",
+                  height: 24, fontSize: 11, fontWeight: 700, color: T.error,
+                  background: T.errorBg, borderRadius: 3, padding: "0 6px",
+                  whiteSpace: "nowrap",
+                }}>
+                  {isMobile ? "No harvest" : "No harvest before frost"}
+                </span>
+              )}
             </div>
           );
         })}
@@ -4655,10 +4690,29 @@ function GrowingPlanTab({
     () => engineHarvestRows(baseResults.perCrop, frostDates, plantingState.sowMethodChoice),
     [baseResults, frostDates, plantingState.sowMethodChoice]
   );
-  const engineSavings = useMemo(
-    () => computeSavingsRows(baseResults.perCrop, costSavings?.priceOverrides).totalSavings,
-    [baseResults, costSavings]
+  // MED-1 (code review of the round-3 diff, 2026-09-09): R3-2 taught six
+  // surfaces to say "no harvest before frost" and left the seventh - the money.
+  // A zone-3 customer growing sweet potatoes read "Sweet Potatoes · no harvest
+  // before frost" in the yield section and the crop's displaced groceries in the
+  // savings total two cards below (driven: $177.30 with it, $150.00 without,
+  // pinned in calc-golden MED-1.2 to MED-1.4). The crops are read off
+  // engineHarvest, by NAME, which is the same key PlanRenderer and
+  // buildPlanReportHtml build their own no-harvest sets on: one authority
+  // decides for every paid surface, so they cannot drift apart again.
+  // computeSavingsRows itself is deliberately NOT gated - the Cost Savings tab
+  // is zone-agnostic by ruling, and a null frostDates inside the function would
+  // silently zero every saving there.
+  const frostBlockedCrops = useMemo(
+    () => engineHarvest.filter((r) => r && r.noHarvestBeforeFrost).map((r) => r.crop),
+    [engineHarvest]
   );
+  const engineSavings = useMemo(() => {
+    const blocked = new Set(frostBlockedCrops);
+    const billable = blocked.size === 0
+      ? baseResults.perCrop
+      : baseResults.perCrop.filter((r) => !blocked.has(r.crop.name));
+    return computeSavingsRows(billable, costSavings?.priceOverrides).totalSavings;
+  }, [baseResults, costSavings, frostBlockedCrops]);
 
   const goalLabels = inputs.goals
     .map((id) => GOAL_CHIPS.find((g) => g.id === id)?.label)
@@ -4762,6 +4816,15 @@ function GrowingPlanTab({
         experience: EXPERIENCE_OPTIONS.find((o) => o.id === inputs.experience)?.label || inputs.experience,
         goals: goalLabels,
         crops: cropNames,
+        // LOW-2 (code review of the round-3 diff, 2026-09-09): the model wrote
+        // the summary, the tips and every monthly task from a prompt that could
+        // not tell a crop that harvests from one that cannot, while being told
+        // to "anchor every monthly task to the frost dates above" - so "October:
+        // lift and cure your sweet potatoes" could sit on the same paid page as
+        // a yield card reading "no harvest before frost". The server has no crop
+        // table, so the set travels in the payload. Same authority as the yield
+        // card, the timeline and the savings total: engineHarvest.
+        frostBlockedCrops,
         displayUnits: metric ? "metric" : "imperial",
         currency,
         // Always send lb; producePerPerson is stored in lb regardless of
@@ -5439,9 +5502,16 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
                 {fmtInt(Math.round(engineSavings))}
               </span>
             </div>
+            {/* MED-1: the caption states the basis, and names the exclusion
+                when there is one. Without the second sentence the card claimed
+                to be "your Cost Savings tab's figure" while being lower than
+                it - the zone-agnostic free tab still bills a frost-blocked
+                crop, by ruling, and this card no longer does. */}
             <p style={{ margin: "8px auto 0", maxWidth: 460, fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
-              Your Cost Savings tab's figure: mid-range yields at your grocery prices, capped
-              at what your household would otherwise buy.
+              Mid-range yields at your grocery prices, capped at what your household would
+              otherwise buy.{noHarvestCrops.size > 0
+                ? " Crops with no harvest before your first fall frost are left out, so this is lower than your Cost Savings tab's figure."
+                : " The same figure as your Cost Savings tab."}
             </p>
             {plan.savingsEstimate.topSavers.length > 0 && (
               <div style={{ marginTop: 12, fontSize: 13, color: T.tx2 }}>
@@ -5768,7 +5838,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
     <h2>Estimated annual savings</h2>
     <div class="savings">
       <div><span class="num currency">${escapeHtml(currency)}</span><span class="num big">${escapeHtml(fmtInt(Math.round(engineSavings || 0)))}</span></div>
-      <p style="margin:8px auto 0;max-width:460px;font-size:12px;color:#7A6E5F;">Mid-range yields at your grocery prices, capped at what your household would otherwise buy.</p>
+      <p style="margin:8px auto 0;max-width:460px;font-size:12px;color:#7A6E5F;">Mid-range yields at your grocery prices, capped at what your household would otherwise buy.${noHarvestCrops.size > 0 ? " Crops with no harvest before your first fall frost are left out." : ""}</p>
       ${plan.savingsEstimate.topSavers.length > 0 ? `<div style="margin-top:10px;font-size:13px;color:#6B5D4F;">Top savers: ${plan.savingsEstimate.topSavers.map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join("")}</div>` : ""}
       ${plan.savingsEstimate.note ? `<p style="margin:10px auto 0;max-width:460px;font-size:13px;color:#6B5D4F;">${escapeHtml(plan.savingsEstimate.note)}</p>` : ""}
     </div>
@@ -8197,7 +8267,21 @@ export default function App() {
       // just validated, this leg has nothing to clean up and no instance it
       // may wipe - the wipe would delete the new key's pointer and the bare
       // retry below would burn a slot on the old one.
+      const sentInstance = skip ? "" : (existingInstance || "");
       if (r1?.retry_activation && !skip && loadState(LS_KEY, "") === key) {
+        // LOW-4 (code review of the round-3 diff, 2026-09-09): the shape (a)
+        // guard asked whether the slot still holds the KEY we validated. It did
+        // not ask whether it still holds the INSTANCE we SENT. Two tabs on one
+        // licence with a stale pointer both passed, both deleted the pointer and
+        // both activated bare - two activation slots for one physical device.
+        // A pointer that has changed under us belongs to a writer whose
+        // activation is already live, so judge the licence on THAT instance
+        // instead of minting a second one. Nothing is deleted on this path: the
+        // wipe below is only for a pointer this leg still owns.
+        const nowInstance = loadState(LS_INSTANCE, "");
+        if (nowInstance && nowInstance !== sentInstance) {
+          return await validateKeyRemote(key, nowInstance, opts);
+        }
         clearLS(LS_INSTANCE);
         const r2 = await validateKeyRemote(key, "", opts);
         if (r2?.valid) return r2;
@@ -8206,9 +8290,14 @@ export default function App() {
       return r1;
     };
 
-    const commitPaid = (key, instanceId) => {
-      if (key) persistState(LS_KEY, key);
-      if (instanceId) persistState(LS_INSTANCE, instanceId);
+    // Everything a valid verdict owes the UI, minus the two slot writes.
+    // LOW-5 (code review of the round-3 diff, 2026-09-09): shape (a)'s
+    // slot-replaced early return carried its own copy of the four setState
+    // calls and skipped the one other thing commitPaid still owed -
+    // clearLS(LS_PENDING) - so a customer unlocked while another tab held the
+    // live licence kept a stale 48-h grace marker. One helper, so the next leg
+    // that must not write the slot cannot drop a different line instead.
+    const commitSessionOnly = () => {
       clearLS(LS_PENDING); // grace window no longer needed once we have a key
       // M-3 (security audit 2026-08-17): a rejected ?key= earlier in this
       // chain now HOLDS its message and falls through instead of returning,
@@ -8220,6 +8309,18 @@ export default function App() {
       setPaid(true);
       setValidating(false);
     };
+
+    const commitPaid = (key, instanceId) => {
+      if (key) persistState(LS_KEY, key);
+      if (instanceId) persistState(LS_INSTANCE, instanceId);
+      commitSessionOnly();
+    };
+
+    // ONE copy of the M-1 refusal. The conflict is now tested twice - before
+    // the round trip, where the slot already held a licence, and after it, where
+    // another tab stored one during the await (MED-2) - and two literals of one
+    // sentence drift. tests/paywall-mount-chain (shape.3) pins the count.
+    const CONFLICT_MSG = "A different licence is already stored on this device. Clear it before activating a new one.";
 
     const stripKeyFromUrl = () => {
       try {
@@ -8278,7 +8379,7 @@ export default function App() {
           if (conflictingKey) {
             stripKeyFromUrl();
             if (conflictingKey !== urlKey) {
-              urlKeyError = "A different licence is already stored on this device. Clear it before activating a new one.";
+              urlKeyError = CONFLICT_MSG;
               urlKeyConflict = urlKey;
               // Deliberately NO prefill here: a foreign key must not sit one
               // click from activation in the customer's own licence input.
@@ -8295,25 +8396,57 @@ export default function App() {
             if (cancelled) return;
             stripKeyFromUrl();
             if (r?.valid) {
-              commitPaid(urlKey, r.instance_id);
-              // M-1 (code review 2026-09-06): land them on the thing they just
-              // bought. The purchase email and the LemonSqueezy confirmation
-              // both link to thehomesteadplan.com?key=..., and this branch left
-              // the app on the Home tab at "/" - so the first thing a paying
-              // customer saw was the hero, the comparison table and a pricing
-              // tile still reading $39.99 / Get full access, with nothing to
-              // say the unlock had worked. CLAUDE.md 21 already specifies
-              // "URL stripped to #growing-plan". Only this leg moves the tab:
-              // a normal stored-key launch must stay where the customer left
-              // off. Same two calls the rejection leg below already makes.
-              if (window.location.hash.slice(1) !== "growing-plan") {
-                window.history.replaceState({ tab: "growing-plan" }, "", "#growing-plan");
+              // MED-2 (code review of the round-3 diff, 2026-09-09): the M-1 /
+              // N-1 conflict check above ran BEFORE this round trip, when the
+              // slot was empty, so nothing here looked like it needed a guard -
+              // and commitPaid overwrites hhp_key AND hhp_instance in one
+              // breath. A licence stored by another tab during the await (the
+              // purchase email is slow, they open a second tab and paste the
+              // key) was silently replaced and its activation orphaned: exactly
+              // the harm the M-1 comment above describes, arriving a few hundred
+              // ms later. Re-read the slot, and judge it on the key AND on what
+              // this request sent:
+              //   EMPTY     - nobody else wrote; take the verdict as before.
+              //               This case MUST stay green: a bare `if (slotNow)
+              //               return` here would refuse every fresh activation,
+              //               which is the shape that nearly shipped an outage
+              //               on a sibling product in the previous round.
+              //   SAME key  - the other tab activated the same licence and its
+              //               pointer is the live one; unlock the session and
+              //               write nothing, so its instance is not orphaned.
+              //   OTHER key - this leg has no licence to store. Hold the M-1
+              //               refusal and let the stored key have its turn at
+              //               step 2; the mint LemonSqueezy already made cannot
+              //               be un-made, but the customer's own licence and
+              //               pointer survive.
+              const slotNow = loadState(LS_KEY, "");
+              if (slotNow && slotNow !== urlKey) {
+                urlKeyError = CONFLICT_MSG;
+                urlKeyConflict = urlKey;
+                // Deliberately NO prefill, same rule as the pre-await guard.
+              } else {
+                if (slotNow === urlKey) commitSessionOnly();
+                else commitPaid(urlKey, r.instance_id);
+                // M-1 (code review 2026-09-06): land them on the thing they just
+                // bought. The purchase email and the LemonSqueezy confirmation
+                // both link to thehomesteadplan.com?key=..., and this branch left
+                // the app on the Home tab at "/" - so the first thing a paying
+                // customer saw was the hero, the comparison table and a pricing
+                // tile still reading $39.99 / Get full access, with nothing to
+                // say the unlock had worked. CLAUDE.md 21 already specifies
+                // "URL stripped to #growing-plan". Only this leg moves the tab:
+                // a normal stored-key launch must stay where the customer left
+                // off. Same two calls the rejection leg below already makes.
+                if (window.location.hash.slice(1) !== "growing-plan") {
+                  window.history.replaceState({ tab: "growing-plan" }, "", "#growing-plan");
+                }
+                setTab("growing-plan");
+                return;
               }
-              setTab("growing-plan");
-              return;
+            } else {
+              urlKeyError = r?.error || "We couldn't verify that licence key.";
+              urlKeyPrefill = urlKey;
             }
-            urlKeyError = r?.error || "We couldn't verify that licence key.";
-            urlKeyPrefill = urlKey;
           }
         }
 
@@ -8336,10 +8469,11 @@ export default function App() {
           const slotReplaced = loadState(LS_KEY, "") !== storedKey;
           if (r?.valid) {
             if (slotReplaced) {
-              setKeyError("");
-              setPrefillKey("");
-              setPaid(true);
-              setValidating(false);
+              // LOW-5: unlock this session and touch no slot - which is every
+              // line commitPaid runs except the two persistState calls,
+              // clearLS(LS_PENDING) included. The grace marker was the one
+              // thing the hand-copied version of this branch dropped.
+              commitSessionOnly();
               return;
             }
             commitPaid(storedKey, r.instance_id);
@@ -8585,6 +8719,17 @@ export default function App() {
         }
         // Definitively rejected with this instance (revoked, or the instance
         // was deactivated remotely): fall through to a fresh activation.
+        // LOW-4 (code review of the round-3 diff, 2026-09-09): unless the
+        // pointer this call SENT is no longer the stored one. Another tab that
+        // activated during the await has written a live instance for this same
+        // licence; falling through would mint a second activation for one
+        // physical device and overwrite their fresh pointer with it. The mount
+        // chain re-judges the licence on the new pointer because it has a whole
+        // chain left to run; this leg owes the customer an answer now, and the
+        // honest one is a reload - their other tab is already unlocked.
+        if (loadState(LS_INSTANCE, "") !== storedInstance) {
+          return { ok: false, error: "A licence was saved in another tab while this one was verifying. Reload this page to use it." };
+        }
       }
       const r = await validateKeyRemote(key, "");
       if (r?.valid) {

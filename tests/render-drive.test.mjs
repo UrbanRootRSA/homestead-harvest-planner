@@ -926,8 +926,33 @@ safe(() => {
     selection: { basil: 'rarely' }, setSelection() {},
     metric: true, producePerPerson: 300, setProducePerPerson() {},
   }));
-  hasNot('R3-3.5', 'the "Garden space (incl. paths)" stat never reads 0.0 m2', hero, 'Garden space (incl. paths): 0.0 m²');
+  // R3-3.5, re-written for the fix round (2026-09-10): the old needle was the
+  // substring "Garden space (incl. paths): 0.0 m²", which the review showed
+  // false-PASSES on the "0.000 m²" that LOW-1 reports. Read the digits the stat
+  // actually prints and judge those.
+  const heroValue = (html) => (/Garden space \(incl\. paths\): ([\d.,]+) (?:m²|sq ft)/.exec(html) || [])[1];
+  record('R3-3.5', 'the "Garden space (incl. paths)" stat prints a non-zero figure for a non-zero garden',
+    Number(String(heroValue(hero)).replace(/,/g, '')) > 0, `printed=${heroValue(hero)}`);
   has('R3-3.6', `it reads the buffered footprint at its magnitude (${expected} m2)`, hero, `Garden space (incl. paths): ${expected} m²`);
+
+  // LOW-1: the same stat at a TRUE zero - an empty crop selection. Before the
+  // fix magnitudeDecimals(0) was 3 and this read "0.000 sq ft", contradicting
+  // the N-3 rule fmtMassRounded already shipped ("a true zero is a whole
+  // number, not a measurement").
+  const heroAt = (metric) => render('SS0', `SelfSufficiencyCalculator (${metric ? 'metric' : 'imperial'}, empty selection)`,
+    React.createElement(M.SelfSufficiencyCalculator, {
+      familySize: 4, setFamilySize() {}, goal: 'fresh_only', setGoal() {},
+      selection: {}, setSelection() {},
+      metric, producePerPerson: 300, setProducePerPerson() {},
+    }));
+  const zeroI = heroAt(false);
+  const zeroM = heroAt(true);
+  has('LOW-1.r1', 'an empty selection prints a whole zero in imperial', zeroI, 'Garden space (incl. paths): 0 sq ft');
+  has('LOW-1.r2', 'and in metric', zeroM, 'Garden space (incl. paths): 0 m²');
+  hasNot('LOW-1.r3', 'never three decimals of nothing', zeroI, '0.000 sq ft');
+  hasNot('LOW-1.r4', 'nor in metric', zeroM, '0.000 m²');
+  record('LOW-1.r5', 'and the printed zero carries no decimal point at all',
+    heroValue(zeroI) === '0' && heroValue(zeroM) === '0', `imperial=${heroValue(zeroI)} metric=${heroValue(zeroM)}`);
 }
 });
 
@@ -977,6 +1002,139 @@ safe(() => {
     rows: harvest.filter((r) => r.noHarvestBeforeFrost),
   }));
   has('R3-2.r11', 'a chart of only flagged rows still renders them, instead of returning null', chart, name);
+}
+});
+
+// ══════════════════ the fix round for the round-3 diff review (2026-09-10)
+
+// Slice one rendered element out of the markup, from the index of its opening
+// `<`, by matching tags. LOW-6 is a question about WHICH ELEMENT contains the
+// badge, and a substring search cannot answer that.
+function elementSlice(html, from) {
+  const tagRe = /<(\/?)([a-zA-Z][^\s/>]*)([^>]*?)(\/?)>/g;
+  tagRe.lastIndex = from;
+  const VOID = new Set(['br', 'img', 'input', 'hr', 'meta', 'link', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon']);
+  let depth = 0;
+  let m;
+  while ((m = tagRe.exec(html))) {
+    const closing = m[1] === '/';
+    const selfClosing = m[4] === '/' || VOID.has(m[2].toLowerCase());
+    if (closing) depth -= 1;
+    else if (!selfClosing) depth += 1;
+    if (depth === 0) return html.slice(from, tagRe.lastIndex);
+  }
+  return html.slice(from);
+}
+
+group('MED-1: the paid savings card may not bill a crop the same page writes off');
+safe(() => {
+{
+  // Driven through the REAL GrowingPlanTab: its useMemo chain runs during
+  // render, so the figure below is the one the tab computes, not one this test
+  // re-derives. A licence key on the device, as the H-1 block above needs.
+  const PLAN = {
+    summary: 'A test plan.',
+    monthlySchedule: [{ month: 'March', tasks: ['Sow tomatoes under cover'] }],
+    bedLayouts: [], successionPlanting: [], preservationGuide: [],
+    savingsEstimate: { topSavers: ['Tomatoes'], note: 'Tomatoes carry the total.' },
+    tips: ['Water in the morning.'],
+  };
+  const paidTab = (zone, selection) => {
+    const res = M.computeResults(selection, 4, 'fresh_preserving');
+    globalThis.localStorage.setItem('hhp_key', JSON.stringify('AAAAAAAA-1111-2222-3333-MYOWNLICENCE'));
+    const html = render('GPS', `GrowingPlanTab (zone ${zone})`, React.createElement(M.GrowingPlanTab, {
+      baseResults: res,
+      planState: { inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: ['fresh'], gardenSqFt: null }, plan: PLAN, generatedAt: Date.UTC(2026, 8, 10), cropFingerprint: '' },
+      setPlanState() {}, familySize: 4, hemisphere: 'north',
+      plantingState: { mode: 'zone', zone, manualFrost: null, selectedCrops: Object.keys(selection), referenceYear: 2026, sowMethodChoice: {} },
+      metric: false, currency: '$', producePerPerson: 300, setTab() {},
+      costSavings: { priceOverrides: {}, setupCosts: {} }, onActivateKey() {},
+      generating: false, error: '', longRun: false, loadingIdx: 0,
+      onGeneratePlan() {}, setError() {},
+    }));
+    globalThis.localStorage.removeItem('hhp_key');
+    return { html, res };
+  };
+  const onScreen = (html) => (/Estimated annual savings[\s\S]{0,1200}?tabular-nums[^>]*>\s*([\d,]+)\s*</.exec(html) || [])[1];
+  const SEL = { sweet_potato: 'weekly', tomato: 'weekly' };
+
+  const z3 = paidTab(3, SEL);
+  const basis = M.computeSavingsRows(z3.res.perCrop, {});
+  const tomatoOnly = basis.rows.find((r) => r.crop.name === 'Tomatoes (General)').annualSavings;
+  record('MED-1.r1', 'the yield card still says the crop cannot be harvested',
+    /no harvest before frost/.test(z3.html));
+  record('MED-1.r2', `and the savings card no longer bills it: $${Math.round(tomatoOnly)}, not $${Math.round(basis.totalSavings)}`,
+    onScreen(z3.html) === String(Math.round(tomatoOnly)), `on screen=$${onScreen(z3.html)}`);
+  record('MED-1.r3', 'the caption says the crops are left out, and why the figure differs from the Cost Savings tab',
+    /Crops with no harvest before your first fall frost are left out/.test(z3.html)
+    && /lower than your Cost Savings tab/.test(z3.html));
+
+  const z7 = paidTab(7, SEL);
+  record('MED-1.r4', 'control: in zone 7 nothing is flagged, so the card prints the whole basis',
+    onScreen(z7.html) === String(Math.round(basis.totalSavings)), `on screen=$${onScreen(z7.html)}`);
+  record('MED-1.r5', 'control: and says it is the same figure as the Cost Savings tab',
+    /The same figure as your Cost Savings tab/.test(z7.html)
+    && !/are left out/.test(z7.html));
+
+  // The workspace-quoted family-of-four figures, on screen.
+  const fam = paidTab(3, M.PRESETS.family_basics.selection);
+  const famBasis = M.computeSavingsRows(fam.res.perCrop, {}).totalSavings;
+  record('MED-1.r6', `control: Family Basics for a family of 4 still prints $${Math.round(famBasis)} in zone 3`,
+    onScreen(fam.html) === String(Math.round(famBasis)) && Math.round(famBasis) === 815,
+    `on screen=$${onScreen(fam.html)} basis=$${famBasis.toFixed(2)}`);
+
+  // The downloaded report is the copy the customer keeps.
+  const harvest3 = M.engineHarvestRows(z3.res.perCrop, M.getFrostDates('zone', 3, 'north', null, 2026), {});
+  const report = M.buildPlanReportHtml({
+    plan: PLAN,
+    inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: [] },
+    familySize: 4, zoneStr: 'USDA zone 3', lastSpringFrostStr: 'Jun 1', firstFallFrostStr: 'Sep 15',
+    hemisphere: 'north', gardenSqFt: 200, metric: false, currency: '$', cropNames: [],
+    generatedAt: Date.UTC(2026, 8, 10),
+    engineYields: M.engineYieldRows(z3.res.perCrop), engineHarvest: harvest3, engineSavings: tomatoOnly,
+  });
+  record('MED-1.r7', 'the report names the exclusion under its total too',
+    /Crops with no harvest before your first fall frost are left out/.test(report)
+    && new RegExp(`class="num big">${Math.round(tomatoOnly)}<`).test(report));
+}
+});
+
+group('LOW-6: the no-harvest badge sits beside the bar track, not over it');
+safe(() => {
+{
+  const z3 = M.getFrostDates('zone', 3, 'north', null, 2026);
+  const dates = M.computePlantingDates(CROPS.ginger, z3);
+  const html = render('PTG', 'PlantingTimelineChart (zone 3 ginger)', React.createElement(M.PlantingTimelineChart, {
+    rows: [{ cropId: 'ginger', crop: CROPS.ginger, dates }], referenceYear: 2026,
+  }));
+  const BADGE = 'No harvest before frost';
+  record('LOW-6.1', 'the flagged row still carries the badge', html.includes(BADGE));
+  // The bar track is the one element with `position:relative;flex:1;height:28px`.
+  const at = html.indexOf('position:relative;flex:1;height:28px');
+  const trackFrom = at === -1 ? -1 : html.lastIndexOf('<div', at);
+  record('LOW-6.2', 'the bar track was located in the rendered row', trackFrom !== -1, `at=${at}`);
+  const track = trackFrom === -1 ? '' : elementSlice(html, trackFrom);
+  // The overlap condition is how far right a bar REACHES (left + width), which
+  // is what the badge used to be drawn on top of at right: 8px.
+  const reach = Math.max(0, ...[...track.matchAll(/left:([\d.]+)%;width:([\d.]+)%/g)]
+    .map((m) => Number(m[1]) + Number(m[2])));
+  record('LOW-6.3', `a bar still runs to the right edge of the track (${reach.toFixed(1)} %) - the overlap condition`,
+    reach > 99, `rightmost bar edge=${reach}%`);
+  record('LOW-6.4', 'and the badge is NOT inside that track', !track.includes(BADGE),
+    track.includes(BADGE) ? 'the badge is drawn over the bar' : '');
+  record('LOW-6.5', 'it is a sibling that reserves its own width', /flex-shrink:0[^"]*/.test(
+    (/(<span[^>]*>)(?:[^<]*)No harvest before frost/.exec(html) || ['', ''])[1]),
+    (/(<span[^>]*>)(?:[^<]*)No harvest before frost/.exec(html) || ['', '(badge span not found)'])[1]);
+  record('LOW-6.6', 'and no longer positions itself absolutely at the track edge',
+    !/position:absolute[^"]*right:8px[^"]*"[^>]*>No harvest/.test(html)
+    && !/(<span[^>]*position:absolute[^>]*>)No harvest before frost/.test(html));
+  // Controls: a crop that is not flagged has no badge and a full-width track,
+  // and the mobile copy is still the short one.
+  const z7 = M.computePlantingDates(CROPS.ginger, M.getFrostDates('zone', 11, 'north', null, 2026));
+  const clean = render('PTG7', 'PlantingTimelineChart (zone 11 ginger)', React.createElement(M.PlantingTimelineChart, {
+    rows: [{ cropId: 'ginger', crop: CROPS.ginger, dates: z7 }], referenceYear: 2026,
+  }));
+  record('LOW-6.7', 'control: an unflagged crop draws no badge', !clean.includes(BADGE) && !clean.includes('No harvest'));
 }
 });
 

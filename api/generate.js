@@ -175,6 +175,36 @@ async function rateLimitOK(suffix, max, windowSec) {
   }
 }
 
+// LOW-7 (code review of the round-3 fix diff, 2026-09-09): the per-licence
+// bucket is bumped BEFORE the work it meters, so a generation this server then
+// refuses - an Anthropic outage, a hung model, a plan that came back missing its
+// required sections - still spent one of the customer's 20 a day, and nothing
+// told them. Give the slot back on those returns. The bump stays where it is:
+// moving it below the Anthropic call would let any number of requests pass the
+// gate at once and is the cost-control hole the bucket exists to close.
+//
+// Not atomic with the incr, which is fine at this volume: the worst case is a
+// concurrent request reading a count one lower than it will settle at. Never
+// below zero - a stale refund landing after the window rolled would otherwise
+// leave a negative count that grants 21 generations in the next window. The
+// TTL is deliberately untouched, so the window keeps the expiry the first
+// request of it armed.
+//
+// A truncated plan (stop_reason max_tokens) deliberately does NOT refund: it is
+// the one failure the customer's own selection reproduces on demand, its copy
+// says what to change ("Try selecting fewer crops"), and refunding it would let
+// one licence spend Anthropic credit in a loop the bucket never counts.
+async function refundLicenceSlot(suffix, windowSec) {
+  if (!redis) return;
+  try {
+    const key = `hhp:rl:generate:${suffix}`;
+    const count = await redis.decr(key);
+    if (count < 0) await redis.set(key, 0, { ex: windowSec });
+  } catch (e) {
+    console.warn("[generate] rate limit refund failed:", e?.message);
+  }
+}
+
 // ── Licence validation (cached) ─────────────────────────────────────────────
 // Cache successful validations for 1 hour to avoid hammering LS on every plan
 // generation. Cache key is the SHA-256 of the licence key (we never store the
@@ -503,6 +533,15 @@ function sanitiseInput(body) {
   const experience = clampStr(body.experience, 32);
   const goals = clampStrArray(body.goals, MAX_GOALS, 32);
   const crops = clampStrArray(body.crops, MAX_CROPS, MAX_STR);
+  // LOW-2 (code review of the round-3 fix diff, 2026-09-09): the crops the
+  // client's engine has ruled unharvestable in this zone. This server has no
+  // crop table and no frost model, so it cannot derive the set - it travels in
+  // the payload, is sanitised like every other string array, and is narrowed to
+  // crops this request actually selected, so a name the plan never mentions can
+  // never reach the prompt.
+  const selected = new Set(crops);
+  const frostBlockedCrops = clampStrArray(body.frostBlockedCrops, MAX_CROPS, MAX_STR)
+    .filter((c) => selected.has(c));
   // displayUnits controls the units the model writes PROSE measurements in.
   // Inputs are always in lb and sq ft - see #11/#12 audit fix.
   const displayUnits = body.displayUnits === "metric" || body.metric === true
@@ -516,7 +555,7 @@ function sanitiseInput(body) {
   return {
     familySize, zone, lastSpringFrost, firstFallFrost, hemisphere,
     gardenSqFt, sunExposure, soilType, waterMethod, experience,
-    goals, crops, displayUnits, producePerPersonLbs,
+    goals, crops, frostBlockedCrops, displayUnits, producePerPersonLbs,
   };
 }
 
@@ -634,6 +673,15 @@ const PLAN_SCHEMA = {
 function buildUserPrompt(input) {
   const cropsLine = input.crops.length > 0 ? input.crops.join(", ") : "(none specified)";
   const goalsLine = input.goals.length > 0 ? input.goals.join(", ") : "(none specified)";
+  // LOW-2: R3-2 made six engine-rendered surfaces say "no harvest before
+  // frost". The prompt was not one of them, so the model could schedule a
+  // harvest the same page denies - "October: lift and cure your sweet
+  // potatoes" beside a yield card reading "no harvest before your first fall
+  // frost". One line of context, one instruction below.
+  const blocked = Array.isArray(input.frostBlockedCrops) ? input.frostBlockedCrops : [];
+  const blockedLine = blocked.length > 0
+    ? `\n- Cannot be harvested in this zone (the first fall frost arrives before they are ready): ${blocked.join(", ")}`
+    : "";
   return `Design a practical, achievable growing plan for this household:
 
 - Family size: ${input.familySize} people
@@ -647,11 +695,11 @@ function buildUserPrompt(input) {
 - Watering: ${input.waterMethod || "(not specified)"}
 - Experience: ${input.experience || "(not specified)"}
 - Goals: ${goalsLine}
-- Selected crops: ${cropsLine}
+- Selected crops: ${cropsLine}${blockedLine}
 - Annual produce target: ${Number(input.producePerPersonLbs.toFixed(1))} lb/person
 - displayUnits: ${input.displayUnits} (write any prose measurement in this system)
 
-Emphasise companion planting. If the garden space above is smaller than the crop list needs, say which crops to grow first and which to defer. Anchor every monthly task to the frost dates above. The app prints the plant counts, yields, harvest months and savings total itself - leave those out of your text. Submit via the submit_growing_plan tool.`;
+Emphasise companion planting. If the garden space above is smaller than the crop list needs, say which crops to grow first and which to defer. Anchor every monthly task to the frost dates above. Never schedule a harvest, a preservation batch or a saving for a crop listed above as unable to be harvested in this zone; if you mention one, say plainly that it will not finish before frost, and give the alternative (a shorter-season variety, a container that comes indoors, or a different crop). The app prints the plant counts, yields, harvest months and savings total itself - leave those out of your text. Submit via the submit_growing_plan tool.`;
 }
 
 // ── Output sanitisation ─────────────────────────────────────────────────────
@@ -691,11 +739,36 @@ function n(v, min = 0, max = 1e9) {
 // raised to remove. Drop the SENTENCE that carries a currency amount, a weight
 // or a plant count, keep the rest, and log it so the prompt can be tightened.
 // A top-saver entry is a crop name; one that carries a figure is dropped whole.
-const ENGINE_FIGURE_RE = /(?:[$€£¥]|\bR)\s?\d|\b\d[\d,]*(?:\.\d+)?\s?(?:lbs?|pounds?|kg|kilograms?|plants?|dollars|euros|rand)\b/i;
+// LOW-3 (code review of the round-3 fix diff, 2026-09-09): one regex could not
+// hold both halves of this job, and it failed in both directions - "900 USD",
+// "900 EUR", a bare "900" in a savings claim and a spelled "nine hundred
+// dollars" all reached the card, while "Grow potatoes in 20 kg grow bags" and
+// "Space your 12 plants a foot apart" were silently deleted. Three named rules
+// instead, each keyed on a SHAPE rather than on the presence of a digit,
+// because deleting a customer's advice is the worse failure of the two.
+//
+// MONEY: a symbol beside a number, a number beside a currency CODE, or a
+// currency WORD - which catches a spelled amount without parsing spelled
+// numbers. The engine prints the only money figure this card is allowed.
+const MONEY_FIGURE_RE = /(?:[$€£¥]|\bR)\s?\d|\b\d[\d,]*(?:\.\d+)?\s?(?:usd|eur|gbp|zar)\b|\b(?:dollars?|euros?|rand|cents?)\b|\bpounds?\s+sterling\b/i;
+// A SAVING CLAIMED WITH A FIGURE: the claim first, then a number that is not a
+// physical measurement or a duration. "save you roughly 900 a year" and "cut
+// 30% off your grocery bill" restate the engine's total; "20 kg grow bags to
+// save space" states its number BEFORE the claim, with a unit after it.
+const CLAIMED_SAVING_RE = /\b(?:saves?|saving|savings|worth|spends?|spending|cut|cuts|reduces?|lowers?|trims?)\b[^.!?]{0,40}?\b\d[\d,]*(?:\.\d+)?(?!\s?(?:kg|kilograms?|lbs?|pounds?|plants?|seedlings?|inch|inches|cm|mm|ft|feet|m\b|weeks?|days?|months?|hours?|years?))/i;
+// A YIELD or PLANT COUNT STATED AS AN OUTCOME: a quantity that is partitive
+// ("42 lb OF tomatoes"), rated ("30 lb PER person", "40 lb a year") or ends its
+// sentence ("plan for 6 plants."). A quantity that modifies the next noun is a
+// specification, not a figure the engine owns: "20 kg grow bags", "trays of 12
+// plants, then transplant".
+const YIELD_FIGURE_RE = /\b\d[\d,]*(?:\.\d+)?\s?(?:lbs?|pounds?|kg|kilograms?|plants?)\b(?=\s*(?:of\b|per\b|a year\b|each year\b|annually\b|[.!?]|$))/i;
+function hasEngineFigure(text) {
+  return MONEY_FIGURE_RE.test(text) || CLAIMED_SAVING_RE.test(text) || YIELD_FIGURE_RE.test(text);
+}
 function scrubEngineFigures(text, field) {
   if (!text) return "";
   const sentences = text.split(/(?<=[.!?])\s+/);
-  const kept = sentences.filter((sentence) => !ENGINE_FIGURE_RE.test(sentence));
+  const kept = sentences.filter((sentence) => !hasEngineFigure(sentence));
   if (kept.length !== sentences.length) {
     console.warn(`[generate] ${field}: dropped ${sentences.length - kept.length} sentence(s) carrying an engine figure`);
   }
@@ -740,7 +813,7 @@ function sanitisePlan(raw) {
       : [],
     savingsEstimate: raw.savingsEstimate && typeof raw.savingsEstimate === "object" ? {
       topSavers: sArr(raw.savingsEstimate.topSavers, 10, PLAN_SHORT_MAX)
-        .filter((crop) => !ENGINE_FIGURE_RE.test(crop)),
+        .filter((crop) => !hasEngineFigure(crop)),
       note: scrubEngineFigures(s(raw.savingsEstimate.note, 600), "savingsEstimate.note"),
     } : null,
     tips: sArr(raw.tips, 12, 400),
@@ -849,12 +922,19 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: "Pick at least one crop on the Self-Sufficiency tab before generating a plan." });
   }
 
-  if (!(await rateLimitOK(`lk:${hashKey(licenseKey)}`, RL_LICENCE_MAX, RL_LICENCE_WINDOW_SEC))) {
+  const licenceBucket = `lk:${hashKey(licenseKey)}`;
+  if (!(await rateLimitOK(licenceBucket, RL_LICENCE_MAX, RL_LICENCE_WINDOW_SEC))) {
     return res.status(429).json({
       ok: false,
       error: "You've reached the fair-use limit of 20 plans in 24 hours. Please try again later. See our terms for details.",
     });
   }
+  // LOW-7: one exit for every refusal that comes AFTER the bucket was bumped.
+  // A customer must not pay a generation for a plan this server never sent.
+  const refundAndFail = async (status, error) => {
+    await refundLicenceSlot(licenceBucket, RL_LICENCE_WINDOW_SEC);
+    return res.status(status).json({ ok: false, error });
+  };
 
   // Phase-2 M5: bound the Anthropic call. Without this, a hung upstream can
   // tie up the 300 s function slot indefinitely until Vercel kills it.
@@ -911,7 +991,7 @@ export default async function handler(req, res) {
     if (apiResp.ok && (!data || Object.keys(data).length === 0)) {
       const peek = await respClone.text().then((t) => t.slice(0, 200)).catch(() => "");
       console.error("[generate] anthropic 200 with non-JSON body:", peek);
-      return res.status(502).json({ ok: false, error: "The plan generator returned an unexpected response. Please try again." });
+      return refundAndFail(502, "The plan generator returned an unexpected response. Please try again.");
     }
     if (!apiResp.ok) {
       const apiErr = data?.error?.message || `Anthropic returned ${apiResp.status}`;
@@ -921,7 +1001,7 @@ export default async function handler(req, res) {
       // API key, exhausted credits, or a region block.
       if (apiResp.status === 401 || apiResp.status === 403) {
         console.error("[generate] anthropic auth failure - check ANTHROPIC_API_KEY");
-        return res.status(502).json({ ok: false, error: "The plan generator is temporarily unavailable. Please try again later." });
+        return refundAndFail(502, "The plan generator is temporarily unavailable. Please try again later.");
       }
       // Don't leak the upstream error verbatim - could include API key info
       // in pathological cases. Map to a friendly message by status family.
@@ -930,7 +1010,7 @@ export default async function handler(req, res) {
         : apiResp.status >= 500
           ? "The plan generator is temporarily unavailable. Please try again shortly."
           : "We couldn't generate a plan with those inputs. Try simplifying your selection and retry.";
-      return res.status(502).json({ ok: false, error: userMsg });
+      return refundAndFail(502, userMsg);
     }
 
     // L4 closure 2026-06-10: a response cut off at MAX_TOKENS mid-JSON can
@@ -940,6 +1020,9 @@ export default async function handler(req, res) {
     // stop_reason is the authoritative truncation signal - refuse it.
     if (data?.stop_reason === "max_tokens") {
       console.error("[generate] response truncated at max_tokens; output_tokens:", data?.usage?.output_tokens ?? "?");
+      // LOW-7: deliberately NOT refunded - see refundLicenceSlot. This is the
+      // one refusal the customer's own selection reproduces on demand, and the
+      // message names what to change.
       return res.status(502).json({ ok: false, error: "Your plan was too large to generate in one pass. Try selecting fewer crops and regenerating." });
     }
 
@@ -953,7 +1036,7 @@ export default async function handler(req, res) {
       let bodyPeek = "";
       try { bodyPeek = JSON.stringify(data).slice(0, 200); } catch { /* noop */ }
       console.error("[generate] no submit_growing_plan tool_use block in response:", bodyPeek);
-      return res.status(502).json({ ok: false, error: "The plan generator returned an unexpected response. Please try again." });
+      return refundAndFail(502, "The plan generator returned an unexpected response. Please try again.");
     }
 
     const plan = sanitisePlan(toolBlock.input);
@@ -977,7 +1060,7 @@ export default async function handler(req, res) {
     }
     if (missing.length > 0) {
       console.error("[generate] incomplete plan; empty required sections:", missing.join(","));
-      return res.status(502).json({ ok: false, error: "The generated plan was incomplete. Please try again." });
+      return refundAndFail(502, "The generated plan was incomplete. Please try again.");
     }
 
     return res.status(200).json({
@@ -996,9 +1079,9 @@ export default async function handler(req, res) {
     const isAbort = e?.name === "AbortError";
     console.error("[generate] handler error:", isAbort ? "anthropic timeout" : e?.message, e?.code);
     if (isAbort) {
-      return res.status(504).json({ ok: false, error: "The plan generator is taking longer than expected. Please try again." });
+      return refundAndFail(504, "The plan generator is taking longer than expected. Please try again.");
     }
-    return res.status(500).json({ ok: false, error: "Server error while generating the plan. Please try again." });
+    return refundAndFail(500, "Server error while generating the plan. Please try again.");
   } finally {
     clearTimeout(anthropicTimer);
   }

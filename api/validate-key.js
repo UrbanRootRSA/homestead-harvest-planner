@@ -17,6 +17,26 @@
 import { Redis } from "@upstash/redis";
 import { createHash } from "crypto";
 
+// MED-3 (code review of the round-3 fix diff, 2026-09-09): this file declared
+// no duration at all while its sibling api/generate.js explicitly sets 300, so
+// the platform default - not the client's abort - was the shortest fuse on a
+// fresh-device activation. When the platform kills the function inside the
+// LS_ACTIVATE leg, LemonSqueezy has already minted the instance, the answer
+// reaches nobody, and the customer's retry mints another: the orphaned
+// activation slot the 25 s client budget was raised to prevent, one layer down.
+// The ceiling has to EXCEED this handler's own worst path, so that its own
+// AbortControllers always fire first and it can always answer:
+//   2 x LS_TIMEOUT_MS  = 16 s   two sequential LemonSqueezy legs
+//                              (pre-check validate, then activate)
+//   + ~4.3 s                   one degraded Upstash call: the client's default
+//                              5 retries back off exp(i) x 50 ms
+//   + ~1 s                     cold start
+//   = ~21.3 s worst path       -> 25 s ceiling, and the client waits 30 s.
+// src/App.jsx VALIDATE_TIMEOUT_MS carries the other end of the same chain and
+// tests/paywall-mount-chain.test.mjs (group T) pins the three numbers in order,
+// so none of them can move alone.
+export const config = { maxDuration: 25 };
+
 // Production origins only. The two localhost entries live in DEV_ORIGINS
 // below: LOW-2 (security re-review 2026-09-07) is the same reasoning as the
 // L-1 preview-origin fix, applied one line higher. A page served from

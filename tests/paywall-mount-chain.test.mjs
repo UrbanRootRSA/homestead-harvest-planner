@@ -1357,6 +1357,214 @@ const swapToNew = (storage, _req, i) => {
     s.calls.length === 2 && s.storedInstance === 'inst-fresh' && s.everPaid === true, JSON.stringify(s.calls));
 }
 
+// ══════════════════ the fix round for the round-3 diff review (2026-09-10)
+//
+// MED-2: shape (a) was applied to the stored-key leg and to attempt()'s retry
+// branch, and not to the URL ?key= leg - because the slot is EMPTY at send
+// there, so nothing looked like it needed a guard. The M-1 conflict check runs
+// BEFORE the round trip and is never re-tested after it, and commitPaid
+// overwrites hhp_key AND hhp_instance in one breath.
+
+group('MED-2', 'the ?key= leg must re-read the slot it is about to write');
+
+const swapDuringUrlLeg = (key, instance) => (storage, _req, i) => {
+  if (i === 0) {
+    storage.setItem('hhp_key', JSON.stringify(key));
+    storage.setItem('hhp_instance', JSON.stringify(instance));
+  }
+};
+// Answer by KEY, not by call order: after the URL leg defers, step 2 validates
+// whatever key the other tab stored, and the two legs must not share a script.
+const byKey = (answers) => (req) => answers[req.key] || REVOKED;
+
+{
+  // CASE 1 - a DIFFERENT licence lands during the round trip.
+  const r = await mount({
+    url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
+    store: {},
+    plan: byKey({ [KEY_MINE]: OK('inst-url-leg'), [KEY_THEIRS]: OK('inst-other-tab') }),
+    onFetch: swapDuringUrlLeg(KEY_THEIRS, 'inst-other-tab'),
+  });
+  check('MED-2.1', 'the licence the other tab stored is not overwritten',
+    r.storedKey === KEY_THEIRS, `hhp_key=${JSON.stringify(r.storedKey)}`);
+  check('MED-2.2', 'and neither is its pointer to its own activated instance',
+    r.storedInstance === 'inst-other-tab', `hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('MED-2.3', 'the stored key still gets its turn at step 2, with its own instance attached',
+    r.calls.length === 2 && r.calls[1].key === KEY_THEIRS && r.calls[1].instance_id === 'inst-other-tab',
+    JSON.stringify(r.calls));
+  check('MED-2.4', 'and that licence unlocks the session', r.paid === true && r.validating === false);
+}
+{
+  // CASE 2 - the SAME licence, activated by a second tab. The plausible path:
+  // the purchase email link is slow, so they paste the key in another tab.
+  const r = await mount({
+    url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
+    store: {},
+    plan: byKey({ [KEY_MINE]: OK('inst-url-leg') }),
+    onFetch: swapDuringUrlLeg(KEY_MINE, 'inst-tab2'),
+  });
+  check('MED-2.5', 'the other tab\'s instance pointer survives - no orphaned activation',
+    r.storedInstance === 'inst-tab2', `hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('MED-2.6', 'the key is theirs and ours, so it stays', r.storedKey === KEY_MINE);
+  check('MED-2.7', 'the customer is still unlocked, and lands on what they bought',
+    r.paid === true && r.validating === false && r.tab === 'growing-plan', `tab=${JSON.stringify(r.tab)}`);
+  check('MED-2.8', 'and one validation only - the deferral costs no second round trip',
+    r.calls.length === 1, JSON.stringify(r.calls));
+  check('MED-2.9', 'the URL key is still stripped from the address bar', !r.href.includes('key='), r.href);
+}
+{
+  // THE CONTROL THAT MATTERS. A bare `if (slotNow) return` here would refuse
+  // EVERY fresh activation - the shape that nearly shipped an outage on a
+  // sibling product in the previous round. Slot empty at send, still empty
+  // after the await: the verdict must be taken and both keys written.
+  const r = await mount({
+    url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
+    store: {},
+    plan: [OK('inst-new')],
+    onFetch: () => { /* nobody else writes */ },
+  });
+  check('MED-2.c1', 'control: a fresh device still activates from the email link',
+    r.paid === true && r.validating === false, `paid=${r.paid}`);
+  check('MED-2.c2', 'control: and both slots are written',
+    r.storedKey === KEY_MINE && r.storedInstance === 'inst-new',
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('MED-2.c3', 'control: with no instance_id on the wire (gate 1 holds)',
+    r.calls.length === 1 && r.calls[0].instance_id === undefined, JSON.stringify(r.calls));
+  check('MED-2.c4', 'control: and they land on the Growing Plan tab', r.tab === 'growing-plan');
+}
+{
+  // The M-6 re-test now has a second way to be reached: the conflict can be
+  // discovered AFTER the await. If step 2 then finds that licence revoked and
+  // deletes it, the customer is left holding the key from their own email, and
+  // it must be offered for one click - prefill only, never auto-activated.
+  const r = await mount({
+    url: `https://thehomesteadplan.com/?key=${KEY_MINE}`,
+    store: {},
+    plan: byKey({ [KEY_MINE]: OK('inst-url-leg'), [KEY_THEIRS]: REVOKED }),
+    onFetch: swapDuringUrlLeg(KEY_THEIRS, 'inst-other-tab'),
+  });
+  check('MED-2.10', 'the revoked licence that arrived mid-await is wiped by its own leg',
+    r.storedKey === null && r.storedInstance === null,
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('MED-2.11', 'and the refusal gives way to a prefill of the customer\'s own key',
+    r.prefillKey === KEY_MINE && !/different licence/i.test(String(r.keyError || '')),
+    `prefill=${JSON.stringify(r.prefillKey)} keyError=${JSON.stringify(r.keyError)}`);
+  check('MED-2.12', 'still never auto-activated: two calls, and neither is a re-send of the URL key',
+    r.calls.length === 2 && r.calls.filter((c) => c.key === KEY_MINE).length === 1, JSON.stringify(r.calls));
+}
+{
+  // Control: the pre-await conflict guard (M-1) is untouched - a foreign key
+  // over an EXISTING licence is still refused without a round trip.
+  const r = await mount({
+    url: `https://thehomesteadplan.com/?key=${KEY_THEIRS}`,
+    store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+    plan: [OK('inst-mine')],
+  });
+  check('MED-2.c5', 'control: M-1 still refuses a foreign ?key= before it is ever sent',
+    !r.calls.some((c) => c.key === KEY_THEIRS) && r.storedKey === KEY_MINE, JSON.stringify(r.calls));
+}
+
+// LOW-4: the two re-activation legs guarded on the KEY they validated and not
+// on the INSTANCE they SENT, so two tabs on one licence both deleted the
+// pointer and both activated bare.
+
+group('LOW-4', 'a re-activation must not mint a slot over a pointer someone else replaced');
+
+const swapInstanceOnly = (instance) => (storage, _req, i) => {
+  if (i === 0) storage.setItem('hhp_instance', JSON.stringify(instance));
+};
+
+{
+  const r = await mount({
+    store: seed({ key: KEY_MINE, instance: 'inst-stale' }),
+    plan: (req, i) => (i === 0 ? STALE_INSTANCE : OK(req.instance_id || 'inst-bare')),
+    onFetch: swapInstanceOnly('inst-tab2-fresh'),
+  });
+  check('LOW-4.1', 'the second call carries the pointer that is now stored, not a bare activation',
+    r.calls.length === 2 && r.calls[1].instance_id === 'inst-tab2-fresh', JSON.stringify(r.calls));
+  check('LOW-4.2', 'so no third activation is minted and the fresh pointer survives',
+    r.storedInstance === 'inst-tab2-fresh', `hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('LOW-4.3', 'the licence still unlocks this session', r.paid === true && r.validating === false);
+  check('LOW-4.4', 'and the key is left where it was', r.storedKey === KEY_MINE);
+}
+{
+  // Control: with nobody else writing, the stale pointer is still dropped and
+  // ONE bare activation replaces it (a.c2's rule, unchanged).
+  const r = await mount({
+    store: seed({ key: KEY_MINE, instance: 'inst-stale' }),
+    plan: [STALE_INSTANCE, OK('inst-fresh')],
+  });
+  check('LOW-4.c1', 'control: an unwitnessed stale pointer still retries bare exactly once',
+    r.calls.length === 2 && r.calls[1].instance_id === undefined && r.storedInstance === 'inst-fresh',
+    JSON.stringify(r.calls));
+}
+{
+  // The paywall form's fall-through (R3-7). Same question, different leg: it
+  // owes the customer an answer now, so it refuses to mint and says why.
+  const r = await runActivate({
+    store: seed({ key: KEY_MINE, instance: 'inst-mine' }),
+    plan: (req, i) => {
+      if (i === 0) { return STALE_INSTANCE; }
+      return OK('inst-third');
+    },
+    pasted: KEY_MINE,
+  });
+  check('LOW-4.5', 'the form leg fires no bare activation once the pointer has moved', true, 'see LOW-4.6');
+  const r2 = await (async () => {
+    // The swap has to happen DURING the await, so drive it through a storage
+    // mutation inside the canned server.
+    const storage = makeStorage(seed({ key: KEY_MINE, instance: 'inst-mine' }));
+    const { fetchStub, calls } = makeServer((req, i) => (i === 0 ? STALE_INSTANCE : OK('inst-third')));
+    const wrapped = async (u, init) => {
+      if (calls.length === 0) storage.setItem('hhp_instance', JSON.stringify('inst-tab2-fresh'));
+      return fetchStub(u, init);
+    };
+    const api = make(storage, quietConsole, wrapped);
+    const activate = api.__activateKey((fn) => fn, () => {}, () => {}, () => {}, () => {});
+    const result = await activate(KEY_MINE);
+    const read = (k) => { const raw = storage.getItem(k); if (raw == null) return null; try { return JSON.parse(raw); } catch { return raw; } };
+    return { result, calls, storedInstance: read('hhp_instance'), storedKey: read('hhp_key') };
+  })();
+  check('LOW-4.6', 'exactly one call, and no second activation minted',
+    r2.calls.length === 1, JSON.stringify(r2.calls));
+  check('LOW-4.7', 'the other tab\'s fresh pointer is untouched',
+    r2.storedInstance === 'inst-tab2-fresh' && r2.storedKey === KEY_MINE,
+    `hhp_instance=${JSON.stringify(r2.storedInstance)}`);
+  check('LOW-4.8', 'and the customer is told to reload rather than left staring at a spinner',
+    r2.result.ok === false && /another tab/i.test(String(r2.result.error)) && /reload/i.test(String(r2.result.error)),
+    JSON.stringify(r2.result));
+  check('LOW-4.c2', 'control: with nobody else writing, the form still falls through to one activation',
+    r.calls.length === 2 && r.calls[1].instance_id === undefined && r.result.ok === true, JSON.stringify(r.calls));
+}
+
+// LOW-5: what the slot-replaced early return skipped, in one line.
+
+group('LOW-5', 'the slot-replaced return owes everything a commit does except the two writes');
+
+{
+  const stamp = Date.now() - 2 * HOUR;
+  const r = await mount({
+    store: seed({ key: KEY_MINE, instance: 'inst-mine', pending: stamp }),
+    plan: [OK('inst-mine')],
+    onFetch: swapToNew,
+  });
+  check('LOW-5.1', 'the grace marker is cleared, exactly as a normal success clears it',
+    r.pending === null, `hhp_pending=${r.pending}`);
+  check('LOW-5.2', 'the newer licence and its pointer are still untouched',
+    r.storedKey === KEY_THEIRS && r.storedInstance === 'inst-new',
+    `hhp_key=${JSON.stringify(r.storedKey)} hhp_instance=${JSON.stringify(r.storedInstance)}`);
+  check('LOW-5.3', 'and the session is unlocked with no licence message over it',
+    r.paid === true && r.validating === false && (r.keyError === '' || r.keyError === null),
+    `keyError=${JSON.stringify(r.keyError)}`);
+}
+{
+  // Control: the grace window itself still works, and a stamp inside the
+  // window is not eaten by any of this.
+  const r = await mount({ store: seed({ pending: Date.now() - HOUR }), plan: [] });
+  check('LOW-5.c1', 'control: an unexpired grace stamp still unlocks and is kept',
+    r.paid === true && r.pending != null, `paid=${r.paid} pending=${r.pending}`);
+}
+
 // ════════════ the client abort budget must outlast the validator's worst path
 //
 // Round 3, 2026-09-07. validateKeyRemote aborted at 15 s; api/validate-key.js
@@ -1369,7 +1577,12 @@ const swapToNew = (storage, _req, i) => {
 group('T', 'the client waits longer than the validator\'s worst path');
 
 {
-  const vkSrc = readFileSync(join(HERE, '..', 'api', 'validate-key.js'), 'utf8');
+  // MED-3 (fix round, 2026-09-10): the validator source is overridable too, so
+  // the ceiling rows below can be proved red against the revision that declared
+  // no maxDuration at all.
+  const VK_PATH = process.env.HHP_VALIDATE_SRC || join(HERE, '..', 'api', 'validate-key.js');
+  if (process.env.HHP_VALIDATE_SRC) console.log(`[control run] validate-key=${VK_PATH}`);
+  const vkSrc = readFileSync(VK_PATH, 'utf8');
   const lsMs = Number(/^const LS_TIMEOUT_MS = (\d+);/m.exec(vkSrc)?.[1]);
   const clientMs = Number(/^const VALIDATE_TIMEOUT_MS = (\d+);/m.exec(SRC)?.[1]);
   const REDIS_AND_COLD_START_MS = 4000;
@@ -1379,6 +1592,25 @@ group('T', 'the client waits longer than the validator\'s worst path');
     /setTimeout\(\(\) => ac\.abort\(\), VALIDATE_TIMEOUT_MS\)/.test(sliceDecl(SRC, 'validateKeyRemote') || ''));
   check('T.4', `it outlasts two sequential LemonSqueezy legs at ${lsMs} ms plus ${REDIS_AND_COLD_START_MS} ms of Redis and cold start`,
     clientMs >= 2 * lsMs + REDIS_AND_COLD_START_MS, `client=${clientMs} server worst path=${2 * lsMs}`);
+
+  // MED-3: the platform is the third link in the chain, and it was undeclared.
+  // The client can only be the longest fuse if the FUNCTION's own ceiling is
+  // declared and sits between the handler's worst path and the browser's
+  // patience. All three numbers are read from source here, so none can move
+  // alone.
+  const ceilingSec = Number(/export const config = \{[^}]*maxDuration:\s*(\d+)/.exec(vkSrc)?.[1]);
+  const genSec = Number(/export const config = \{[^}]*maxDuration:\s*(\d+)/
+    .exec(readFileSync(join(HERE, '..', 'api', 'generate.js'), 'utf8'))?.[1]);
+  check('T.7', 'api/validate-key.js declares a function ceiling of its own',
+    Number.isFinite(ceilingSec), `maxDuration=${ceilingSec}`);
+  check('T.8', `that ceiling (${ceilingSec} s) exceeds the handler's own worst path (2 x ${lsMs} ms + ${REDIS_AND_COLD_START_MS} ms)`,
+    Number.isFinite(ceilingSec) && ceilingSec * 1000 >= 2 * lsMs + REDIS_AND_COLD_START_MS,
+    `ceiling=${ceilingSec * 1000} ms worst path=${2 * lsMs + REDIS_AND_COLD_START_MS} ms`);
+  check('T.9', `and the client (${clientMs} ms) outlasts the ceiling, so the browser never abandons a live request`,
+    Number.isFinite(ceilingSec) && clientMs > ceilingSec * 1000,
+    `client=${clientMs} ms ceiling=${ceilingSec * 1000} ms`);
+  check('T.10', 'context: its sibling handler declares one too, so a missing ceiling is a difference, not a convention',
+    Number.isFinite(genSec), `api/generate.js maxDuration=${genSec}`);
 
   // The timer is what fires the abort, the abort is reported transient, and the
   // delay that was armed is the constant. A fetch that settles ONLY through its

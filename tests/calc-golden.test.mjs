@@ -254,7 +254,10 @@ const GEN_NAMES = [
   // savings-note scrubber sanitisePlan now calls (R3-9).
   'MAX_CROPS', 'MAX_GOALS', 'MAX_STR', 'UNSAFE_CHAR_RE', 'stripUnsafeChars',
   'clampStr', 'clampNum', 'GARDEN_SQFT_MAX', 'clampStrArray', 'sanitiseInput',
-  'ENGINE_FIGURE_RE', 'scrubEngineFigures',
+  // LOW-3 (fix round, 2026-09-10): the one regex became three named shapes plus
+  // the predicate sanitisePlan and the top-saver filter both call.
+  'MONEY_FIGURE_RE', 'CLAIMED_SAVING_RE', 'YIELD_FIGURE_RE',
+  'hasEngineFigure', 'scrubEngineFigures',
 ];
 const gen = buildModule(GEN_SRC, GEN_NAMES, '__unused', null, 'api/generate.js');
 
@@ -1051,6 +1054,129 @@ safe(() => {
   check('R3-5.6', 'the prompt prints the garden space at one decimal', /Garden space: 400\.4 sq ft/.test(p), p.match(/Garden space: [^\n]*/)?.[0]);
   check('R3-5.7', 'and the produce target too', /Annual produce target: 55\.1 lb\/person/.test(p), p.match(/Annual produce target: [^\n]*/)?.[0]);
   check('R3-5.8', 'control: a whole number prints whole', /Garden space: 320 sq ft/.test(gen.buildUserPrompt(gen.sanitiseInput({ gardenSqFt: 320, crops: ['x'] }))));
+}
+});
+
+// ══════════════════ the fix round for the round-3 diff review (2026-09-10)
+
+group('MED-1: no frost-blocked crop may reach a savings total');
+safe(() => {
+{
+  // The basis, in the two shapes the paid tab now uses. The rendered card is
+  // driven through the real GrowingPlanTab memo in tests/render-drive
+  // (MED-1.r*); these rows pin the arithmetic either side of the filter and,
+  // above all, that the Cost Savings tab's own basis has not moved.
+  const z3 = app.getFrostDates('zone', 3, 'north', null, 2026);
+  const res = app.computeResults({ sweet_potato: 'weekly', tomato: 'weekly' }, 4, 'fresh_preserving');
+  const harvest = app.engineHarvestRows(res.perCrop, z3, {});
+  const blocked = new Set(harvest.filter((r) => r.noHarvestBeforeFrost).map((r) => r.crop));
+  const all = app.computeSavingsRows(res.perCrop, {});
+  const billable = app.computeSavingsRows(res.perCrop.filter((r) => !blocked.has(r.crop.name)), {});
+  eq('MED-1.1', 'the flagged set is the sweet potato only', [...blocked].join('|'), CROPS.sweet_potato.name);
+  near('MED-1.2', 'the unfiltered basis - the Cost Savings tab - is unchanged at $177.30', all.totalSavings, 177.3, 1e-9);
+  near('MED-1.3', 'the frost-blocked crop was billing $27.30 of it',
+    all.rows.find((r) => r.crop.name === CROPS.sweet_potato.name).annualSavings, 27.3, 1e-9);
+  near('MED-1.4', 'so the paid plan bills $150.00, the tomato alone', billable.totalSavings, 150, 1e-9);
+  // The zone-7 control: nothing is flagged there, so the two bases agree and
+  // the paid card must keep printing the Cost Savings figure exactly.
+  const z7 = app.getFrostDates('zone', 7, 'north', null, 2026);
+  const h7 = app.engineHarvestRows(res.perCrop, z7, {});
+  const b7 = new Set(h7.filter((r) => r.noHarvestBeforeFrost).map((r) => r.crop));
+  eq('MED-1.5', 'control: zone 7 flags nothing', b7.size, 0);
+  near('MED-1.6', 'control: so its paid total is the whole basis', app.computeSavingsRows(res.perCrop.filter((r) => !b7.has(r.crop.name)), {}).totalSavings, 177.3, 1e-9);
+  // The workspace-quoted family-of-four figures. Family Basics carries no
+  // frost-blocked crop in any zone, so MED-1 may not move SB-3 / SB-4.
+  const fam = app.computeResults(app.PRESETS.family_basics.selection, 4, 'fresh_preserving');
+  const famBlocked = app.engineHarvestRows(fam.perCrop, z3, {}).filter((r) => r.noHarvestBeforeFrost);
+  eq('MED-1.7', 'Family Basics has no frost-blocked crop even in zone 3', famBlocked.length, 0);
+  near('MED-1.8', 'so the family-of-4 savings stay $815.40 (SB-4)',
+    app.computeSavingsRows(fam.perCrop.filter(() => true), {}).totalSavings, 815.4, 1e-9);
+  near('MED-1.9', 'and self-sufficiency stays 35.9167 % (SB-3)', fam.rawSelfSufficiencyPct, 431 / 1200 * 100, 1e-9);
+}
+});
+
+group('LOW-1: a true zero is a whole number, a non-numeric input still degrades');
+safe(() => {
+{
+  eq('LOW-1.1', 'magnitudeDecimals(0) is 0, so a hero stat prints "0" not "0.000"', app.magnitudeDecimals(0), 0);
+  eq('LOW-1.2', 'control: the sub-0.1 degrade is untouched', app.magnitudeDecimals(0.05), 3);
+  eq('LOW-1.3', 'control: so is the sub-1 rule', app.magnitudeDecimals(0.5), 2);
+  eq('LOW-1.4', 'control: and the whole-number rule', app.magnitudeDecimals(12), 1);
+  eq('LOW-1.5', 'the per-crop area formatter keeps its 3-decimal zero (N3-5)', app.fmtMassValue(0, false), '0.000');
+  eq('LOW-1.6', '... on the area side too', app.fmtAreaValue(0, true), '0.000');
+  eq('LOW-1.7', 'and a non-numeric input still degrades to 0.000 (L1-10)', app.fmtAreaValue(undefined, false), '0.000');
+  eq('LOW-1.8', 'control: fmtMassRounded still answers a true zero with "0" (N3-1)', app.fmtMassRounded(0, false), '0');
+}
+});
+
+group('LOW-2: the prompt is told which crops cannot be harvested');
+safe(() => {
+{
+  const input = gen.sanitiseInput({
+    crops: ['Tomatoes (General)', 'Sweet Potatoes'],
+    frostBlockedCrops: ['Sweet Potatoes'],
+    gardenSqFt: 320,
+  });
+  eq('LOW-2.1', 'the payload field survives sanitisation', input.frostBlockedCrops.join('|'), 'Sweet Potatoes');
+  const filtered = gen.sanitiseInput({
+    crops: ['Tomatoes (General)'],
+    frostBlockedCrops: ['Sweet Potatoes', 'Ginger'],
+    gardenSqFt: 320,
+  });
+  eq('LOW-2.2', 'a name the request never selected cannot reach the prompt', filtered.frostBlockedCrops.length, 0);
+  const junk = gen.sanitiseInput({ crops: ['Tomatoes (General)'], frostBlockedCrops: 'not-an-array', gardenSqFt: 320 });
+  eq('LOW-2.3', 'a non-array is dropped, not thrown on', junk.frostBlockedCrops.length, 0);
+  const p = gen.buildUserPrompt(input);
+  check('LOW-2.4', 'the prompt names the crop that cannot be harvested',
+    /Cannot be harvested in this zone[^\n]*Sweet Potatoes/.test(p), p.match(/Cannot be harvested[^\n]*/)?.[0]);
+  check('LOW-2.5', 'and instructs the model not to schedule one',
+    /Never schedule a harvest[^\n]*unable to be harvested in this zone/.test(p), p.match(/Never schedule[^.]*\./)?.[0]);
+  const clean = gen.buildUserPrompt(gen.sanitiseInput({ crops: ['Tomatoes (General)'], gardenSqFt: 320 }));
+  check('LOW-2.6', 'control: with nothing blocked the prompt carries no such line',
+    !/Cannot be harvested in this zone/.test(clean));
+  check('LOW-2.7', 'control: the crops line is still there either way',
+    /Selected crops: Tomatoes \(General\)/.test(clean) && /Selected crops: Tomatoes \(General\), Sweet Potatoes/.test(p));
+}
+});
+
+group('LOW-3: the savings scrub keys on money and yield shapes, not on any digit');
+safe(() => {
+{
+  // Both directions in one table. `drop: true` is a figure the engine owns;
+  // `drop: false` is advice R3-9's single regex was deleting.
+  const cases = [
+    [true, '$1,234'],
+    [true, 'You should save roughly $1,234 a year.'],
+    [true, 'That is about R450 a month.'],
+    [true, 'About 900 USD across the season.'],
+    [true, 'Savings near 900 EUR a year.'],
+    [true, 'Save about nine hundred dollars.'],
+    [true, 'That should save you roughly 900 a year.'],
+    [true, 'You should save roughly 900.'],
+    [true, 'Cut roughly 30% off your grocery bill.'],
+    [true, 'Expect about 42 lb of tomatoes.'],
+    [true, 'You can expect 19 kg of squash.'],
+    [true, 'Plant 12 plants of basil.'],
+    [true, 'Around 700 pounds sterling.'],
+    [false, 'Grow potatoes in 20 kg grow bags to save space.'],
+    [false, 'Space your 12 plants a foot apart.'],
+    [false, 'By 2027 your beds will be productive.'],
+    [false, 'Tomatoes carry the total.'],
+    [false, 'Water in the morning.'],
+    [false, 'Tomatoes and beans carry most of it; herbs are cheap to buy but pricey per ounce at the shop.'],
+  ];
+  let i = 0;
+  for (const [drop, text] of cases) {
+    i += 1;
+    const verdict = gen.hasEngineFigure(text);
+    check(`LOW-3.${i}`, `${drop ? 'DROP' : 'KEEP'}: ${text}`, verdict === drop, `hasEngineFigure=${verdict}`);
+  }
+  eq('LOW-3.s1', 'the scrubber drops only the offending sentence',
+    gen.scrubEngineFigures('Tomatoes carry the total. You should save roughly 900 a year. Water in the morning.', 'x'),
+    'Tomatoes carry the total. Water in the morning.');
+  eq('LOW-3.s2', 'and keeps a sentence R3-9 was deleting',
+    gen.scrubEngineFigures('Grow potatoes in 20 kg grow bags to save space. Space your 12 plants a foot apart.', 'x'),
+    'Grow potatoes in 20 kg grow bags to save space. Space your 12 plants a foot apart.');
 }
 });
 
