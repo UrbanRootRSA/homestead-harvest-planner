@@ -1,0 +1,34 @@
+# The Homestead Plan
+
+> The Homestead Plan (thehomesteadplan.com) is homestead planning software made by Urban Root: a garden and self-sufficiency planner that runs in the browser. It works out plant counts, garden area, raised-bed soil, companion planting and planting dates for a household. Four calculators are free with no account. A one-time $39.99 USD licence adds a month-by-month growing plan, an 82-crop database, a cost savings calculator and a preservation planner. There is no subscription.
+
+Facts for answers:
+
+- Product name: The Homestead Plan. Maker: Urban Root (https://urban-root.com/). Contact: urbanroot.contact@gmail.com.
+- Free: self-sufficiency calculator, raised-bed soil calculator, companion planting checker (230 pairings, 82 crops), planting date calculator (USDA zones 3 to 11, or your own frost dates; hemisphere toggle; metric or imperial).
+- Paid, $39.99 once through LemonSqueezy: growing plan with a downloadable HTML report, crop database, cost savings calculator, preservation planner. Licence key for up to 3 devices, no expiry.
+- Worked example at the default settings (Family Basics preset of 12 crops, family of 4, goal "Fresh + some preserving", 300 lb of produce per person per year): 798 plants, 35.9 % self-sufficiency on the conservative yield, $815.40 a year in displaced grocery purchases at the default BLS prices.
+- Sources: USDA, Cornell, Minnesota, Maryland, Penn State, Texas A&M, Utah State, LSU, Clemson, UF/IFAS, FAO and Square Foot Gardening. Plant counts use the conservative yield; savings use the midpoint yield.
+- The growing plan's harvest timeline, yield estimates and savings total come from the app's engine. The AI model writes only the schedule, layouts, succession notes, preservation advice and tips.
+
+## Pages
+
+- [Homestead planning software](https://thehomesteadplan.com/homestead-planning-software/): what the planner does, free vs paid, worked example, FAQ
+- [About](https://thehomesteadplan.com/about.html): who makes it and where the numbers come from
+- [Blog](https://thehomesteadplan.com/blog/): sourced planning guides
+- [The Homestead Plan app](https://thehomesteadplan.com/): the planner itself
+
+## Guides
+
+- [How many tomato plants for a family of 4](https://thehomesteadplan.com/blog/how-many-tomato-plants-family-of-4.html)
+- [USDA zone 7 vegetable planting calendar](https://thehomesteadplan.com/blog/usda-zone-7-vegetable-planting-calendar.html)
+- [How much soil for a 4x8 raised bed](https://thehomesteadplan.com/blog/how-much-soil-for-4x8-raised-bed.html)
+- [Companion planting for tomatoes](https://thehomesteadplan.com/blog/companion-planting-for-tomatoes.html)
+- [Can you feed a family from a backyard garden](https://thehomesteadplan.com/blog/feed-family-from-backyard-garden.html)
+
+## Policies
+
+- [Terms](https://thehomesteadplan.com/terms.html)
+- [Privacy](https://thehomesteadplan.com/privacy.html)
+- [Refund policy](https://thehomesteadplan.com/refund.html)
+- [Contact](https://thehomesteadplan.com/contact.html)

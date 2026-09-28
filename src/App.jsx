@@ -7800,6 +7800,7 @@ function AppFooter() {
             }}>Learn</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
               <a href="/blog/" style={linkStyle}>Blog</a>
+              <a href="/homestead-planning-software/" style={linkStyle}>Homestead planning software</a>
               <a href="#features" style={linkStyle}
                 onClick={(e) => { e.preventDefault(); window.location.hash = "features"; }}>Features</a>
               <a href="#how-it-works" style={linkStyle}
