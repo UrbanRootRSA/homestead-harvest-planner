@@ -4402,6 +4402,25 @@ async function computeFingerprint(d) {
   }
   return `djb2:${djb2Hash(json)}`;
 }
+
+// M-1 (Aero sibling sweep 2026-10-29,
+// docs/reviews/REVIEW-2026-10-29-aero-sibling-sweep.md): the downloaded report
+// printed the LIVE engine rows (family, crops, yields, harvest months, savings)
+// under a plan body the model wrote for the inputs at generation time, and only
+// the SCREEN said the two had parted. The file is the copy the customer keeps,
+// so it now says the same thing the page says. One predicate decides "stale"
+// for the banner AND for the file, so the two cannot disagree.
+// While the first digest is in flight the current fingerprint is "", which
+// reads as NOT stale: the same safe default the banner has always used.
+function planIsStale(hasPlan, planFingerprint, currentFingerprint) {
+  return !!hasPlan && !!planFingerprint && !!currentFingerprint
+    && planFingerprint !== currentFingerprint;
+}
+// The fingerprint covers every input the request carries (family, crops,
+// climate, garden space, the plan form, units and currency), so the sentence
+// names "your inputs". The old banner said "your crop selection", which was
+// false when only the family size had changed.
+const PLAN_STALE_NOTICE = "Your inputs have changed since this plan was generated.";
 // ───────────────────────────────────────────────────────────────────────────
 
 // L3 closure 2026-06-10: the client-side `sanitisePlanShape` mirror (~80 LOC
@@ -4759,9 +4778,7 @@ function GrowingPlanTab({
     });
     return () => { cancelled = true; };
   }, [fingerprintInput]);
-  const fingerprintStale = !!plan && !!planState.cropFingerprint
-    && !!currentFingerprint
-    && planState.cropFingerprint !== currentFingerprint;
+  const fingerprintStale = planIsStale(plan, planState.cropFingerprint, currentFingerprint);
   // ────────────────────────────────────────────────────────────────────────
 
   const generate = async () => {
@@ -4844,6 +4861,8 @@ function GrowingPlanTab({
       lastSpringFrostStr, firstFallFrostStr, hemisphere,
       gardenSqFt, metric, currency, cropNames, generatedAt: planState.generatedAt,
       engineYields, engineHarvest, engineSavings,
+      // M-1: the verdict the banner above the plan shows, not a second one.
+      stale: fingerprintStale,
     });
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     // Revoke the previous URL before creating a new one - every additional
@@ -5097,7 +5116,7 @@ function GrowingPlanTab({
           background: T.goldBg, color: T.gold,
           border: `1px solid ${T.gold}`, fontSize: 14, lineHeight: 1.5,
         }}>
-          Your crop selection has changed since this plan was generated. Click <strong>Regenerate</strong> to update.
+          {PLAN_STALE_NOTICE} Click <strong>Regenerate</strong> to update.
         </div>
       )}
 
@@ -5665,7 +5684,7 @@ function escapeHtml(s) {
 function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
                               lastSpringFrostStr, firstFallFrostStr, hemisphere,
                               gardenSqFt, metric, currency, cropNames, generatedAt,
-                              engineYields, engineHarvest, engineSavings }) {
+                              engineYields, engineHarvest, engineSavings, stale = false }) {
   const dateStr = generatedAt ? new Date(generatedAt).toLocaleString() : new Date().toLocaleString();
   const sunLabel = SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure;
   const soilLabel = SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType;
@@ -5710,6 +5729,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
     footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #DDD6C8; font-size: 12px; color: #7A6E5F; }
     a { color: #2D5A27; }
     .print-btn { display: inline-block; padding: 10px 18px; border-radius: 999px; background: #2D5A27; color: #FEFCF8; border: none; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; }
+    .stale { margin: 16px 0 0; padding: 12px 16px; border-radius: 8px; background: #FBF6E6; border: 1px solid #B8942C; color: #2C2418; font-size: 14px; }
     @media print {
       body { background: #fff; padding: 0; }
       .wrap { border: none; box-shadow: none; padding: 0; max-width: 100%; }
@@ -5844,6 +5864,13 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
     </div>
   ` : "";
 
+  // M-1: the caller passes the on-screen banner's own verdict (planIsStale). The
+  // notice says which half of the file is current, because the figures follow
+  // the live engine and the written advice does not.
+  const staleHtml = stale ? `
+    <div class="stale" role="note"><strong>${escapeHtml(PLAN_STALE_NOTICE)}</strong> The figures in this report are for your current inputs: the details below, the harvest timeline, the yields and the savings. The written advice is for your earlier inputs. Regenerate the plan in the app to get a report where both match.</div>
+  ` : "";
+
   const tipsHtml = plan.tips.length > 0 ? `
     <h2>Tips for your first season</h2>
     ${plan.tips.map((t) => `<div class="card"><span style="font-size:14px;">${escapeHtml(t)}</span></div>`).join("")}
@@ -5869,6 +5896,7 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
       </div>
       <button class="print-btn" id="hhp-print-btn" type="button">Save as PDF</button>
     </div>
+    ${staleHtml}
 
     <div class="meta">
       <span><span class="muted">Family:</span> <strong>${familySize}</strong></span>

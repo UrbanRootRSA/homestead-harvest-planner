@@ -244,6 +244,9 @@ const APP_NAMES = [
   'MONTH_ORDER', 'monthIndex', 'engineYieldRows', 'engineHarvestRows',
   'SUN_OPTIONS', 'SOIL_OPTIONS', 'WATER_OPTIONS', 'EXPERIENCE_OPTIONS',
   'GOAL_CHIPS', 'escapeHtml', 'buildPlanReportHtml',
+  // M-1 (Aero sibling sweep, 2026-10-29): the stale verdict the banner and the
+  // downloaded report share, and the one sentence both print.
+  'planIsStale', 'PLAN_STALE_NOTICE',
 ];
 const app = buildModule(APP_SRC, APP_NAMES, 'CROPS', CROPS, 'App.jsx');
 
@@ -804,6 +807,56 @@ if (app.buildPlanReportHtml) {
   check('RP-9', 'in metric the yield is kg and is labelled kg', /~9\.1 kg/.test(htmlMetric));
   check('RP-10', 'in metric the garden space is m2 and is labelled m2', /1\.9 m²/.test(htmlMetric));
   check('RP-11', 'a plan with no savings block does not throw', htmlMetric.length > 0);
+}
+});
+
+// M-1 (Aero sibling sweep, 2026-10-29,
+// docs/reviews/REVIEW-2026-10-29-aero-sibling-sweep.md): the downloaded report
+// printed the LIVE engine rows under a plan body written for older inputs, and
+// only the screen said so. The file now carries the screen's own verdict.
+group('the downloaded report says when its plan body is stale - M-1 (sibling sweep)');
+safe(() => {
+{
+  const stale = app.planIsStale;
+  check('M1s-1', 'differing fingerprints are stale', stale(true, 'aaa', 'bbb') === true);
+  check('M1s-2', 'equal fingerprints are not', stale(true, 'aaa', 'aaa') === false);
+  check('M1s-3', 'no plan on screen, nothing to call stale', stale(null, 'aaa', 'bbb') === false);
+  check('M1s-4', 'a digest still in flight ("") reads not stale, the banner\'s safe default', stale(true, 'aaa', '') === false);
+  check('M1s-5', 'a plan with no stored fingerprint reads not stale', stale(true, '', 'bbb') === false);
+  check('M1s-6', 'the sentence names the inputs, not only the crop list',
+    /inputs have changed/.test(app.PLAN_STALE_NOTICE) && !/crop selection/.test(app.PLAN_STALE_NOTICE), app.PLAN_STALE_NOTICE);
+
+  const r = app.computeResults(app.PRESETS.family_basics.selection, 6, 'fresh_preserving');
+  const z7 = app.getFrostDates('zone', 7, 'north', null, 2026);
+  const args = {
+    plan: {
+      summary: 'Written for a family of four.',
+      monthlySchedule: [{ month: 'March', tasks: ['Sow lettuce'] }],
+      bedLayouts: [], successionPlanting: [], preservationGuide: [],
+      savingsEstimate: { topSavers: ['Tomatoes'], note: 'note' }, tips: [],
+    },
+    inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: [] },
+    familySize: 6, zoneStr: 'USDA zone 7',
+    lastSpringFrostStr: 'Mar 22', firstFallFrostStr: 'Nov 5', hemisphere: 'north',
+    gardenSqFt: 600, metric: false, currency: '$',
+    cropNames: r.perCrop.map((x) => x.crop.name), generatedAt: Date.UTC(2026, 9, 29),
+    engineYields: app.engineYieldRows(r.perCrop),
+    engineHarvest: app.engineHarvestRows(r.perCrop, z7, {}),
+    engineSavings: app.computeSavingsRows(r.perCrop, {}).totalSavings,
+  };
+  const current = app.buildPlanReportHtml(args);
+  const old = app.buildPlanReportHtml({ ...args, stale: true });
+  const at = old.indexOf(app.PLAN_STALE_NOTICE);
+  check('M1r-1', 'a stale report carries the notice', at > 0);
+  check('M1r-2', 'at the top: above the details block and the summary',
+    at > 0 && at < old.indexOf('class="meta"') && at < old.indexOf('<h2>Summary</h2>'),
+    `notice ${at}, meta ${old.indexOf('class="meta"')}, summary ${old.indexOf('<h2>Summary</h2>')}`);
+  check('M1r-3', 'it says the figures are current and the written advice is not',
+    /figures in this report are for your current inputs/.test(old) && /written advice is for your earlier inputs/.test(old));
+  check('M1r-4', 'a current report carries no notice',
+    !current.includes(app.PLAN_STALE_NOTICE) && !current.includes('class="stale"'));
+  check('M1r-5', 'the rest of the stale report is the same document', old.includes('Written for a family of four.')
+    && old.includes('<strong>6</strong>') && /class="num big">/.test(old));
 }
 
 // ══════════════════════════════════════════════════ 9. display formatting

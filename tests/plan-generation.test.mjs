@@ -597,6 +597,33 @@ group('H-1s', 'the tab may no longer own, or abort, the request');
   }
 }
 
+// ══ M-1 (Aero sibling sweep, 2026-10-29): one stale verdict, every surface
+//
+// The banner above the plan and the downloaded report must read ONE predicate.
+// The report builder's own goldens live in tests/calc-golden.test.mjs (group
+// M-1); this pins the wiring inside GrowingPlanTab, which SSR cannot drive
+// because the download is a click handler.
+
+group('M-1s', 'the download and the banner read one stale verdict');
+
+{
+  const tab = sliceDecl(SRC, 'GrowingPlanTab');
+  check('M1w-1', 'GrowingPlanTab was found in the source', !!tab, 'extractor out of step');
+  if (tab) {
+    check('M1w-2', 'the tab takes its stale verdict from planIsStale',
+      /const fingerprintStale = planIsStale\(plan, planState\.cropFingerprint, currentFingerprint\);/.test(tab),
+      'fingerprintStale is computed some other way');
+    check('M1w-3', 'and does not compare the fingerprints a second time inline',
+      !/cropFingerprint !== currentFingerprint/.test(tab), 'a second, inline comparison is back');
+    const dl = /const downloadHtml = \(\) => \{[\s\S]*?buildPlanReportHtml\(\{([\s\S]*?)\}\);/.exec(tab);
+    check('M1w-4', 'the download builds the report', !!dl, 'download call not found');
+    check('M1w-5', 'and hands it the same verdict the banner shows',
+      !!dl && /\bstale: fingerprintStale\b/.test(dl[1]), dl ? 'no stale: fingerprintStale in the call' : 'n/a');
+    check('M1w-6', 'the banner is gated on the same verdict and prints the shared sentence',
+      /fingerprintStale && \([\s\S]{0,400}?\{PLAN_STALE_NOTICE\}/.test(tab), 'banner gate or sentence changed');
+  }
+}
+
 // --------------------------------------------------------------------- report
 
 const w = Math.max(...rows.map((r) => `${r.id} ${r.label}`.length));
