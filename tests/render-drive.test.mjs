@@ -1138,6 +1138,40 @@ safe(() => {
 }
 });
 
+// L-9 (Aero sibling sweep, 2026-10-29): driven through the REAL GrowingPlanTab,
+// so a prop dropped between the tab and PlanRenderer fails here even though
+// the renderer on its own would be fine.
+group('the plan prints the Preservation tab\'s fresh share - L-9 (sibling sweep)');
+safe(() => {
+{
+  const res = M.computeResults({ tomato: 'weekly' }, 4, 'fresh_preserving');
+  globalThis.localStorage.setItem('hhp_key', JSON.stringify('AAAAAAAA-1111-2222-3333-MYOWNLICENCE'));
+  const PLAN9 = {
+    summary: 'S', monthlySchedule: [{ month: 'March', tasks: ['t'] }], bedLayouts: [], successionPlanting: [],
+    preservationGuide: [{ crop: 'Tomatoes (General)', freshShare: '70%', preservationMethods: ['can', 'dehydrate'], note: 'Can the surplus.' }],
+    savingsEstimate: null, tips: [],
+  };
+  const tab9 = (over) => render('L9s', 'GrowingPlanTab (with a plan)', React.createElement(M.GrowingPlanTab, {
+    baseResults: res,
+    planState: { inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: [], gardenSqFt: null }, plan: PLAN9, generatedAt: Date.UTC(2026, 9, 29), cropFingerprint: 'f' },
+    setPlanState() {}, familySize: 4, hemisphere: 'north',
+    plantingState: { mode: 'zone', zone: 7, manualFrost: null, selectedCrops: [], referenceYear: 2026, sowMethodChoice: {} },
+    metric: false, currency: '$', producePerPerson: 300, setTab() {},
+    costSavings: { priceOverrides: {}, setupCosts: {} }, onActivateKey() {},
+    generating: false, error: '', longRun: false, loadingIdx: 0,
+    onGeneratePlan() {}, setError() {}, ...over,
+  }));
+  const html = tab9({ preservationFreshPct: 50 });
+  has('L9s-1', 'the plan renders with its preservation guide', html, 'Can the surplus.');
+  has('L9s-2', 'it prints the Preservation tab\'s 50%', html, /Fresh: <strong[^>]*>50%<\/strong>/);
+  hasNot('L9s-3', 'and never the model\'s 70%', html, '70%');
+  has('L9s-4', 'and says where the share comes from', html, 'set on your Preservation tab');
+  const dropped = tab9({});
+  hasNot('L9s-5', 'with no slider handed down it prints no share, not the model\'s', dropped, /Fresh:|70%/);
+  globalThis.localStorage.removeItem('hhp_key');
+}
+});
+
 // ------------------------------------------------------------------- report
 const width = Math.max(...rows.map((r) => r.label.length)) + 2;
 console.log('\nRender drive  (engineering review 2026-09-06)\n');

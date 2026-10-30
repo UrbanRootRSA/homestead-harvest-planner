@@ -4532,6 +4532,7 @@ function GrowingPlanTab({
   familySize, hemisphere, plantingState,
   metric, currency, producePerPerson, setTab,
   costSavings,
+  preservationFreshPct,
   onActivateKey,
   generating, error, longRun, loadingIdx,
   onGeneratePlan, setError,
@@ -4863,6 +4864,8 @@ function GrowingPlanTab({
       engineYields, engineHarvest, engineSavings,
       // M-1: the verdict the banner above the plan shows, not a second one.
       stale: fingerprintStale,
+      // L-9: the Preservation tab's slider, the same value the screen prints.
+      freshPct: preservationFreshPct,
     });
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     // Revoke the previous URL before creating a new one - every additional
@@ -5123,7 +5126,7 @@ function GrowingPlanTab({
       {/* ── Plan output ── */}
       {plan && !generating && (
         <PlanRenderer plan={plan} metric={metric} currency={currency}
-          isMobile={isMobile}
+          isMobile={isMobile} freshPct={preservationFreshPct}
           generatedAt={planState.generatedAt}
           engineYields={engineYields} engineHarvest={engineHarvest}
           engineSavings={engineSavings}
@@ -5276,12 +5279,30 @@ function engineHarvestRows(perCrop, frostDates, sowMethodChoice = {}) {
   return rows;
 }
 
+// L-9 (Aero sibling sweep 2026-10-29,
+// docs/reviews/REVIEW-2026-10-29-aero-sibling-sweep.md): the plan's
+// Preservation guide printed the MODEL's fresh share ("Fresh: 70%") while the
+// Preservation Planner sizes every jar on the customer's own slider (30 by
+// default), and the prompt never carried that slider, so the two paid tabs
+// could only agree by luck. Both plan surfaces now print the slider through
+// this one function. The model's freshShare string stays in PLAN_SCHEMA
+// (Homestead/CLAUDE.md section 8 is the shipped schema) and is not rendered.
+// An absent or junk value prints nothing, never the model's figure.
+function planFreshShareLabel(freshPct) {
+  return typeof freshPct === "number" && Number.isFinite(freshPct) && freshPct >= 0 && freshPct <= 100
+    ? `${Math.round(freshPct)}%`
+    : "";
+}
+const PLAN_FRESH_SHARE_NOTE = "The fresh share is the one set on your Preservation tab. The methods and notes are the plan's suggestions.";
+
 // engineYields / engineHarvest / engineSavings are always supplied by
 // GrowingPlanTab; the defaults are there so a future call site that forgets one
 // renders a section short instead of taking the whole app into the ErrorBoundary.
 function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
                         engineYields = [], engineHarvest = [], engineSavings = 0,
+                        freshPct = null,
                         onDownload, onClear }) {
+  const freshLabel = planFreshShareLabel(freshPct);
   // R3-2: the crops the harvest timeline marks as "no harvest before frost",
   // so the yield section three cards below says the same thing instead of
   // promising a weight the timeline just said cannot be picked.
@@ -5470,6 +5491,9 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
       {/* ── Preservation guide ── */}
       {plan.preservationGuide.length > 0 && (
         <PlanSection title="Preservation guide">
+          <p style={{ margin: "0 0 10px", fontSize: 12, color: T.tx3, lineHeight: 1.5 }}>
+            {PLAN_FRESH_SHARE_NOTE}
+          </p>
           <div style={{ display: "grid", gap: 8 }}>
             {plan.preservationGuide.map((p, i) => (
               <div key={i} style={{
@@ -5478,7 +5502,9 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
               }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
                   <div style={{ fontWeight: 700, color: T.tx, fontSize: 14 }}>{p.crop}</div>
-                  <div style={{ fontSize: 12, color: T.tx3 }}>Fresh: <strong style={{ color: T.tx2 }}>{p.freshShare}</strong></div>
+                  {freshLabel && (
+                    <div style={{ fontSize: 12, color: T.tx3 }}>Fresh: <strong style={{ color: T.tx2 }}>{freshLabel}</strong></div>
+                  )}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
                   {p.preservationMethods.map((m, j) => (
@@ -5684,7 +5710,8 @@ function escapeHtml(s) {
 function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
                               lastSpringFrostStr, firstFallFrostStr, hemisphere,
                               gardenSqFt, metric, currency, cropNames, generatedAt,
-                              engineYields, engineHarvest, engineSavings, stale = false }) {
+                              engineYields, engineHarvest, engineSavings, stale = false,
+                              freshPct = null }) {
   const dateStr = generatedAt ? new Date(generatedAt).toLocaleString() : new Date().toLocaleString();
   const sunLabel = SUN_OPTIONS.find((o) => o.id === inputs.sunExposure)?.label || inputs.sunExposure;
   const soilLabel = SOIL_OPTIONS.find((o) => o.id === inputs.soilType)?.label || inputs.soilType;
@@ -5840,13 +5867,17 @@ function buildPlanReportHtml({ plan, inputs, familySize, zoneStr,
     `)).join("")}
   ` : "";
 
+  // L-9: the Preservation tab's slider through planFreshShareLabel, the same
+  // rule PlanRenderer prints. The model's freshShare is not printed.
+  const freshLabel = planFreshShareLabel(freshPct);
   const presHtml = plan.preservationGuide.length > 0 ? `
     <h2>Preservation guide</h2>
+    <p class="muted" style="margin:0 0 10px;">${escapeHtml(PLAN_FRESH_SHARE_NOTE)}</p>
     ${plan.preservationGuide.map((p) => `
       <div class="card">
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
           <strong>${escapeHtml(p.crop)}</strong>
-          <span class="muted">Fresh: <strong>${escapeHtml(p.freshShare)}</strong></span>
+          ${freshLabel ? `<span class="muted">Fresh: <strong>${escapeHtml(freshLabel)}</strong></span>` : ""}
         </div>
         <div style="margin-top:6px;">${p.preservationMethods.map((m) => `<span class="chip chip-gold">${escapeHtml(m)}</span>`).join("")}</div>
         ${p.note ? `<p style="margin:6px 0 0;font-size:13px;color:#6B5D4F;">${escapeHtml(p.note)}</p>` : ""}
@@ -9099,6 +9130,10 @@ export default function App() {
               // was reading, and Back skipped the view entirely.
               setTab={changeTab}
               costSavings={costSavings}
+              // L-9 (Aero sibling sweep 2026-10-29): the plan's Preservation
+              // guide prints the share set on the Preservation tab, the same
+              // figure that tab sizes every jar on, not the model's own guess.
+              preservationFreshPct={preservation.freshPct}
               onActivateKey={activateKey}
               // H-1: the generation lives above this component now.
               generating={planGenerating} error={planError}

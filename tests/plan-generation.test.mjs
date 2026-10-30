@@ -621,7 +621,13 @@ group('M-1s', 'the download and the banner read one stale verdict');
       !!dl && /\bstale: fingerprintStale\b/.test(dl[1]), dl ? 'no stale: fingerprintStale in the call' : 'n/a');
     check('M1w-6', 'the banner is gated on the same verdict and prints the shared sentence',
       /fingerprintStale && \([\s\S]{0,400}?\{PLAN_STALE_NOTICE\}/.test(tab), 'banner gate or sentence changed');
+    // L-9 (same sweep): the download prints the same fresh share as the screen.
+    check('L9w-1', 'the download hands the report the Preservation tab\'s slider',
+      !!dl && /\bfreshPct: preservationFreshPct\b/.test(dl[1]), 'no freshPct: preservationFreshPct in the call');
   }
+  const site = /<GrowingPlanTab[\s\S]*?\/>/.exec(SRC);
+  check('L9w-2', 'App hands the Growing Plan tab the Preservation slider',
+    !!site && /preservationFreshPct=\{preservation\.freshPct\}/.test(site[0]), 'the render site does not pass preservation.freshPct');
 }
 
 // --------------------------------------------------------------------- report

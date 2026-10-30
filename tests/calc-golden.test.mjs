@@ -247,6 +247,9 @@ const APP_NAMES = [
   // M-1 (Aero sibling sweep, 2026-10-29): the stale verdict the banner and the
   // downloaded report share, and the one sentence both print.
   'planIsStale', 'PLAN_STALE_NOTICE',
+  // L-9 (same sweep): the one label rule both plan surfaces print the
+  // Preservation tab's fresh share through, and the sentence beside it.
+  'planFreshShareLabel', 'PLAN_FRESH_SHARE_NOTE',
 ];
 const app = buildModule(APP_SRC, APP_NAMES, 'CROPS', CROPS, 'App.jsx');
 
@@ -857,6 +860,37 @@ safe(() => {
     !current.includes(app.PLAN_STALE_NOTICE) && !current.includes('class="stale"'));
   check('M1r-5', 'the rest of the stale report is the same document', old.includes('Written for a family of four.')
     && old.includes('<strong>6</strong>') && /class="num big">/.test(old));
+}
+});
+
+// L-9 (Aero sibling sweep, 2026-10-29): the plan printed the MODEL's fresh
+// share while the Preservation Planner sizes jars on the customer's slider.
+group('the plan prints the Preservation tab\'s fresh share, not the model\'s - L-9 (sibling sweep)');
+safe(() => {
+{
+  const L = app.planFreshShareLabel;
+  check('L9l-1', 'the slider value prints as a whole percent', L(50) === '50%' && L(0) === '0%' && L(100) === '100%', `${L(50)} ${L(0)} ${L(100)}`);
+  check('L9l-2', 'absent or junk prints nothing, never a guess',
+    L(null) === '' && L(undefined) === '' && L(NaN) === '' && L(150) === '' && L(-5) === '' && L('50') === '');
+  const args = {
+    plan: {
+      summary: 's', monthlySchedule: [{ month: 'March', tasks: ['t'] }], bedLayouts: [], successionPlanting: [],
+      preservationGuide: [{ crop: 'Tomatoes (General)', freshShare: '70%', preservationMethods: ['can'], note: 'Can the surplus.' }],
+      savingsEstimate: null, tips: [],
+    },
+    inputs: { sunExposure: 'full_sun', soilType: 'loamy', waterMethod: 'drip', experience: '1_to_3', goals: [] },
+    familySize: 4, zoneStr: 'USDA zone 7', lastSpringFrostStr: '', firstFallFrostStr: '', hemisphere: 'north',
+    gardenSqFt: 200, metric: false, currency: '$', cropNames: [], generatedAt: Date.UTC(2026, 9, 29),
+    engineYields: [], engineHarvest: [], engineSavings: 0,
+  };
+  const withSlider = app.buildPlanReportHtml({ ...args, freshPct: 50 });
+  check('L9r-1', 'the report prints the slider\'s 50%', /Fresh: <strong>50%<\/strong>/.test(withSlider));
+  check('L9r-2', 'and never the model\'s 70%', !withSlider.includes('70%'));
+  check('L9r-3', 'and says where the share comes from', withSlider.includes(app.escapeHtml(app.PLAN_FRESH_SHARE_NOTE)));
+  const noSlider = app.buildPlanReportHtml(args);
+  check('L9r-4', 'a caller that passes no slider prints no share, not the model\'s',
+    !/Fresh:/.test(noSlider) && !noSlider.includes('70%'));
+  check('L9r-5', 'the model\'s methods and note still print', withSlider.includes('Can the surplus.') && /chip chip-gold">can</.test(withSlider));
 }
 
 // ══════════════════════════════════════════════════ 9. display formatting
