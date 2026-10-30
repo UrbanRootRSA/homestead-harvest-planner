@@ -538,7 +538,7 @@ group('L-6b', 'the payload literal carries the customer\'s garden space, not the
 // ══ R3-4 (round 3, 2026-09-07): the regenerate dialog names the server's quota
 //
 // The one dialog a customer reads before spending a slot said "20 hourly
-// generations"; api/generate.js enforces 20 per rolling 24 hours and the Terms
+// generations"; api/generate.js enforces 20 per 24-hour window and the Terms
 // say the same. The number and the period are read off the server file here,
 // so the copy cannot drift from the constant again without this going red.
 

@@ -3947,7 +3947,10 @@ const FAQ_ITEMS = [
   },
   {
     q: "What's the refund policy?",
-    a: "48 hours after purchase, no questions asked, for technical failure or accidental duplicate purchases. The checkout runs through LemonSqueezy, who process the refund within a few business days.",
+    // L-10 (Aero sibling sweep 2026-10-29): "no questions asked" contradicted the
+    // conditions in the same sentence and public/refund.html. This is the refund
+    // page's own summary; index.html carries the same text in its FAQPage JSON-LD.
+    a: "Full refunds within 48 hours of purchase for technical failure or accidental duplicate purchases. Change-of-mind refunds after that window aren't standard, but email us anyway and we'll read your note. LemonSqueezy processes refunds, and they usually reach your card in 3 to 10 business days.",
   },
 ];
 
@@ -4822,7 +4825,7 @@ function GrowingPlanTab({
     setError("");
     // Confirm before regenerating when the current plan still matches the
     // selected crops. Each call consumes one of the user's 20 generations per
-    // rolling 24 hours (api/generate.js RL_LICENCE_MAX / RL_LICENCE_WINDOW_SEC,
+    // 24-hour window (api/generate.js RL_LICENCE_MAX / RL_LICENCE_WINDOW_SEC,
     // and the Terms say the same) and spends ~$0.06 on the Anthropic side.
     // R3-4 (code review round 3, 2026-09-07): this dialog said "hourly", which
     // understated the cost of the slot by a factor of 24. Stale-fingerprint
