@@ -134,10 +134,15 @@ const NAMES = [
   // L-8 (Aero sibling sweep, 2026-10-29): what the hhp_cost_savings loader
   // reads. All three exist in both revisions.
   'LS_COST_SAVINGS', 'DEFAULT_SETUP_COSTS', 'COST_SAVINGS_FIELDS',
+  // L-7 (same sweep): what the hhp_beds loader reads. All exist in both
+  // revisions; the new helper is OPTIONAL below so a control run against the
+  // pre-fix source reports per-case failures instead of bailing on a name.
+  'LS_BEDS', 'BED_SHAPES', 'MAX_BEDS_PER_GROUP', 'BED_ID_SESSION', 'bedIdCounter', 'DEFAULT_BED',
 ];
+const OPTIONAL_NAMES = ['BED_ID_MAX_LEN', 'uniqueBedIds'];
 const missing = NAMES.filter((n) => !sliceDecl(SRC, n));
 if (missing.length) bail(`declarations not found in source: ${missing.join(', ')}`);
-const picked = NAMES.map((n) => {
+const picked = [...NAMES, ...OPTIONAL_NAMES.filter((n) => sliceDecl(SRC, n))].map((n) => {
   const text = sliceDecl(SRC, n);
   return { n, text, at: SRC.indexOf(text) };
 }).sort((a, b) => a.at - b.at);
@@ -157,6 +162,12 @@ const soilInit = sliceStateInit(SRC, 'const [soilState, setSoilState] = useState
 const isStoredNumberText = sliceStateInit(SRC, 'const isStoredNumber = ');
 const costInit = sliceStateInit(SRC, 'const [costSavings, setCostSavings] = useState');
 if (!isStoredNumberText || !costInit) bail('could not slice the hhp_cost_savings loader');
+// L-7: the beds loader and the two handlers that key on a bed's id, verbatim.
+const bedsInit = sliceStateInit(SRC, 'const [beds, setBeds] = useState');
+const soilCalc = sliceDecl(SRC, 'SoilCalculator') || '';
+const updateBedText = sliceStateInit(soilCalc, 'const updateBed = ');
+const removeBedText = sliceLocal(soilCalc, 'removeBed');
+if (!bedsInit || !updateBedText || !removeBedText) bail('could not slice the hhp_beds loader or the bed handlers');
 if (!selectionInit) bail('could not slice the hhp_crops state initialiser');
 if (!soilInit) bail('could not slice the hhp_soil state initialiser');
 if (!soilInit.includes('mixOverrides')) bail('the hhp_soil slice does not mention mixOverrides');
@@ -216,6 +227,22 @@ function makeSoilLoader(saved) {
   return soilState;
 }
 
+function makeBedsLoader(saved) {
+  const useState = (fn) => [fn(), () => {}];
+  const loadState = () => saved;
+  ${bedsInit}
+  return beds;
+}
+
+// SoilCalculator's updateBed and removeBed, verbatim, over a plain array.
+function makeBedHandlers(start) {
+  let beds = start;
+  const setBeds = (next) => { beds = typeof next === 'function' ? next(beds) : next; };
+  ${updateBedText}
+  ${removeBedText}
+  return { updateBed, removeBed, get beds() { return beds; } };
+}
+
 function makeCostSavingsLoader(saved) {
   const useState = (fn) => [fn(), () => {}];
   const loadState = () => saved;
@@ -225,7 +252,7 @@ function makeCostSavingsLoader(saved) {
 }
 
 return { ${picked.map((p) => p.n).join(', ')}, makeFieldCommit, makeBedEditor,
-         makeSelectionLoader, makeSoilLoader, makeCostSavingsLoader };
+         makeSelectionLoader, makeSoilLoader, makeCostSavingsLoader, makeBedsLoader, makeBedHandlers };
 `)(CROPS);
 
 // ------------------------------------------------------------ assertions
@@ -1014,6 +1041,43 @@ group('R3-1', 'the produce-target Field does not drift at the bound it displays'
     api.makeFieldCommit({ raw: String(pI.display), value: pI.display, min: pI.min, max: pI.max, onChange: pI.commit })();
     check('R3-5.p2', 'and an untouched blur on it writes nothing', wrote === null, `wrote=${wrote}`);
   }
+}
+
+// ══ L-7 (Aero sibling sweep, 2026-10-29): a stored bed id is checked like every other field
+//
+// The loader clamped every number and allow-listed the shape, then spread the
+// stored id through. Two beds with one id shared one React key, and one Length
+// edit or one Remove acted on both. Only a hand-edited or corrupted store can
+// get here (there is no import), which is exactly what a loader is for.
+
+group('L-7', 'the hhp_beds loader gives every bed its own id');
+
+{
+  const rect = (id, lengthFt) => ({ id, shape: 'rect', lengthFt, widthFt: 4, depthIn: 12, qty: 1 });
+  const load = (saved) => api.makeBedsLoader(saved);
+  const ids = (beds) => beds.map((b) => b.id);
+  const unique = (beds) => new Set(ids(beds)).size === beds.length;
+
+  const twin = load([rect('x', 8), rect('x', 10)]);
+  check('L7-1', 'two stored beds with one id load with two ids', twin.length === 2 && unique(twin), JSON.stringify(ids(twin)));
+  check('L7-2', 'the first holder keeps its id, the second is re-minted', twin[0].id === 'x' && /^bed_/.test(twin[1].id), JSON.stringify(ids(twin)));
+  check('L7-3', 'and nothing else about the second bed changes', twin[1].lengthFt === 10 && twin[1].shape === 'rect');
+  const junk = load([rect(null, 8), rect(5, 8), rect('', 8), rect('y'.repeat(65), 8), rect({}, 8), rect(undefined, 8)]);
+  check('L7-4', 'null, number, empty, over-long, object and absent ids are all re-minted as strings',
+    junk.length === 6 && junk.every((b) => typeof b.id === 'string' && /^bed_/.test(b.id)) && unique(junk), JSON.stringify(ids(junk)));
+  const clean = [rect('bed_a_1', 8), rect('bed_a_2', 6), rect('my-bed', 12)];
+  const back = load(clean);
+  check('L7-5', 'unique, well-formed ids round-trip untouched', JSON.stringify(ids(back)) === JSON.stringify(ids(clean)), JSON.stringify(ids(back)));
+  const three = load([rect('z', 8), rect('z', 8), rect('z', 8)]);
+  check('L7-6', 'three beds on one id become three ids', three.length === 3 && unique(three), JSON.stringify(ids(three)));
+
+  // The consequence the finding names, through the shipped handlers.
+  const h = api.makeBedHandlers(twin);
+  h.updateBed(twin[0].id, { lengthFt: 12 });
+  check('L7-7', 'a Length edit on the first bed changes only that bed', h.beds[0].lengthFt === 12 && h.beds[1].lengthFt === 10,
+    JSON.stringify(h.beds.map((b) => b.lengthFt)));
+  h.removeBed(twin[0].id);
+  check('L7-8', 'and Remove on it removes only that bed', h.beds.length === 1 && h.beds[0].lengthFt === 10, `${h.beds.length} left`);
 }
 
 // ══ L-8 (Aero sibling sweep, 2026-10-29): the copied soil figure survives a reload

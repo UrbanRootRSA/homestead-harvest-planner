@@ -394,6 +394,25 @@ const DEFAULT_BED = () => ({
   qty: 1,
 });
 
+// L-7 (Aero sibling sweep 2026-10-29,
+// docs/reviews/REVIEW-2026-10-29-aero-sibling-sweep.md): the hhp_beds loader
+// clamped every numeric field and allow-listed the shape, then spread the
+// stored `id` straight through. Two beds with one id share one React key, and
+// updateBed / removeBed act on EVERY bed with that id: one Length edit changed
+// both, and one Remove took both (or, with only those two, did nothing). An id
+// must be a short, non-empty string that no earlier bed in the list holds;
+// anything else is re-minted. The first holder of an id keeps it.
+const BED_ID_MAX_LEN = 64;
+function uniqueBedIds(beds) {
+  const seen = new Set();
+  return beds.map((b) => {
+    let id = typeof b.id === "string" && b.id.length > 0 && b.id.length <= BED_ID_MAX_LEN ? b.id : null;
+    while (id === null || seen.has(id)) id = DEFAULT_BED().id;
+    seen.add(id);
+    return id === b.id ? b : { ...b, id };
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ── Planting date tables (USDA zones, Northern hemisphere reference) ──
 // Extension-service midpoints. Southern hemisphere flips all dates by 6 months.
@@ -8046,7 +8065,8 @@ export default function App() {
             qty:            Math.round(sanitizeNum(b.qty, def.qty, 1, MAX_BEDS_PER_GROUP)),
           };
         });
-      if (valid.length > 0) return valid;
+      // L-7: the id is the one field the map above spreads through unchecked.
+      if (valid.length > 0) return uniqueBedIds(valid);
     }
     return [DEFAULT_BED()];
   });
