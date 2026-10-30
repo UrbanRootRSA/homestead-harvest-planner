@@ -129,6 +129,9 @@
     th { background: var(--bg2); color: var(--tx); font-weight: 700; font-size: 13px; }
     td { color: var(--tx2); }
     tr:last-child td { border-bottom: none; }
+    /* L-3 (Aero sibling sweep 2026-10-29): a table wider than the phone scrolls inside its own
+       box, the landing page's pattern, so the page itself never scrolls sideways at 375. */
+    .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .cta-box {
       background: var(--card); border: 1px solid var(--primary);
       border-radius: 12px; padding: 22px 24px; margin: 32px 0;
@@ -213,7 +216,7 @@
     <h2>Yield per plant: what cooperative extensions actually report</h2>
     <p>Tomato yield varies wildly by variety, climate, soil, water, pruning, and pest pressure. The numbers below are the conservative-end planning yields we use across the Homestead Plan database, all cross-referenced against Cornell Cooperative Extension, University of Minnesota Extension, and Penn State Extension publications.</p>
 
-    <table>
+    <div class="tablewrap"><table>
       <thead><tr><th>Type</th><th>Conservative yield</th><th>Good year</th><th>Spacing</th></tr></thead>
       <tbody>
         <tr><td>Indeterminate slicing (Brandywine, Cherokee Purple)</td><td>8 lb / plant</td><td>12–15 lb</td><td>4 sq ft</td></tr>
@@ -221,7 +224,7 @@
         <tr><td>Cherry (Sungold, Sweet 100)</td><td>10 lb / plant</td><td>15–20 lb</td><td>4 sq ft</td></tr>
         <tr><td>Paste / sauce (San Marzano, Amish Paste)</td><td>6 lb / plant</td><td>10 lb</td><td>3 sq ft</td></tr>
       </tbody>
-    </table>
+    </table></div>
 
     <p>Plan with the conservative number. If the season is generous, you have a surplus to gift, dehydrate, or freeze whole for soup base. If the season is rough (a hot dry July, an early blight outbreak), you still hit close to your target.</p>
 
@@ -276,7 +279,7 @@
     </div>
 
     <h2>Quick-reference plant counts for a family of 4</h2>
-    <table>
+    <div class="tablewrap"><table>
       <thead><tr><th>Goal</th><th>Slicing</th><th>Cherry</th><th>Paste</th><th>Total</th><th>Bed area</th></tr></thead>
       <tbody>
         <tr><td>Fresh only</td><td>4</td><td>2</td><td>0</td><td><strong>6</strong></td><td>24 sq ft</td></tr>
@@ -284,7 +287,7 @@
         <tr><td>Fresh + ~12 qt sauce</td><td>8</td><td>2</td><td>10</td><td><strong>20</strong></td><td>70 sq ft</td></tr>
         <tr><td>Full self-sufficiency (~28 qt)</td><td>10</td><td>2</td><td>24</td><td><strong>36</strong></td><td>120 sq ft</td></tr>
       </tbody>
-    </table>
+    </table></div>
 
     <p>The Homestead Plan keeps these calculations honest by sourcing the underlying yield numbers from cooperative-extension data, then letting you adjust frequency and goal to match how your family actually eats. The 25 lb-per-person base is a default, not a verdict.</p>
 
