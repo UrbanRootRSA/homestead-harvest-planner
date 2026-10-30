@@ -109,12 +109,20 @@
   <main>
     <p class="eyebrow">Legal</p>
     <h1>Privacy Policy</h1>
-    <p class="effective">Effective 17 April 2026. Last updated 17 April 2026.</p>
+    <!-- M-2 (Aero sibling sweep 2026-10-29, docs/reviews/REVIEW-2026-10-29-aero-sibling-sweep.md):
+         this page states what api/validate-key.js and api/generate.js do, as read off the code on
+         2026-10-30. Facts only: the attorney confirms the wording before anyone relies on it.
+         The retention periods are the handlers' own constants. validate-key: RL_IP_WINDOW_SEC 600,
+         RL_LICENCE_WINDOW_SEC 3600, LICENCE_OK_TTL_SEC 30 days. generate: RL_IP_WINDOW_SEC 3600,
+         LICENCE_CACHE_TTL_SEC 3600, RL_LICENCE_WINDOW_SEC 86400, INSTANCE_BIND_TTL_SEC 30 days.
+         Change a constant, change this page and terms.html section 5. -->
+    <p class="effective">Effective 17 April 2026. Last updated 30 October 2026.</p>
 
     <p>The The Homestead Plan is designed to work without collecting more than the bare minimum we need to sell you a licence and validate it. Here's exactly what happens, in plain language.</p>
 
     <h2>What stays on your device</h2>
-    <p>Everything you type into the calculators - family size, crop selections, bed dimensions, frost dates, mix recipes, garden plans - lives in your browser's local storage on your device. We do not send any of that to our servers. You can clear it from your browser at any time via your browser's site settings.</p>
+    <p>Everything you type into the calculators (family size, crop selections, bed dimensions, frost dates, mix recipes, prices and setup costs, preservation choices) and into the Growing Plan form lives in your browser's local storage on your device. So do the time of your last plan and a fingerprint of the inputs it was made from, which let the app tell you when they change. If you buy the paid tier, your licence key and the device identifier LemonSqueezy issues for this browser are stored there too, and for 48 hours after a purchase, the time you paid.</p>
+    <p>The generated plan itself is not stored anywhere, on your device or on our servers. It stays in the open tab until you reload or close it, so use Download as HTML to keep a copy. Your inputs leave your device only in the cases in the table below. You can clear them at any time in your browser's site settings.</p>
 
     <h2>What we collect</h2>
     <table class="data">
@@ -128,19 +136,19 @@
           <td>To issue your licence key and a receipt. LemonSqueezy also uses the country for tax purposes.</td>
         </tr>
         <tr>
-          <td>At licence validation</td>
-          <td>Your licence key and a hashed identifier for your device</td>
-          <td>To confirm your licence is valid and hasn't exceeded its 3-device limit.</td>
+          <td>At licence check: when you enter a key, each time you open the planner with a key stored in this browser, and when you arrive through an activation link</td>
+          <td>Your licence key, and the device identifier LemonSqueezy issued for this browser, sent as they are (not hashed)</td>
+          <td>Our validation service, a function hosted on Vercel, passes both to LemonSqueezy, which confirms the key is valid and within its 3-device limit. When a browser is activated for the first time, our server gives LemonSqueezy a random name for it. We keep no copy of the key itself. We keep a shortened SHA-256 hash of it as a marker that LemonSqueezy has confirmed the key, for 30 days from the last confirmation, and, when a check fails, in a failed-check counter for 1 hour. Your IP address is kept in a request counter for 10 minutes. An activation link carries your key in its web address, so the key also appears in the request log Vercel keeps for that page load.</td>
         </tr>
         <tr>
           <td>At growing-plan generation (paid tier)</td>
-          <td>The inputs you chose (family size, hardiness zone, frost dates, garden space, sun exposure, soil type, watering method, experience, goals, selected crops) and the returned plan</td>
-          <td>Transmitted to Anthropic's Claude API to generate the plan. No personal information (name, email, address, payment details) is included. The request is transient - neither the request nor the response is stored on our servers beyond what is required to deliver it back to your browser. Anthropic's own data-use policy applies to the API call itself.</td>
+          <td>The inputs you chose (family size, hardiness zone, frost dates, hemisphere, garden space, sun exposure, soil type, watering method, experience, goals, selected crops, the crops that cannot ripen before your first fall frost, produce target per person and display units), your currency symbol, your licence key and your device identifier</td>
+          <td>The inputs are sent to Anthropic's Claude API, which writes the plan. Your licence key, device identifier, currency and IP address are not sent to Anthropic, and no name, email, address or payment details are sent at all. We do not store your inputs or the plan. If our server cannot read the model's reply, the first 200 characters of that reply are written to our server log so we can find the fault. To enforce the 3-device limit and the allowance of 20 plans a day, our server keeps your device identifier, as it is, as the one device this licence generates plans from, for 30 days, renewed as you generate plans; a shortened SHA-256 hash of the licence key in a "licence valid" marker for 1 hour and in a plan counter for 24 hours; and your IP address in a request counter for 1 hour. Anthropic's own data-use policy applies to the API call itself.</td>
         </tr>
         <tr>
           <td>When the site loads</td>
           <td>Aggregate visit data (page views, referrers, device class) via Vercel Web Analytics</td>
-          <td>To know whether the site is working and where users are coming from. No personal identifiers. No cookies.</td>
+          <td>To know whether the site is working and where users are coming from. No personal identifiers. No cookies. If the address carries a licence key, the key is removed before the visit is counted.</td>
         </tr>
       </tbody>
     </table>
@@ -148,9 +156,10 @@
     <h2>Third parties</h2>
     <p>We use a small number of third parties. Each has their own privacy policy; we link them below.</p>
     <ul>
-      <li><strong>LemonSqueezy</strong> - payments, licence keys, tax collection. Acts as the Merchant of Record. <a href="https://www.lemonsqueezy.com/privacy" rel="noopener" target="_blank">lemonsqueezy.com/privacy</a></li>
+      <li><strong>LemonSqueezy</strong> - payments, licence keys, tax collection and the licence checks above. Acts as the Merchant of Record. The planner loads LemonSqueezy's checkout script from assets.lemonsqueezy.com on every visit, before any purchase, so LemonSqueezy receives your IP address and browser details when the page loads. <a href="https://www.lemonsqueezy.com/privacy" rel="noopener" target="_blank">lemonsqueezy.com/privacy</a></li>
       <li><strong>Anthropic</strong> - the language-model API used to generate the personalised growing plan on the paid tier. <a href="https://www.anthropic.com/legal/privacy" rel="noopener" target="_blank">anthropic.com/legal/privacy</a></li>
-      <li><strong>Vercel</strong> - hosting + Vercel Web Analytics (cookie-less, aggregate). <a href="https://vercel.com/legal/privacy-policy" rel="noopener" target="_blank">vercel.com/legal/privacy-policy</a></li>
+      <li><strong>Vercel</strong> - hosting, the licence-check and plan-generation functions, and Vercel Web Analytics (cookie-less, aggregate). Vercel processes each request, including your IP address, under its own policy. <a href="https://vercel.com/legal/privacy-policy" rel="noopener" target="_blank">vercel.com/legal/privacy-policy</a></li>
+      <li><strong>Upstash</strong> - the database that holds the short-lived records above: a shortened hash of your licence key, your device identifier and your IP address, each with the expiry given. We use it through Vercel's integration. <a href="https://upstash.com/trust/privacy.pdf" rel="noopener" target="_blank">Upstash privacy policy</a></li>
       <li><strong>Google Fonts</strong> - font files served from Google's CDN. Google logs the request (IP, user-agent). No cookies are set. <a href="https://developers.google.com/fonts/faq/privacy" rel="noopener" target="_blank">Google Fonts privacy FAQ</a></li>
     </ul>
 
@@ -163,8 +172,8 @@
     </ul>
 
     <h2>Your rights</h2>
-    <p>Under GDPR (if you're in the EU/UK), POPIA (if you're in South Africa), or equivalent laws in your jurisdiction, you can request a copy of your data, request deletion, or request correction. Most of what we have is your purchase record at LemonSqueezy - you can request deletion via them directly, or by emailing us and we'll coordinate.</p>
-    <p>To clear everything the Service has stored in your browser, open your browser's site-data settings and clear local storage for this domain. That removes your saved plans, device identifier, and licence key from your device. If you've activated your licence, you can re-enter it from the paywall screen when you need it back.</p>
+    <p>Under GDPR (if you're in the EU/UK), POPIA (if you're in South Africa), or equivalent laws in your jurisdiction, you can request a copy of your data, request deletion, or request correction. Most of what we have is your purchase record at LemonSqueezy - you can request deletion via them directly, or by emailing us and we'll coordinate. The records our own server keeps expire by themselves, after 10 minutes to 30 days as listed above. Email us if you want them deleted sooner.</p>
+    <p>To clear everything the Service has stored in your browser, open your browser's site-data settings and clear local storage for this domain. That removes your calculator inputs, your licence key and the device identifier from your device. It does not remove the server records above, which expire by themselves. If you've activated your licence, you can re-enter it from the paywall screen when you need it back.</p>
 
     <h2>Children</h2>
     <p>The Service is not directed at children under 13. We don't knowingly collect information from children. If you believe a child has provided information, email us and we'll delete it.</p>
