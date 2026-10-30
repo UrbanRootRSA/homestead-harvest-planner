@@ -6536,6 +6536,22 @@ function NoCropsBanner({ cta = "Go to Self-Sufficiency" }) {
   );
 }
 
+// L-8 (Aero sibling sweep 2026-10-29,
+// docs/reviews/REVIEW-2026-10-29-aero-sibling-sweep.md): "Use Soil Calculator
+// total" copies the Soil tab's bill into the soil setup cost ONCE. A later bed
+// edit moved the Soil bill and not the break-even, and nothing on the page said
+// the two had parted. The press now records the figure it copied
+// (costSavings.soilPrefill). While the field still holds exactly that figure
+// and the Soil total has moved, the page says so. A figure the customer typed
+// is theirs and draws no note. Pure, so the rule is testable without a render.
+function soilSetupMismatch(setupSoil, soilPrefill, soilTotal) {
+  if (typeof soilPrefill !== "number" || !Number.isFinite(soilPrefill)) return null;
+  if (setupSoil !== soilPrefill) return null;
+  const live = Math.round((Number.isFinite(soilTotal) ? soilTotal : 0) * 100) / 100;
+  if (live === soilPrefill) return null;
+  return { stored: soilPrefill, live };
+}
+
 function CostSavingsCalculator({
   baseResults,
   beds, soilState, costSavings, setCostSavings,
@@ -6575,6 +6591,8 @@ function CostSavingsCalculator({
     // total onto the settled volume; this followed it.
     return computeSoilResults(beds, effectiveMix).totalCostWithSettling;
   }, [beds, soilState]);
+  // L-8: null unless the soil field still holds a Soil total that has moved.
+  const soilMismatch = soilSetupMismatch(costSavings.setupCosts?.soil, costSavings.soilPrefill, soilCostEstimate);
 
   // Functional setters so back-to-back updates in the same React batch
   // (e.g. user blurs two Field components together) compose correctly
@@ -6593,7 +6611,14 @@ function CostSavingsCalculator({
   };
   const fillSoilCost = () => {
     if (soilCostEstimate > 0) {
-      updateSetup("soil", Math.round(soilCostEstimate * 100) / 100);
+      const copied = Math.round(soilCostEstimate * 100) / 100;
+      // L-8: remember the copied figure, so a later change on the Soil tab
+      // can be named instead of read silently by the break-even.
+      setCostSavings((prev) => ({
+        ...prev,
+        setupCosts: { ...prev.setupCosts, soil: copied },
+        soilPrefill: copied,
+      }));
     }
   };
   const resetPrices = () => {
@@ -6603,7 +6628,7 @@ function CostSavingsCalculator({
   };
   const resetSetupCosts = () => {
     if (window.confirm("Reset all setup costs back to the defaults?")) {
-      setCostSavings((prev) => ({ ...prev, setupCosts: { ...DEFAULT_SETUP_COSTS } }));
+      setCostSavings((prev) => ({ ...prev, setupCosts: { ...DEFAULT_SETUP_COSTS }, soilPrefill: null }));
     }
   };
 
@@ -6774,6 +6799,17 @@ function CostSavingsCalculator({
         }}>
           Defaults reflect 2026 US retail averages. Currency is a display symbol only; no FX conversion is applied.
         </p>
+        {soilMismatch && (
+          <p role="status" style={{
+            margin: "0 0 10px", padding: "8px 12px", borderRadius: T.radius,
+            background: T.goldBg, border: `1px solid ${T.gold}`,
+            fontSize: 13, color: T.tx, lineHeight: 1.5,
+          }}>
+            Your Soil tab now totals {currency}{fmtDecimal(soilMismatch.live, moneyDecimals(currency))}.
+            The Soil + compost field below still holds {currency}{fmtDecimal(soilMismatch.stored, moneyDecimals(currency))} from
+            the last time you used that total, and the break-even and ROI use that figure.
+          </p>
+        )}
         <div style={{
           marginTop: 10, display: "grid", gap: 12,
           gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(5, 1fr)",
@@ -8155,6 +8191,7 @@ export default function App() {
     const defaults = {
       priceOverrides: {},
       setupCosts: { ...DEFAULT_SETUP_COSTS },
+      soilPrefill: null,
     };
     if (!saved || typeof saved !== "object") return defaults;
     const cleanPrices = {};
@@ -8170,7 +8207,11 @@ export default function App() {
         if (isStoredNumber(v) && v >= 0 && v < 1000000) cleanSetup[f.key] = v;
       }
     }
-    return { priceOverrides: cleanPrices, setupCosts: cleanSetup };
+    // L-8: the figure "Use Soil Calculator total" last copied. Same number
+    // gate and range as the setup costs; anything else is "never copied".
+    const soilPrefill = isStoredNumber(saved.soilPrefill) && saved.soilPrefill >= 0 && saved.soilPrefill < 1000000
+      ? saved.soilPrefill : null;
+    return { priceOverrides: cleanPrices, setupCosts: cleanSetup, soilPrefill };
   });
 
   // Growing Plan state (Tab 5 - paid)

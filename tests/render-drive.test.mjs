@@ -89,6 +89,8 @@ const WANTED = [
   // the no-harvest state has to reach (R3-2).
   'CategoryBar', 'fmtAreaValue', 'CropDatesCard', 'PlantingTimelineChart',
   'PlanHarvestChart', 'PHASE_COLORS',
+  // L-8 (Aero sibling sweep, 2026-10-29): the stale-soil-copy rule.
+  'soilSetupMismatch',
 ];
 const appText = readFileSync(APP_PATH, 'utf8');
 // esbuild refuses to export a name the file does not declare, and in a CONTROL
@@ -1135,6 +1137,35 @@ safe(() => {
     rows: [{ cropId: 'ginger', crop: CROPS.ginger, dates: z7 }], referenceYear: 2026,
   }));
   record('LOW-6.7', 'control: an unflagged crop draws no badge', !clean.includes(BADGE) && !clean.includes('No harvest'));
+}
+});
+
+// L-8 (Aero sibling sweep, 2026-10-29): the soil setup cost was a silent copy of
+// the Soil tab's total. BEDS is three 4x8x12 beds, so the Soil tab now bills
+// $563.04 where a single bed's copy holds $187.68.
+group('the break-even names a soil cost the Soil tab has moved past - L-8 (sibling sweep)');
+safe(() => {
+{
+  const f = M.soilSetupMismatch;
+  record('L8p-1', 'a copy that still sits in the field, after the Soil total moved, is named',
+    JSON.stringify(f(187.68, 187.68, 563.04)) === JSON.stringify({ stored: 187.68, live: 563.04 }), JSON.stringify(f(187.68, 187.68, 563.04)));
+  record('L8p-2', 'a field the customer typed over is theirs: no note', f(200, 187.68, 563.04) === null);
+  record('L8p-3', 'a copy that still matches the Soil total: no note', f(563.04, 563.04, 563.0400000001) === null);
+  record('L8p-4', 'no copy ever made: no note', f(80, null, 563.04) === null && f(80, undefined, 563.04) === null);
+
+  const res = M.computeResults(M.PRESETS.family_basics.selection, 4, 'fresh_preserving');
+  const cs = (costSavings) => render('CSL8', 'CostSavingsCalculator (soil copy)', React.createElement(M.CostSavingsCalculator, {
+    baseResults: res, beds: BEDS, soilState: { mixId: 'classic_60_30_10', mixOverrides: null },
+    costSavings: { priceOverrides: {}, ...costSavings }, setCostSavings() {}, metric: false, currency: '$',
+  }));
+  const setup = { beds: 120, soil: 187.68, seeds: 35, tools: 40, irrigation: 25 };
+  const stale = cs({ setupCosts: setup, soilPrefill: 187.68 });
+  has('L8r-1', 'the stale copy is named with both figures', stale, /Soil tab now totals \$563\.04[\s\S]{0,200}?still holds \$187\.68/);
+  has('L8r-2', 'and the note says what reads the old figure', stale, 'the break-even and ROI use that figure');
+  hasNot('L8r-3', 'a typed figure draws no note', cs({ setupCosts: { ...setup, soil: 200 }, soilPrefill: 187.68 }), 'Soil tab now totals');
+  hasNot('L8r-4', 'a store with no copy draws no note', cs({ setupCosts: setup }), 'Soil tab now totals');
+  hasNot('L8r-5', 'a copy that matches the Soil total draws no note',
+    cs({ setupCosts: { ...setup, soil: 563.04 }, soilPrefill: 563.04 }), 'Soil tab now totals');
 }
 });
 

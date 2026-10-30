@@ -131,6 +131,9 @@ const NAMES = [
   // control run reports per-case failures instead of bailing on a name.
   'MIN_PRODUCE_PER_PERSON_LBS', 'SETTLING_BUFFER', 'SOIL_MIXES',
   'computeSoilResults', 'PRESETS', 'LS_SOIL', 'LS_CROPS',
+  // L-8 (Aero sibling sweep, 2026-10-29): what the hhp_cost_savings loader
+  // reads. All three exist in both revisions.
+  'LS_COST_SAVINGS', 'DEFAULT_SETUP_COSTS', 'COST_SAVINGS_FIELDS',
 ];
 const missing = NAMES.filter((n) => !sliceDecl(SRC, n));
 if (missing.length) bail(`declarations not found in source: ${missing.join(', ')}`);
@@ -150,6 +153,10 @@ function sliceStateInit(src, anchor) {
 }
 const selectionInit = sliceStateInit(SRC, 'const [selection, setSelection] = useState');
 const soilInit = sliceStateInit(SRC, 'const [soilState, setSoilState] = useState');
+// L-8: the cost-savings loader and the number gate it uses, verbatim.
+const isStoredNumberText = sliceStateInit(SRC, 'const isStoredNumber = ');
+const costInit = sliceStateInit(SRC, 'const [costSavings, setCostSavings] = useState');
+if (!isStoredNumberText || !costInit) bail('could not slice the hhp_cost_savings loader');
 if (!selectionInit) bail('could not slice the hhp_crops state initialiser');
 if (!soilInit) bail('could not slice the hhp_soil state initialiser');
 if (!soilInit.includes('mixOverrides')) bail('the hhp_soil slice does not mention mixOverrides');
@@ -209,8 +216,16 @@ function makeSoilLoader(saved) {
   return soilState;
 }
 
+function makeCostSavingsLoader(saved) {
+  const useState = (fn) => [fn(), () => {}];
+  const loadState = () => saved;
+  ${isStoredNumberText}
+  ${costInit}
+  return costSavings;
+}
+
 return { ${picked.map((p) => p.n).join(', ')}, makeFieldCommit, makeBedEditor,
-         makeSelectionLoader, makeSoilLoader };
+         makeSelectionLoader, makeSoilLoader, makeCostSavingsLoader };
 `)(CROPS);
 
 // ------------------------------------------------------------ assertions
@@ -999,6 +1014,36 @@ group('R3-1', 'the produce-target Field does not drift at the bound it displays'
     api.makeFieldCommit({ raw: String(pI.display), value: pI.display, min: pI.min, max: pI.max, onChange: pI.commit })();
     check('R3-5.p2', 'and an untouched blur on it writes nothing', wrote === null, `wrote=${wrote}`);
   }
+}
+
+// ══ L-8 (Aero sibling sweep, 2026-10-29): the copied soil figure survives a reload
+//
+// "Use Soil Calculator total" now records what it copied, so the Cost Savings
+// tab can say when the Soil tab has moved on. A record the loader drops would
+// make the note vanish on reload and the break-even silent again.
+
+group('L-8', 'the hhp_cost_savings loader keeps the copied soil figure, through the same number gate');
+
+{
+  const load = (saved) => api.makeCostSavingsLoader(saved);
+  const kept = load({ priceOverrides: {}, setupCosts: { ...api.DEFAULT_SETUP_COSTS, soil: 187.68 }, soilPrefill: 187.68 });
+  check('L8l-1', 'a stored copy of the Soil total survives the reload', kept.soilPrefill === 187.68 && kept.setupCosts.soil === 187.68,
+    JSON.stringify(kept));
+  const junk = [['a numeric string', '187.68'], ['null', null], ['a negative', -5], ['a million', 1e6], ['true', true], ['an object', {}]];
+  const leaked = junk.filter(([, v]) => load({ setupCosts: {}, soilPrefill: v }).soilPrefill !== null).map(([l]) => l);
+  check('L8l-2', 'anything that is not a stored number in range loads as "never copied"', leaked.length === 0, leaked.join(', '));
+  const old = load({ priceOverrides: {}, setupCosts: { ...api.DEFAULT_SETUP_COSTS, soil: 120 } });
+  check('L8l-3', 'a store written before the record existed loads with no copy and its costs intact',
+    old.soilPrefill === null && old.setupCosts.soil === 120, JSON.stringify(old));
+  check('L8l-4', 'and the empty store starts with no copy', load(null).soilPrefill === null);
+
+  // The writer is a click handler, which no render can drive: pin its shape.
+  const cs = sliceDecl(SRC, 'CostSavingsCalculator') || '';
+  const fill = sliceLocal(cs, 'fillSoilCost') || '';
+  check('L8w-1', 'the button writes the copied figure into the field AND the record, in one update',
+    /setupCosts: \{ \.\.\.prev\.setupCosts, soil: copied \},\s*soilPrefill: copied,/.test(fill), fill ? 'shape changed' : 'fillSoilCost not found');
+  const reset = sliceLocal(cs, 'resetSetupCosts') || '';
+  check('L8w-2', 'and "Reset to defaults" forgets the record', /soilPrefill: null/.test(reset), reset ? 'record kept on reset' : 'resetSetupCosts not found');
 }
 
 // --------------------------------------------------------------------- report
