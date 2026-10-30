@@ -197,6 +197,14 @@
       border-top: 1px solid var(--border);
     }
     footer a { display: inline-block; padding: 6px 2px; }
+    /* L-2 (Aero sibling sweep 2026-10-29): every control is at least 44 x 44 px at every
+       width, measured at 375 in headless Chrome with the web fonts loaded. A link inside a
+       sentence of body prose stays inline (WCAG 2.5.8 inline exception). */
+    .brand, .back, footer a, .crumbs a, .related a, .cta-box a, .more a {
+      display: inline-flex; align-items: center; min-height: 44px;
+    }
+    .brand, .back, footer a { justify-content: center; min-width: 44px; }
+    footer a { padding: 0 6px; }
   </style>
 </head>
 <body>
@@ -286,7 +294,7 @@
       <a class="cta" href="/">Open The Homestead Plan</a>
     </div>
 
-    <p style="margin-top:28px">Read more: <a href="/about.html">About The Homestead Plan</a> · <a href="/blog/">Planning guides on the blog</a> · <a href="/blog/feed-family-from-backyard-garden.html">Can you feed a family from a backyard garden?</a></p>
+    <p class="more" style="margin-top:28px">Read more: <a href="/about.html">About The Homestead Plan</a> · <a href="/blog/">Planning guides on the blog</a> · <a href="/blog/feed-family-from-backyard-garden.html">Can you feed a family from a backyard garden?</a></p>
   </main>
 
   <footer>

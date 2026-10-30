@@ -139,6 +139,14 @@
       color: var(--tx3); font-size: 13px; text-align: center;
       border-top: 1px solid var(--border);
     }
+    /* L-2 (Aero sibling sweep 2026-10-29): every control is at least 44 x 44 px at every
+       width, measured at 375 in headless Chrome with the web fonts loaded. A link inside a
+       sentence of body prose stays inline (WCAG 2.5.8 inline exception). */
+    .brand, .back, footer a, .crumbs a, .related a, .cta-box a, .more a {
+      display: inline-flex; align-items: center; min-height: 44px;
+    }
+    .brand, .back, footer a { justify-content: center; min-width: 44px; }
+    footer a { padding: 0 6px; }
   </style>
 </head>
 <body>
