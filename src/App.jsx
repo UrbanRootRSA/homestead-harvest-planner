@@ -5618,7 +5618,7 @@ function PlanRenderer({ plan, metric, currency, isMobile, generatedAt,
       <p style={{ marginTop: 28, fontSize: 12, color: T.tx3, lineHeight: 1.55 }}>
         This plan was generated automatically from the inputs above. Generated plans are advisory,
         not authoritative; cross-check with local extension-service guidance before acting on
-        anything irreversible. Full disclosure: see our <a href="/terms.html" style={{ color: T.tx2, textDecoration: "underline" }}>Terms</a>.
+        anything irreversible. Full disclosure: see our <a href="/terms.html" target="_blank" rel="noopener noreferrer" style={{ color: T.tx2, textDecoration: "underline" }}>Terms</a>.
       </p>
     </div>
   );
@@ -7504,7 +7504,12 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
                 R2-I1: minHeight 44 pins the target deterministically -
                 padding + 13px font lands at 43.6-44.4px depending on the
                 engine's computed line-height. */}
-            <a href="/about.html" style={{
+            {/* L-1 (Aero sibling sweep 2026-10-29): every link from the app to
+                a static page opens in a new tab. The plan body lives only in
+                React state (never stored, by design), so a same-tab link
+                followed by the page's own "Back to the planner" link threw a
+                generated plan away. */}
+            <a href="/about.html" target="_blank" rel="noopener noreferrer" style={{
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
               fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
@@ -7519,7 +7524,7 @@ function AppHeader({ metric, setMetric, currency, setCurrency, hemisphere, setHe
               onMouseLeave={(e) => { e.currentTarget.style.color = T.tx2; }}>
               About
             </a>
-            <a href="/blog/" style={{
+            <a href="/blog/" target="_blank" rel="noopener noreferrer" style={{
               color: T.tx2, textDecoration: "none",
               fontFamily: T.fontBody, fontSize: isMobile ? 13 : 14,
               fontWeight: 600, padding: isMobile ? "14px 6px" : "6px 2px",
@@ -7913,8 +7918,8 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Learn</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <a href="/blog/" style={linkStyle}>Blog</a>
-              <a href="/homestead-planning-software/" style={linkStyle}>Homestead planning software</a>
+              <a href="/blog/" target="_blank" rel="noopener noreferrer" style={linkStyle}>Blog</a>
+              <a href="/homestead-planning-software/" target="_blank" rel="noopener noreferrer" style={linkStyle}>Homestead planning software</a>
               <a href="#features" style={linkStyle}
                 onClick={(e) => { e.preventDefault(); window.location.hash = "features"; }}>Features</a>
               <a href="#how-it-works" style={linkStyle}
@@ -7933,11 +7938,11 @@ function AppFooter() {
               letterSpacing: "0.08em", marginBottom: 10,
             }}>Support</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <a href="/about.html" style={linkStyle}>About</a>
-              <a href="/contact.html" style={linkStyle}>Contact</a>
-              <a href="/privacy.html" style={linkStyle}>Privacy</a>
-              <a href="/terms.html" style={linkStyle}>Terms</a>
-              <a href="/refund.html" style={linkStyle}>Refund policy</a>
+              <a href="/about.html" target="_blank" rel="noopener noreferrer" style={linkStyle}>About</a>
+              <a href="/contact.html" target="_blank" rel="noopener noreferrer" style={linkStyle}>Contact</a>
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" style={linkStyle}>Privacy</a>
+              <a href="/terms.html" target="_blank" rel="noopener noreferrer" style={linkStyle}>Terms</a>
+              <a href="/refund.html" target="_blank" rel="noopener noreferrer" style={linkStyle}>Refund policy</a>
             </div>
           </div>
         </div>

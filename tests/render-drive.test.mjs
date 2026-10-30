@@ -1140,6 +1140,35 @@ safe(() => {
 }
 });
 
+// L-1 (Aero sibling sweep, 2026-10-29): a same-tab link to a static page left
+// the app, and the page's own "Back to the planner" link loaded a new document,
+// so a generated plan (held only in React state, never stored) was gone. A
+// CENSUS, not a list: every anchor whose href is a site path must open a new
+// tab, so a link added later fails here instead of shipping same-tab.
+group('every link from the app to a static page opens a new tab - L-1 (sibling sweep)');
+safe(() => {
+{
+  const pathAnchors = (html) => [...html.matchAll(/<a\b[^>]*>/g)].map((m) => m[0])
+    .filter((tag) => /\shref="\/(?!\/)/.test(tag));
+  const sameTab = (tags) => tags.filter((t) => !/\starget="_blank"/.test(t) || !/\srel="[^"]*\bnoopener\b[^"]*"/.test(t) || !/\srel="[^"]*\bnoreferrer\b[^"]*"/.test(t));
+  const app = render('L1a', '<App/> (header and footer)', React.createElement(M.default));
+  const appTags = pathAnchors(app);
+  record('L1s-1', `the app renders its header and footer path links (${appTags.length} found, 9 expected)`, appTags.length >= 9, appTags.length);
+  const bad = sameTab(appTags);
+  record('L1s-2', 'every one opens a new tab with noopener noreferrer', bad.length === 0, bad.slice(0, 3).join(' '));
+  const plan = render('L1p', 'PlanRenderer (Terms link)', React.createElement(M.PlanRenderer, {
+    plan: { summary: 'S', monthlySchedule: [{ month: 'March', tasks: ['t'] }], bedLayouts: [], successionPlanting: [], preservationGuide: [], savingsEstimate: null, tips: [] },
+    metric: false, currency: '$', isMobile: false, generatedAt: null,
+    engineYields: [], engineHarvest: [], engineSavings: 0, onDownload() {}, onClear() {},
+  }));
+  const planTags = pathAnchors(plan);
+  record('L1s-3', 'the Terms link under the generated plan is found', planTags.length === 1, planTags.length);
+  record('L1s-4', 'and opens a new tab too', planTags.length === 1 && sameTab(planTags).length === 0, planTags.join(' '));
+  record('L1s-5', 'control: the in-app hash links still route in place', /<a\b[^>]*href="#self-sufficiency"/.test(app)
+    && ![...app.matchAll(/<a\b[^>]*href="#[^"]*"[^>]*>/g)].some((m) => /target="_blank"/.test(m[0])));
+}
+});
+
 // L-8 (Aero sibling sweep, 2026-10-29): the soil setup cost was a silent copy of
 // the Soil tab's total. BEDS is three 4x8x12 beds, so the Soil tab now bills
 // $563.04 where a single bed's copy holds $187.68.
